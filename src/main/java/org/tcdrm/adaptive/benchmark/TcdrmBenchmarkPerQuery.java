@@ -39,6 +39,17 @@ public class TcdrmBenchmarkPerQuery {
         this.replicationFactor = replicationFactor;
         this.rnd = new Random(seed);
     }
+    
+    /**
+     * Sélection intelligente du réplica basée sur la proximité géographique
+     * Simule la sélection du réplica le plus proche parmi les disponibles
+     */
+    private boolean selectBestReplica(int queryNumber, int totalReplicas) {
+        // Probabilité d'utiliser un réplica local augmente avec le nombre de réplicas
+        // Plus il y a de réplicas, plus la chance d'en avoir un proche est élevée
+        double localProbability = (double) totalReplicas / (totalReplicas + 2);
+        return rnd.nextDouble() < localProbability;
+    }
 
     public BenchmarkDataPerQuery computeBenchmark(String queryId, List<Double> fragmentSizesGb) {
         List<Integer> queryNumbers = new ArrayList<>();
@@ -51,16 +62,22 @@ public class TcdrmBenchmarkPerQuery {
         int replicasCreated = 0;
         double dataGb = fragmentSizesGb.stream().mapToDouble(d -> d).sum();
 
+        // Coût de création des réplicas (une seule fois)
+        double replicationCreationCost = 0.0;
+        
         for (int q = 0; q < MAX_QUERIES; q++) {
             boolean replicaExists = q >= POPULARITY_THRESHOLD;
             
-            // Create replica at threshold
+            // Create replica at threshold with creation cost
             if (q == POPULARITY_THRESHOLD) {
                 replicasCreated = replicationFactor;
+                // Coût de transfert initial pour créer les réplicas
+                replicationCreationCost = dataGb * COST_BW_INTER_PROVIDER * replicationFactor;
             }
             
-            // Determine if using local or remote access
-            boolean useLocal = replicaExists && ((q - POPULARITY_THRESHOLD) % replicationFactor) == 0;
+            // Sélection intelligente du réplica basée sur la distance
+            // Simule la sélection du réplica le plus proche parmi les disponibles
+            boolean useLocal = replicaExists && selectBestReplica(q, replicationFactor);
             
             // Network parameters
             double bwGbps = useLocal ? BW_LOCAL_GBPS : BW_REMOTE_GBPS;
@@ -81,9 +98,16 @@ public class TcdrmBenchmarkPerQuery {
             // Costs for this query
             double transferCost = dataGb * costPerGb;
             double cpuCost = (processingMin / 60.0) * CPU_COST_PER_HOUR;
-            double storageCost = replicaExists ? (dataGb * STORAGE_COST_PER_GB_PER_MONTH * replicasCreated / 720.0 / 3600.0) : 0.0;
             
-            double queryCost = transferCost + cpuCost + storageCost;
+            // Coût de stockage: calculé par heure d'utilisation (pas par requête)
+            double queryDurationHours = queryTimeMs / 3600000.0; // ms to hours
+            double storageCost = replicaExists ? 
+                (dataGb * STORAGE_COST_PER_GB_PER_MONTH * replicasCreated * queryDurationHours / 720.0) : 0.0;
+            
+            // Ajouter le coût de création au premier calcul après réplication
+            double creationCost = (q == POPULARITY_THRESHOLD) ? replicationCreationCost : 0.0;
+            
+            double queryCost = transferCost + cpuCost + storageCost + creationCost;
             totalCost += queryCost;
 
             queryNumbers.add(q);

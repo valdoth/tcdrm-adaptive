@@ -21,6 +21,9 @@ public class NoRepBenchmarkPerQuery {
     
     private static final double JITTER_RATIO = 0.05;
     private static final double CPU_JITTER_RATIO = 0.05;
+    
+    // Variabilité de la latence inter-provider (congestion réseau)
+    private static final double LATENCY_VARIATION_RATIO = 0.15;
 
     private final Random rnd;
 
@@ -39,9 +42,10 @@ public class NoRepBenchmarkPerQuery {
         double dataGb = fragmentSizesGb.stream().mapToDouble(d -> d).sum();
 
         for (int q = 0; q < MAX_QUERIES; q++) {
-            // Always remote access
+            // Network parameters (always remote with variability)
             double bwGbps = BW_REMOTE_GBPS;
-            double latencyMs = LAT_REMOTE_MS;
+            // Latence variable pour simuler la congestion réseau inter-provider
+            double latencyMs = LAT_REMOTE_MS * (1.0 + LATENCY_VARIATION_RATIO * (rnd.nextDouble() * 2 - 1));
             double costPerGb = COST_BW_INTER_PROVIDER;
 
             // Transfer time with jitter
@@ -56,10 +60,13 @@ public class NoRepBenchmarkPerQuery {
             double queryTimeMs = transferMs + processingMin * 60_000.0;
             
             // Costs for this query
-            double transferCost = dataGb * costPerGb;
+            double transferCost = dataGb * COST_BW_INTER_PROVIDER;
             double cpuCost = (processingMin / 60.0) * CPU_COST_PER_HOUR;
             
-            double queryCost = transferCost + cpuCost;
+            // Coût additionnel pour la gestion inter-provider (overhead)
+            double overheadCost = transferCost * 0.05; // 5% overhead
+            
+            double queryCost = transferCost + cpuCost + overheadCost;
             totalCost += queryCost;
 
             queryNumbers.add(q);
