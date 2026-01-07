@@ -18,15 +18,15 @@ public class TcdrmAdaptiveTrainingVaried {
         System.out.println("   TCDRM-ADAPTIVE : Entraînement avec requêtes variées    ");
         System.out.println("==========================================================\n");
         
-        // Générer requêtes variées pour l'entraînement
-        List<QueryConfig> trainingQueries = generateVariedQueries(50);
+        // Générer 50,000 requêtes variées pour l'entraînement
+        List<QueryConfig> trainingQueries = generateVariedQueries(50000);
         
         System.out.println(">>> Génération de " + trainingQueries.size() + " requêtes variées <<<");
         printQueryStatistics(trainingQueries);
         
-        // Entraîner l'agent avec requêtes variées
-        System.out.println("\n>>> Entraînement avec requêtes variées (500 épisodes) <<<\n");
-        QLearningAgent agent = trainWithVariedQueries(trainingQueries, 500, 42L);
+        // Entraîner l'agent avec requêtes variées (2000 épisodes pour 50k requêtes)
+        System.out.println("\n>>> Entraînement avec requêtes variées (2000 épisodes) <<<\n");
+        QLearningAgent agent = trainWithVariedQueries(trainingQueries, 2000, 42L);
         
         // Vérification avec R1
         System.out.println("\n" + "=".repeat(60));
@@ -149,8 +149,8 @@ public class TcdrmAdaptiveTrainingVaried {
             totalReward += episodeReward;
             episodeCount++;
             
-            // Afficher progression
-            if ((episode + 1) % 50 == 0) {
+            // Afficher progression (tous les 100 épisodes pour 10k requêtes)
+            if ((episode + 1) % 100 == 0) {
                 double avgReward = totalReward / episodeCount;
                 System.out.println(String.format("Épisode %d/%d - Récompense moyenne: %.2f - Epsilon: %.4f - Requête: %s (%.1f GB)",
                     episode + 1, numEpisodes, avgReward, agent.getEpsilon(), query.queryId, query.dataGb));

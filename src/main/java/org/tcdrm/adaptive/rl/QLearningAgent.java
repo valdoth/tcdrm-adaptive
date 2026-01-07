@@ -1,5 +1,8 @@
 package org.tcdrm.adaptive.rl;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Agent Q-Learning pour TCDRM-ADAPTIVE
  * Implémente l'algorithme Q-Learning pour apprendre la politique optimale de réplication
@@ -13,8 +16,9 @@ public class QLearningAgent {
     private double alpha;           // Taux d'apprentissage (learning rate)
     private double gamma;           // Facteur de discount
     private double epsilon;         // Probabilité d'exploration
-    private double epsilonDecay;    // Décroissance d'epsilon
-    private double epsilonMin;      // Epsilon minimum
+    private final double epsilonDecay;    // Décroissance d'epsilon
+    private final double epsilonMin;      // Epsilon minimum
+    private List<Double> trainingRewards;
     
     public QLearningAgent(Environment<TcdrmState, TcdrmAction> environment,
                          double alpha, double gamma, double epsilon, 
@@ -26,6 +30,7 @@ public class QLearningAgent {
         this.epsilon = epsilon;
         this.epsilonDecay = epsilonDecay;
         this.epsilonMin = epsilonMin;
+        this.trainingRewards = new ArrayList<>();
     }
     
     /**
@@ -234,5 +239,13 @@ public class QLearningAgent {
         public double[] getEpsilonValues() {
             return epsilonValues;
         }
+    }
+    
+    public List<Double> getTrainingRewards() {
+        return trainingRewards;
+    }
+    
+    public void setTrainingRewards(List<Double> rewards) {
+        this.trainingRewards = rewards;
     }
 }
