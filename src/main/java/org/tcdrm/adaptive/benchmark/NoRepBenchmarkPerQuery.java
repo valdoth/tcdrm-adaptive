@@ -14,7 +14,7 @@ public class NoRepBenchmarkPerQuery {
     // Inter-provider (always remote)
     private static final double BW_REMOTE_GBPS = 1.0;
     private static final double LAT_REMOTE_MS = 100.0;
-    private static final double COST_BW_INTER_PROVIDER = 0.01;   // Article: 0.01
+    private static final double COST_BW_INTER_PROVIDER = 0.10;   // Article: 0.10
 
     private static final double CPU_COST_PER_HOUR = 0.02;        // Article: 0.020
     private static final double PROCESSING_MIN_PER_GB = 0.5;

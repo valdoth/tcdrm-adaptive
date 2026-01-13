@@ -74,7 +74,7 @@ public class TcdrmArticleGraphs {
         norepSeries.setLineColor(new Color(255, 127, 14));
         norepSeries.setLineWidth(2.0f);
 
-        String filename = "tcdrm_article_response_time_" + queryId + ".png";
+        String filename = "images/tcdrm_article_response_time_" + queryId + ".png";
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
         System.out.println("✓ Response time chart: " + filename);
     }
@@ -102,7 +102,7 @@ public class TcdrmArticleGraphs {
         norepSeries.setLineColor(new Color(255, 127, 14));
         norepSeries.setLineWidth(2.0f);
 
-        String filename = "tcdrm_article_cost_per_query_" + queryId + ".png";
+        String filename = "images/tcdrm_article_cost_per_query_" + queryId + ".png";
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
         System.out.println("✓ Cost per query chart: " + filename);
     }
@@ -130,7 +130,7 @@ public class TcdrmArticleGraphs {
         norepSeries.setLineColor(new Color(255, 127, 14));
         norepSeries.setLineWidth(2.0f);
 
-        String filename = "tcdrm_article_cumulative_cost_" + queryId + ".png";
+        String filename = "images/tcdrm_article_cumulative_cost_" + queryId + ".png";
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
         System.out.println("✓ Cumulative cost chart: " + filename);
     }

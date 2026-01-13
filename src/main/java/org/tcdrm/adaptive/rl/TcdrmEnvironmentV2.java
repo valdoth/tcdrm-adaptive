@@ -19,8 +19,8 @@ public class TcdrmEnvironmentV2 implements Environment<TcdrmState, TcdrmAction> 
     
     // Coûts (conformes à l'article)
     private static final double COST_BW_INTRA_DC = 0.002;
-    private static final double COST_BW_INTER_PROVIDER = 0.01;
-    private static final double STORAGE_COST_PER_GB_PER_HOUR = 0.008 / 720.0;
+    private static final double COST_BW_INTER_PROVIDER = 0.10;
+    private static final double STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0;
     private static final double REPLICATION_COST_PER_GB = COST_BW_INTER_PROVIDER;
     
     // Paramètres réseau

@@ -1,0 +1,553 @@
+[INFO] Scanning for projects...
+[WARNING] 
+[WARNING] Some problems were encountered while building the effective model for org.tcdrm:tcdrm-adaptive:jar:1.0.0-SNAPSHOT
+[WARNING] 'dependencies.dependency.version' for org.cloudsimplus:cloudsimplus:jar is either LATEST or RELEASE (both of them are being deprecated) @ line 70, column 22
+[WARNING] 
+[WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
+[WARNING] 
+[WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
+[WARNING] 
+[INFO] 
+[INFO] ----------------------< org.tcdrm:tcdrm-adaptive >----------------------
+[INFO] Building TCDRM Adaptive 1.0.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- clean:3.2.0:clean (default-clean) @ tcdrm-adaptive ---
+[INFO] Deleting /Users/valdo/Desktop/cloud/avancement/tcdrm-adaptive/target
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ tcdrm-adaptive ---
+[INFO] Copying 0 resource from src/main/resources to target/classes
+[INFO] 
+[INFO] --- compiler:3.14.0:compile (default-compile) @ tcdrm-adaptive ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 33 source files with javac [debug release 17] to target/classes
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  1.030 s
+[INFO] Finished at: 2026-01-13T08:35:49+03:00
+[INFO] ------------------------------------------------------------------------
+[INFO] Scanning for projects...
+[WARNING] 
+[WARNING] Some problems were encountered while building the effective model for org.tcdrm:tcdrm-adaptive:jar:1.0.0-SNAPSHOT
+[WARNING] 'dependencies.dependency.version' for org.cloudsimplus:cloudsimplus:jar is either LATEST or RELEASE (both of them are being deprecated) @ line 70, column 22
+[WARNING] 
+[WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
+[WARNING] 
+[WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
+[WARNING] 
+[INFO] 
+[INFO] ----------------------< org.tcdrm:tcdrm-adaptive >----------------------
+[INFO] Building TCDRM Adaptive 1.0.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- exec:3.6.3:java (default-cli) @ tcdrm-adaptive ---
+================ TCDRM Complete Graphs Generation ================
+
+Generating complete graph set for query: R1
+Fragment sizes: [2.0, 1.5, 1.0]
+Replication factor: 3
+
+✓ Response time graph: images/complete_response_time_R1.png
+✓ Cost per query graph: images/complete_cost_per_query_R1.png
+✓ Cumulative cost graph: images/complete_cumulative_cost_R1.png
+✓ Replica count graph: images/complete_replica_count_R1.png
+
+Generating complete graph set for query: R2
+Fragment sizes: [3.0, 2.5, 2.0, 1.5]
+Replication factor: 3
+
+✓ Response time graph: images/complete_response_time_R2.png
+✓ Cost per query graph: images/complete_cost_per_query_R2.png
+✓ Cumulative cost graph: images/complete_cumulative_cost_R2.png
+✓ Replica count graph: images/complete_replica_count_R2.png
+
+
+================ All Graphs Generated Successfully ================
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  2.056 s
+[INFO] Finished at: 2026-01-13T08:35:52+03:00
+[INFO] ------------------------------------------------------------------------
+[INFO] Scanning for projects...
+[WARNING] 
+[WARNING] Some problems were encountered while building the effective model for org.tcdrm:tcdrm-adaptive:jar:1.0.0-SNAPSHOT
+[WARNING] 'dependencies.dependency.version' for org.cloudsimplus:cloudsimplus:jar is either LATEST or RELEASE (both of them are being deprecated) @ line 70, column 22
+[WARNING] 
+[WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
+[WARNING] 
+[WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
+[WARNING] 
+[INFO] 
+[INFO] ----------------------< org.tcdrm:tcdrm-adaptive >----------------------
+[INFO] Building TCDRM Adaptive 1.0.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- exec:3.6.3:java (default-cli) @ tcdrm-adaptive ---
+================ TCDRM Article Graphs Generation ================
+
+Generating graphs for query: R1
+Fragment sizes: [2.0, 1.5, 1.0]
+Replication factor: 3
+✓ Response time chart: images/tcdrm_article_response_time_R1.png
+✓ Cost per query chart: images/tcdrm_article_cost_per_query_R1.png
+✓ Cumulative cost chart: images/tcdrm_article_cumulative_cost_R1.png
+
+Generating graphs for query: R2
+Fragment sizes: [3.0, 2.5, 2.0, 1.5]
+Replication factor: 3
+✓ Response time chart: images/tcdrm_article_response_time_R2.png
+✓ Cost per query chart: images/tcdrm_article_cost_per_query_R2.png
+✓ Cumulative cost chart: images/tcdrm_article_cumulative_cost_R2.png
+
+
+================ Graphs Generation Complete ================
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  1.855 s
+[INFO] Finished at: 2026-01-13T08:35:55+03:00
+[INFO] ------------------------------------------------------------------------
+[INFO] Scanning for projects...
+[WARNING] 
+[WARNING] Some problems were encountered while building the effective model for org.tcdrm:tcdrm-adaptive:jar:1.0.0-SNAPSHOT
+[WARNING] 'dependencies.dependency.version' for org.cloudsimplus:cloudsimplus:jar is either LATEST or RELEASE (both of them are being deprecated) @ line 70, column 22
+[WARNING] 
+[WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
+[WARNING] 
+[WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
+[WARNING] 
+[INFO] 
+[INFO] ----------------------< org.tcdrm:tcdrm-adaptive >----------------------
+[INFO] Building TCDRM Adaptive 1.0.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- exec:3.6.3:java (default-cli) @ tcdrm-adaptive ---
+================ TCDRM vs NOREP Comparison ================
+
+Generating comparison for query: R1
+Fragment sizes: [2.0, 1.5, 1.0]
+Replication factor: 3
+✓ Time chart generated: images/tcdrm_vs_norep_time_R1.png
+✓ Cost chart generated: images/tcdrm_vs_norep_cost_R1.png
+
+--- Summary for R1 ---
+At 15000 repetitions:
+  TCDRM Time: 2635014,91 s | NOREP Time: 2891275,79 s | Improvement: 8,86%
+  TCDRM Cost: $4818,4824 | NOREP Cost: $6761,2525 | Difference: -28,73%
+
+Generating comparison for query: R2
+Fragment sizes: [3.0, 2.5, 2.0, 1.5]
+Replication factor: 3
+✓ Time chart generated: images/tcdrm_vs_norep_time_R2.png
+✓ Cost chart generated: images/tcdrm_vs_norep_cost_R2.png
+
+--- Summary for R2 ---
+At 15000 repetitions:
+  TCDRM Time: 5268701,83 s | NOREP Time: 5780631,79 s | Improvement: 8,86%
+  TCDRM Cost: $9636,9648 | NOREP Cost: $13522,5051 | Difference: -28,73%
+================ Comparison Complete ================
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  0.981 s
+[INFO] Finished at: 2026-01-13T08:35:58+03:00
+[INFO] ------------------------------------------------------------------------
+[INFO] Scanning for projects...
+[WARNING] 
+[WARNING] Some problems were encountered while building the effective model for org.tcdrm:tcdrm-adaptive:jar:1.0.0-SNAPSHOT
+[WARNING] 'dependencies.dependency.version' for org.cloudsimplus:cloudsimplus:jar is either LATEST or RELEASE (both of them are being deprecated) @ line 70, column 22
+[WARNING] 
+[WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
+[WARNING] 
+[WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
+[WARNING] 
+[INFO] 
+[INFO] ----------------------< org.tcdrm:tcdrm-adaptive >----------------------
+[INFO] Building TCDRM Adaptive 1.0.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- exec:3.6.3:java (default-cli) @ tcdrm-adaptive ---
+================ TCDRM RL Comparison Graphs ================
+
+Generating RL comparison for query: R1
+Fragment sizes: [2.0, 1.5, 1.0]
+
+✓ RL cost comparison: images/rl_comparison_cost_R1.png
+✓ RL response time comparison: images/rl_comparison_response_time_R1.png
+✓ RL replica comparison: images/rl_comparison_replicas_R1.png
+
+Generating RL comparison for query: R2
+Fragment sizes: [3.0, 2.5, 2.0, 1.5]
+
+✓ RL cost comparison: images/rl_comparison_cost_R2.png
+✓ RL response time comparison: images/rl_comparison_response_time_R2.png
+✓ RL replica comparison: images/rl_comparison_replicas_R2.png
+
+
+================ RL Comparison Graphs Complete ================
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  1.660 s
+[INFO] Finished at: 2026-01-13T08:36:00+03:00
+[INFO] ------------------------------------------------------------------------
+[INFO] Scanning for projects...
+[WARNING] 
+[WARNING] Some problems were encountered while building the effective model for org.tcdrm:tcdrm-adaptive:jar:1.0.0-SNAPSHOT
+[WARNING] 'dependencies.dependency.version' for org.cloudsimplus:cloudsimplus:jar is either LATEST or RELEASE (both of them are being deprecated) @ line 70, column 22
+[WARNING] 
+[WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
+[WARNING] 
+[WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
+[WARNING] 
+[INFO] 
+[INFO] ----------------------< org.tcdrm:tcdrm-adaptive >----------------------
+[INFO] Building TCDRM Adaptive 1.0.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- exec:3.6.3:java (default-cli) @ tcdrm-adaptive ---
+===============================================
+   TCDRM-ADAPTIVE : Entraînement Q-Learning   
+===============================================
+
+>>> Entraînement pour R1 (Requête Simple - 5.3 GB) <<<
+
+=== Début de l'entraînement Q-Learning ===
+Épisodes: 500
+Alpha: 0.1
+Gamma: 0.95
+Epsilon initial: 1.0
+
+Épisode 10/500 - Récompense: 543,71 - Epsilon: 0,9511
+Épisode 20/500 - Récompense: 705,74 - Epsilon: 0,9046
+Épisode 30/500 - Récompense: 530,40 - Epsilon: 0,8604
+Épisode 40/500 - Récompense: 704,22 - Epsilon: 0,8183
+Épisode 50/500 - Récompense: 529,89 - Epsilon: 0,7783
+Épisode 60/500 - Récompense: 741,06 - Epsilon: 0,7403
+Épisode 70/500 - Récompense: 744,86 - Epsilon: 0,7041
+Épisode 80/500 - Récompense: 435,15 - Epsilon: 0,6696
+Épisode 90/500 - Récompense: 739,80 - Epsilon: 0,6369
+Épisode 100/500 - Récompense: 691,58 - Epsilon: 0,6058
+Épisode 110/500 - Récompense: 830,47 - Epsilon: 0,5762
+Épisode 120/500 - Récompense: 922,00 - Epsilon: 0,5480
+Épisode 130/500 - Récompense: 611,55 - Epsilon: 0,5212
+Épisode 140/500 - Récompense: 818,35 - Epsilon: 0,4957
+Épisode 150/500 - Récompense: 745,76 - Epsilon: 0,4715
+Épisode 160/500 - Récompense: 703,73 - Epsilon: 0,4484
+Épisode 170/500 - Récompense: 708,92 - Epsilon: 0,4265
+Épisode 180/500 - Récompense: 696,25 - Epsilon: 0,4057
+Épisode 190/500 - Récompense: 1002,91 - Epsilon: 0,3858
+Épisode 200/500 - Récompense: 628,97 - Epsilon: 0,3670
+Épisode 210/500 - Récompense: 742,46 - Epsilon: 0,3490
+Épisode 220/500 - Récompense: 954,85 - Epsilon: 0,3320
+Épisode 230/500 - Récompense: 709,83 - Epsilon: 0,3157
+Épisode 240/500 - Récompense: 714,98 - Epsilon: 0,3003
+Épisode 250/500 - Récompense: 505,00 - Epsilon: 0,2856
+Épisode 260/500 - Récompense: 1096,50 - Epsilon: 0,2716
+Épisode 270/500 - Récompense: 788,64 - Epsilon: 0,2584
+Épisode 280/500 - Récompense: 977,76 - Epsilon: 0,2457
+Épisode 290/500 - Récompense: 688,64 - Epsilon: 0,2337
+Épisode 300/500 - Récompense: 442,10 - Epsilon: 0,2223
+Épisode 310/500 - Récompense: 742,71 - Epsilon: 0,2114
+Épisode 320/500 - Récompense: 834,10 - Epsilon: 0,2011
+Épisode 330/500 - Récompense: 478,03 - Epsilon: 0,1913
+Épisode 340/500 - Récompense: 552,40 - Epsilon: 0,1819
+Épisode 350/500 - Récompense: 742,16 - Epsilon: 0,1730
+Épisode 360/500 - Récompense: 778,71 - Epsilon: 0,1646
+Épisode 370/500 - Récompense: 1135,07 - Epsilon: 0,1565
+Épisode 380/500 - Récompense: 954,80 - Epsilon: 0,1489
+Épisode 390/500 - Récompense: 1015,07 - Epsilon: 0,1416
+Épisode 400/500 - Récompense: 1512,13 - Epsilon: 0,1347
+Épisode 410/500 - Récompense: 801,09 - Epsilon: 0,1281
+Épisode 420/500 - Récompense: 1033,85 - Epsilon: 0,1218
+Épisode 430/500 - Récompense: 1016,35 - Epsilon: 0,1159
+Épisode 440/500 - Récompense: 994,97 - Epsilon: 0,1102
+Épisode 450/500 - Récompense: 822,53 - Epsilon: 0,1048
+Épisode 460/500 - Récompense: 861,09 - Epsilon: 0,0997
+Épisode 470/500 - Récompense: 1040,20 - Epsilon: 0,0948
+Épisode 480/500 - Récompense: 765,41 - Epsilon: 0,0902
+Épisode 490/500 - Récompense: 548,28 - Epsilon: 0,0858
+Épisode 500/500 - Récompense: 772,37 - Epsilon: 0,0816
+
+=== Entraînement terminé ===
+
+=== Statistiques d'entraînement ===
+Épisodes complétés: 500
+Récompense min: 144,49
+Récompense max: 1512,13
+Récompense moyenne: 764,19
+Récompense moyenne (10 derniers): 836,37
+Epsilon final: 0,0820
+=== Q-Table Statistics ===
+States: 108
+Actions: 3
+Total cells: 324
+Non-zero cells: 144 (44,4%)
+Min Q-value: -169,2456
+Max Q-value: 190,3384
+Avg Q-value: 11,0751
+
+=== Best Actions for Sample States ===
+State 0 State[Budget=LOW, Latency=LOW, Popularity=LOW, Replicas=0] → Action: CREATE_REPLICA (Q=1,5256)
+State 10 State[Budget=LOW, Latency=LOW, Popularity=HIGH, Replicas=2] → Action: DELETE_REPLICA (Q=-27,1053)
+State 20 State[Budget=LOW, Latency=MEDIUM, Popularity=HIGH, Replicas=0] → Action: DO_NOTHING (Q=-19,8583)
+State 30 State[Budget=LOW, Latency=HIGH, Popularity=MEDIUM, Replicas=2] → Action: CREATE_REPLICA (Q=0,0000)
+State 40 State[Budget=MEDIUM, Latency=LOW, Popularity=MEDIUM, Replicas=0] → Action: CREATE_REPLICA (Q=-10,0547)
+State 50 State[Budget=MEDIUM, Latency=MEDIUM, Popularity=LOW, Replicas=2] → Action: CREATE_REPLICA (Q=152,4771)
+State 60 State[Budget=MEDIUM, Latency=HIGH, Popularity=LOW, Replicas=0] → Action: CREATE_REPLICA (Q=0,0000)
+State 70 State[Budget=MEDIUM, Latency=HIGH, Popularity=HIGH, Replicas=2] → Action: CREATE_REPLICA (Q=0,0000)
+State 80 State[Budget=HIGH, Latency=LOW, Popularity=HIGH, Replicas=0] → Action: CREATE_REPLICA (Q=0,0000)
+State 90 State[Budget=HIGH, Latency=MEDIUM, Popularity=MEDIUM, Replicas=2] → Action: CREATE_REPLICA (Q=0,0000)
+State 100 State[Budget=HIGH, Latency=HIGH, Popularity=MEDIUM, Replicas=0] → Action: CREATE_REPLICA (Q=0,0000)
+
+=== Évaluation de la politique apprise ===
+Récompense moyenne sur 10 épisodes: 1071,97
+
+=== Exemples de décisions apprises ===
+State[Budget=HIGH, Latency=MEDIUM, Popularity=HIGH, Replicas=0] → Créer un réplica
+State[Budget=LOW, Latency=MEDIUM, Popularity=HIGH, Replicas=0] → Ne rien faire
+State[Budget=HIGH, Latency=LOW, Popularity=LOW, Replicas=1] → Créer un réplica
+State[Budget=MEDIUM, Latency=MEDIUM, Popularity=MEDIUM, Replicas=1] → Supprimer un réplica
+State[Budget=HIGH, Latency=MEDIUM, Popularity=LOW, Replicas=3] → Supprimer un réplica
+
+============================================================
+
+>>> Entraînement pour R2 (Requête Complexe - 11.9 GB) <<<
+
+=== Début de l'entraînement Q-Learning ===
+Épisodes: 500
+Alpha: 0.1
+Gamma: 0.95
+Epsilon initial: 1.0
+
+Épisode 10/500 - Récompense: 572,44 - Epsilon: 0,9511
+Épisode 20/500 - Récompense: 560,11 - Epsilon: 0,9046
+Épisode 30/500 - Récompense: 572,07 - Epsilon: 0,8604
+Épisode 40/500 - Récompense: 585,41 - Epsilon: 0,8183
+Épisode 50/500 - Récompense: 481,48 - Epsilon: 0,7783
+Épisode 60/500 - Récompense: 403,51 - Epsilon: 0,7403
+Épisode 70/500 - Récompense: 655,07 - Epsilon: 0,7041
+Épisode 80/500 - Récompense: 574,11 - Epsilon: 0,6696
+Épisode 90/500 - Récompense: 648,03 - Epsilon: 0,6369
+Épisode 100/500 - Récompense: 791,04 - Epsilon: 0,6058
+Épisode 110/500 - Récompense: 626,76 - Epsilon: 0,5762
+Épisode 120/500 - Récompense: 732,72 - Epsilon: 0,5480
+Épisode 130/500 - Récompense: 537,78 - Epsilon: 0,5212
+Épisode 140/500 - Récompense: 850,30 - Epsilon: 0,4957
+Épisode 150/500 - Récompense: 676,76 - Epsilon: 0,4715
+Épisode 160/500 - Récompense: 657,33 - Epsilon: 0,4484
+Épisode 170/500 - Récompense: 515,10 - Epsilon: 0,4265
+Épisode 180/500 - Récompense: 628,09 - Epsilon: 0,4057
+Épisode 190/500 - Récompense: 636,78 - Epsilon: 0,3858
+Épisode 200/500 - Récompense: 1046,31 - Epsilon: 0,3670
+Épisode 210/500 - Récompense: 696,44 - Epsilon: 0,3490
+Épisode 220/500 - Récompense: 718,66 - Epsilon: 0,3320
+Épisode 230/500 - Récompense: 839,96 - Epsilon: 0,3157
+Épisode 240/500 - Récompense: 735,97 - Epsilon: 0,3003
+Épisode 250/500 - Récompense: 740,73 - Epsilon: 0,2856
+Épisode 260/500 - Récompense: 903,00 - Epsilon: 0,2716
+Épisode 270/500 - Récompense: 918,23 - Epsilon: 0,2584
+Épisode 280/500 - Récompense: 947,61 - Epsilon: 0,2457
+Épisode 290/500 - Récompense: 735,37 - Epsilon: 0,2337
+Épisode 300/500 - Récompense: 1022,26 - Epsilon: 0,2223
+Épisode 310/500 - Récompense: 536,40 - Epsilon: 0,2114
+Épisode 320/500 - Récompense: 728,65 - Epsilon: 0,2011
+Épisode 330/500 - Récompense: 760,68 - Epsilon: 0,1913
+Épisode 340/500 - Récompense: 699,37 - Epsilon: 0,1819
+Épisode 350/500 - Récompense: 817,00 - Epsilon: 0,1730
+Épisode 360/500 - Récompense: 920,23 - Epsilon: 0,1646
+Épisode 370/500 - Récompense: 1068,65 - Epsilon: 0,1565
+Épisode 380/500 - Récompense: 912,61 - Epsilon: 0,1489
+Épisode 390/500 - Récompense: 715,69 - Epsilon: 0,1416
+Épisode 400/500 - Récompense: 682,73 - Epsilon: 0,1347
+Épisode 410/500 - Récompense: 866,83 - Epsilon: 0,1281
+Épisode 420/500 - Récompense: 760,04 - Epsilon: 0,1218
+Épisode 430/500 - Récompense: 664,90 - Epsilon: 0,1159
+Épisode 440/500 - Récompense: 826,34 - Epsilon: 0,1102
+Épisode 450/500 - Récompense: 858,27 - Epsilon: 0,1048
+Épisode 460/500 - Récompense: 771,35 - Epsilon: 0,0997
+Épisode 470/500 - Récompense: 849,66 - Epsilon: 0,0948
+Épisode 480/500 - Récompense: 901,68 - Epsilon: 0,0902
+Épisode 490/500 - Récompense: 703,68 - Epsilon: 0,0858
+Épisode 500/500 - Récompense: 932,96 - Epsilon: 0,0816
+
+=== Entraînement terminé ===
+
+=== Statistiques d'entraînement ===
+Épisodes complétés: 500
+Récompense min: 215,56
+Récompense max: 1318,55
+Récompense moyenne: 748,70
+Récompense moyenne (10 derniers): 760,80
+Epsilon final: 0,0820
+=== Q-Table Statistics ===
+States: 108
+Actions: 3
+Total cells: 324
+Non-zero cells: 72 (22,2%)
+Min Q-value: -54,3939
+Max Q-value: 259,3617
+Avg Q-value: 28,9725
+
+=== Best Actions for Sample States ===
+State 0 State[Budget=LOW, Latency=LOW, Popularity=LOW, Replicas=0] → Action: CREATE_REPLICA (Q=-19,7933)
+State 10 State[Budget=LOW, Latency=LOW, Popularity=HIGH, Replicas=2] → Action: CREATE_REPLICA (Q=0,0000)
+State 20 State[Budget=LOW, Latency=MEDIUM, Popularity=HIGH, Replicas=0] → Action: CREATE_REPLICA (Q=0,0000)
+State 30 State[Budget=LOW, Latency=HIGH, Popularity=MEDIUM, Replicas=2] → Action: CREATE_REPLICA (Q=0,0000)
+State 40 State[Budget=MEDIUM, Latency=LOW, Popularity=MEDIUM, Replicas=0] → Action: CREATE_REPLICA (Q=0,0000)
+State 50 State[Budget=MEDIUM, Latency=MEDIUM, Popularity=LOW, Replicas=2] → Action: DO_NOTHING (Q=195,1340)
+State 60 State[Budget=MEDIUM, Latency=HIGH, Popularity=LOW, Replicas=0] → Action: CREATE_REPLICA (Q=0,0000)
+State 70 State[Budget=MEDIUM, Latency=HIGH, Popularity=HIGH, Replicas=2] → Action: CREATE_REPLICA (Q=0,0000)
+State 80 State[Budget=HIGH, Latency=LOW, Popularity=HIGH, Replicas=0] → Action: CREATE_REPLICA (Q=0,0000)
+State 90 State[Budget=HIGH, Latency=MEDIUM, Popularity=MEDIUM, Replicas=2] → Action: CREATE_REPLICA (Q=0,0000)
+State 100 State[Budget=HIGH, Latency=HIGH, Popularity=MEDIUM, Replicas=0] → Action: CREATE_REPLICA (Q=0,0000)
+
+=== Évaluation de la politique apprise ===
+Récompense moyenne sur 10 épisodes: 1045,72
+
+=== Exemples de décisions apprises ===
+State[Budget=HIGH, Latency=MEDIUM, Popularity=HIGH, Replicas=0] → Créer un réplica
+State[Budget=LOW, Latency=MEDIUM, Popularity=HIGH, Replicas=0] → Créer un réplica
+State[Budget=HIGH, Latency=LOW, Popularity=LOW, Replicas=1] → Créer un réplica
+State[Budget=MEDIUM, Latency=MEDIUM, Popularity=MEDIUM, Replicas=1] → Créer un réplica
+State[Budget=HIGH, Latency=MEDIUM, Popularity=LOW, Replicas=3] → Supprimer un réplica
+
+===============================================
+   Entraînement terminé avec succès !         
+===============================================
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  0.448 s
+[INFO] Finished at: 2026-01-13T08:36:02+03:00
+[INFO] ------------------------------------------------------------------------
+[INFO] Scanning for projects...
+[WARNING] 
+[WARNING] Some problems were encountered while building the effective model for org.tcdrm:tcdrm-adaptive:jar:1.0.0-SNAPSHOT
+[WARNING] 'dependencies.dependency.version' for org.cloudsimplus:cloudsimplus:jar is either LATEST or RELEASE (both of them are being deprecated) @ line 70, column 22
+[WARNING] 
+[WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
+[WARNING] 
+[WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
+[WARNING] 
+[INFO] 
+[INFO] ----------------------< org.tcdrm:tcdrm-adaptive >----------------------
+[INFO] Building TCDRM Adaptive 1.0.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- exec:3.6.3:java (default-cli) @ tcdrm-adaptive ---
+==========================================================
+   TCDRM vs TCDRM-ADAPTIVE vs NoRep : Comparaison         
+==========================================================
+
+>>> Entraînement du modèle avec 50,000 requêtes <<<
+
+Phase 1 : Petites requêtes (1-5 GB) - 15000 requêtes, 800 épisodes
+
+Phase 2 : Moyennes requêtes (5-10 GB) - 20000 requêtes, 800 épisodes
+
+Phase 3 : Grandes requêtes (10-20 GB) - 15000 requêtes, 400 épisodes
+
+✓ Entraînement terminé avec 50,000 requêtes
+=== Q-Table Statistics ===
+States: 108
+Actions: 3
+Total cells: 324
+Non-zero cells: 216 (66,7%)
+Min Q-value: -217,8712
+Max Q-value: 661,7560
+Avg Q-value: 186,3572
+✓ Graphique de convergence: images/tcdrm_adaptive_convergence.png
+
+============================================================
+
+>>> Comparaison pour R1 (Requête Simple) <<<
+
+=== Exécution TCDRM (statique) ===
+TCDRM - Coût cumulatif final: $498,29
+
+=== Exécution NoRep ===
+NoRep - Coût cumulatif final: $1114,77
+
+=== Simulation TCDRM-ADAPTIVE (2000 requêtes) ===
+TCDRM-ADAPTIVE - Récompense totale: 4134,34
+TCDRM-ADAPTIVE - Budget restant: $-0,19
+TCDRM-ADAPTIVE - Coût total: $203,19
+✓ Graphique de coût (2 courbes): images/tcdrm_norep_cost_R1.png
+✓ Graphique de temps de réponse (2 courbes): images/tcdrm_norep_response_time_R1.png
+✓ Graphique de réplicas (TCDRM): images/tcdrm_replicas_R1.png
+✓ Graphique de coût: images/tcdrm_comparison_cost_R1.png
+✓ Graphique de temps de réponse: images/tcdrm_comparison_response_time_R1.png
+✓ Graphique de réplicas: images/tcdrm_comparison_replicas_R1.png
+
+=== Résumé de la comparaison - R1 ===
+
+Coût cumulatif final:
+  TCDRM (statique):     $498,29
+  NoRep:                $1114,77
+  TCDRM-ADAPTIVE (RL):  $203,19
+
+Économies TCDRM-ADAPTIVE:
+  vs NoRep:    +81,8%
+  vs TCDRM:    +59,2%
+
+Récompense totale TCDRM-ADAPTIVE: 4134,34
+Budget restant: $-0,19
+
+============================================================
+
+============================================================
+
+>>> Comparaison pour R2 (Requête Complexe) <<<
+
+=== Exécution TCDRM (statique) ===
+TCDRM - Coût cumulatif final: $1186,55
+
+=== Exécution NoRep ===
+NoRep - Coût cumulatif final: $2502,97
+
+=== Simulation TCDRM-ADAPTIVE (2000 requêtes) ===
+TCDRM-ADAPTIVE - Récompense totale: 6206,92
+TCDRM-ADAPTIVE - Budget restant: $-0,98
+TCDRM-ADAPTIVE - Coût total: $269,98
+✓ Graphique de coût (2 courbes): images/tcdrm_norep_cost_R2.png
+✓ Graphique de temps de réponse (2 courbes): images/tcdrm_norep_response_time_R2.png
+✓ Graphique de réplicas (TCDRM): images/tcdrm_replicas_R2.png
+✓ Graphique de coût: images/tcdrm_comparison_cost_R2.png
+✓ Graphique de temps de réponse: images/tcdrm_comparison_response_time_R2.png
+✓ Graphique de réplicas: images/tcdrm_comparison_replicas_R2.png
+
+=== Résumé de la comparaison - R2 ===
+
+Coût cumulatif final:
+  TCDRM (statique):     $1186,55
+  NoRep:                $2502,97
+  TCDRM-ADAPTIVE (RL):  $269,98
+
+Économies TCDRM-ADAPTIVE:
+  vs NoRep:    +89,2%
+  vs TCDRM:    +77,2%
+
+Récompense totale TCDRM-ADAPTIVE: 6206,92
+Budget restant: $-0,98
+
+============================================================
+
+==========================================================
+   Comparaison terminée avec succès !                      
+==========================================================
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  2.818 s
+[INFO] Finished at: 2026-01-13T08:36:06+03:00
+[INFO] ------------------------------------------------------------------------

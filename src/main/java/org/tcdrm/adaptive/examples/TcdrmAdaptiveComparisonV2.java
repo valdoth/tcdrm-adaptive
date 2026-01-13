@@ -10,7 +10,12 @@ import org.tcdrm.adaptive.benchmark.NoRepBenchmarkPerQuery;
 import org.tcdrm.adaptive.benchmark.TcdrmBenchmarkPerQuery;
 import org.tcdrm.adaptive.rl.*;
 
+import javax.imageio.ImageIO;
 import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -48,6 +53,13 @@ public class TcdrmAdaptiveComparisonV2 {
         // Comparer pour R2
         System.out.println(">>> Comparaison pour R2 (Requête Complexe) <<<\n");
         compareForQuery("R2", fragmentSizesR2, replicationFactor, agent, 43L);
+        
+        System.out.println("\n" + "=".repeat(60) + "\n");
+        
+        // Générer graphiques combinés RL
+        System.out.println(">>> Génération des graphiques combinés RL <<<\n");
+        generateCombinedRLGraphs("R1", fragmentSizesR1, replicationFactor, agent, 42L);
+        generateCombinedRLGraphs("R2", fragmentSizesR2, replicationFactor, agent, 43L);
         
         System.out.println("\n==========================================================");
         System.out.println("   Comparaison terminée avec succès !                      ");
@@ -265,10 +277,6 @@ public class TcdrmAdaptiveComparisonV2 {
             totalReward += result.getReward();
             state = result.getNextState();
             query++;
-            
-            if (result.isDone()) {
-                break;
-            }
         }
         
         double totalCost = initialBudget - env.getCurrentBudget();
@@ -597,5 +605,209 @@ public class TcdrmAdaptiveComparisonV2 {
             this.finalBudget = finalBudget;
             this.totalCost = totalCost;
         }
+    }
+    
+    // ========== Méthodes pour graphiques combinés RL ==========
+    
+    private static void generateCombinedRLGraphs(String queryId, List<Double> fragmentSizes,
+                                                  int replicationFactor, QLearningAgent agent, Long seed) throws IOException {
+        double dataGb = fragmentSizes.stream().mapToDouble(d -> d).sum();
+        
+        // Utiliser les mêmes benchmarks que compareForQuery
+        TcdrmBenchmarkPerQuery tcdrmBench = new TcdrmBenchmarkPerQuery(replicationFactor, seed);
+        BenchmarkDataPerQuery tcdrmData = tcdrmBench.computeBenchmark(queryId, fragmentSizes);
+        
+        NoRepBenchmarkPerQuery norepBench = new NoRepBenchmarkPerQuery(seed);
+        BenchmarkDataPerQuery norepData = norepBench.computeBenchmark(queryId, fragmentSizes);
+        
+        AdaptiveSimulationResult adaptiveResult = simulateAdaptiveV2(agent, dataGb, seed);
+        
+        // Générer les graphiques combinés
+        generateCombinedResponseTime(queryId, tcdrmData, adaptiveResult, norepData);
+        generateCombinedCost(queryId, tcdrmData, adaptiveResult, norepData);
+        generateCombinedReplicas(queryId, tcdrmData, adaptiveResult);
+    }
+    
+    private static void generateCombinedResponseTime(String queryId, BenchmarkDataPerQuery tcdrmData,
+                                                       AdaptiveSimulationResult adaptiveResult,
+                                                       BenchmarkDataPerQuery norepData) throws IOException {
+        XYChart rawChart = createRLResponseTimeChart("Response Time: Static vs Adaptive (Raw)",
+                                                       tcdrmData, adaptiveResult, norepData, false);
+        XYChart smoothedChart = createRLResponseTimeChart("Response Time: Static vs Adaptive (Smoothed)",
+                                                            tcdrmData, adaptiveResult, norepData, true);
+        
+        BufferedImage combined = combineTwoCharts(rawChart, smoothedChart);
+        String filename = "images/combined_rl_response_time_" + queryId + ".png";
+        ImageIO.write(combined, "PNG", new File(filename));
+        System.out.println("✓ " + filename);
+    }
+    
+    private static void generateCombinedCost(String queryId, BenchmarkDataPerQuery tcdrmData,
+                                              AdaptiveSimulationResult adaptiveResult,
+                                              BenchmarkDataPerQuery norepData) throws IOException {
+        XYChart costChart = createRLCostChart("Cost per Query: Static vs Adaptive",
+                                               tcdrmData, adaptiveResult, norepData, false);
+        XYChart cumulativeChart = createRLCostChart("Cumulative Cost: Static vs Adaptive",
+                                                      tcdrmData, adaptiveResult, norepData, true);
+        
+        BufferedImage combined = combineTwoCharts(costChart, cumulativeChart);
+        String filename = "images/combined_rl_cost_" + queryId + ".png";
+        ImageIO.write(combined, "PNG", new File(filename));
+        System.out.println("✓ " + filename);
+    }
+    
+    private static void generateCombinedReplicas(String queryId, BenchmarkDataPerQuery tcdrmData,
+                                                  AdaptiveSimulationResult adaptiveResult) throws IOException {
+        XYChart staticChart = createRLReplicaChart("Replica Management: TCDRM Static",
+                                                    tcdrmData.queryNumbers(), tcdrmData.replicaCount(),
+                                                    new Color(31, 119, 180), "TCDRM Static");
+        XYChart adaptiveChart = createRLReplicaChart("Replica Management: TCDRM-Adaptive (RL)",
+                                                       adaptiveResult.queryNumbers, adaptiveResult.replicaCounts,
+                                                       new Color(44, 160, 44), "TCDRM-Adaptive");
+        
+        BufferedImage combined = combineTwoCharts(staticChart, adaptiveChart);
+        String filename = "images/combined_rl_replicas_" + queryId + ".png";
+        ImageIO.write(combined, "PNG", new File(filename));
+        System.out.println("✓ " + filename);
+    }
+    
+    private static XYChart createRLResponseTimeChart(String title, BenchmarkDataPerQuery tcdrmData,
+                                                       AdaptiveSimulationResult adaptiveResult,
+                                                       BenchmarkDataPerQuery norepData, boolean smoothed) {
+        XYChart chart = new XYChartBuilder()
+            .width(500).height(400).title(title)
+            .xAxisTitle("Number of Queries").yAxisTitle("Response Time (seconds)").build();
+        
+        styleRLChart(chart);
+        
+        List<Double> tcdrmTimes = smoothed ? smoothData(tcdrmData.timePerQueryMs(), 20) : tcdrmData.timePerQueryMs();
+        List<Double> adaptiveTimes = smoothed ? smoothData(adaptiveResult.latencies, 20) : adaptiveResult.latencies;
+        List<Double> norepTimes = smoothed ? smoothData(norepData.timePerQueryMs(), 20) : norepData.timePerQueryMs();
+        
+        XYSeries adaptiveSeries = chart.addSeries("TCDRM-Adaptive (RL)", adaptiveResult.queryNumbers, adaptiveTimes);
+        adaptiveSeries.setLineColor(new Color(44, 160, 44));
+        adaptiveSeries.setLineWidth(smoothed ? 3.0f : 1.5f);
+        adaptiveSeries.setMarker(org.knowm.xchart.style.markers.SeriesMarkers.NONE);
+        
+        XYSeries tcdrmSeries = chart.addSeries("TCDRM Static", tcdrmData.queryNumbers(), tcdrmTimes);
+        tcdrmSeries.setLineColor(new Color(31, 119, 180));
+        tcdrmSeries.setLineWidth(smoothed ? 2.5f : 1.5f);
+        tcdrmSeries.setMarker(org.knowm.xchart.style.markers.SeriesMarkers.NONE);
+        
+        XYSeries norepSeries = chart.addSeries("NOREP", norepData.queryNumbers(), norepTimes);
+        norepSeries.setLineColor(new Color(214, 39, 40));
+        norepSeries.setLineWidth(smoothed ? 2.5f : 1.5f);
+        norepSeries.setMarker(org.knowm.xchart.style.markers.SeriesMarkers.NONE);
+        
+        return chart;
+    }
+    
+    private static XYChart createRLCostChart(String title, BenchmarkDataPerQuery tcdrmData,
+                                              AdaptiveSimulationResult adaptiveResult,
+                                              BenchmarkDataPerQuery norepData, boolean cumulative) {
+        XYChart chart = new XYChartBuilder()
+            .width(500).height(400).title(title)
+            .xAxisTitle("Number of Queries").yAxisTitle(cumulative ? "Cumulative Cost ($)" : "Cost per Query ($)").build();
+        
+        styleRLChart(chart);
+        if (cumulative) chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
+        
+        List<Double> tcdrmCosts = cumulative ? tcdrmData.cumulativeCost() : tcdrmData.costPerQuery();
+        List<Double> norepCosts = cumulative ? norepData.cumulativeCost() : norepData.costPerQuery();
+        
+        List<Double> adaptiveCosts = new ArrayList<>();
+        double initialBudget = 203.0;
+        if (cumulative) {
+            for (Double budget : adaptiveResult.budgets) {
+                adaptiveCosts.add(initialBudget - budget);
+            }
+        } else {
+            for (int i = 0; i < adaptiveResult.budgets.size(); i++) {
+                double currentCumulativeCost = initialBudget - adaptiveResult.budgets.get(i);
+                double previousCumulativeCost = i > 0 ? initialBudget - adaptiveResult.budgets.get(i - 1) : 0.0;
+                adaptiveCosts.add(currentCumulativeCost - previousCumulativeCost);
+            }
+        }
+        
+        XYSeries adaptiveSeries = chart.addSeries("TCDRM-Adaptive (RL)", adaptiveResult.queryNumbers, adaptiveCosts);
+        adaptiveSeries.setLineColor(new Color(44, 160, 44));
+        adaptiveSeries.setLineWidth(3.0f);
+        adaptiveSeries.setMarker(org.knowm.xchart.style.markers.SeriesMarkers.NONE);
+        
+        XYSeries tcdrmSeries = chart.addSeries("TCDRM Static", tcdrmData.queryNumbers(), tcdrmCosts);
+        tcdrmSeries.setLineColor(new Color(31, 119, 180));
+        tcdrmSeries.setLineWidth(2.5f);
+        tcdrmSeries.setMarker(org.knowm.xchart.style.markers.SeriesMarkers.NONE);
+        
+        XYSeries norepSeries = chart.addSeries("NOREP", norepData.queryNumbers(), norepCosts);
+        norepSeries.setLineColor(new Color(214, 39, 40));
+        norepSeries.setLineWidth(2.5f);
+        norepSeries.setMarker(org.knowm.xchart.style.markers.SeriesMarkers.NONE);
+        
+        return chart;
+    }
+    
+    private static XYChart createRLReplicaChart(String title, List<Integer> queryNumbers, List<Integer> replicaCount,
+                                                 Color color, String label) {
+        XYChart chart = new XYChartBuilder()
+            .width(500).height(400).title(title)
+            .xAxisTitle("Number of Queries").yAxisTitle("Number of Replicas").build();
+        
+        styleRLChart(chart);
+        chart.getStyler().setYAxisMin(0.0);
+        chart.getStyler().setYAxisMax(4.0);
+        
+        XYSeries series = chart.addSeries(label, queryNumbers, replicaCount);
+        series.setLineColor(color);
+        series.setLineWidth(3.0f);
+        series.setMarker(org.knowm.xchart.style.markers.SeriesMarkers.NONE);
+        
+        return chart;
+    }
+    
+    private static void styleRLChart(XYChart chart) {
+        chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
+        chart.getStyler().setDefaultSeriesRenderStyle(XYSeries.XYSeriesRenderStyle.Line);
+        chart.getStyler().setMarkerSize(0);
+        chart.getStyler().setPlotGridLinesVisible(true);
+        chart.getStyler().setPlotGridLinesColor(new Color(220, 220, 220));
+        chart.getStyler().setChartBackgroundColor(Color.WHITE);
+        chart.getStyler().setPlotBackgroundColor(Color.WHITE);
+        chart.getStyler().setLegendBackgroundColor(Color.WHITE);
+        chart.getStyler().setAxisTickLabelsFont(new Font("Arial", Font.PLAIN, 11));
+        chart.getStyler().setAxisTitleFont(new Font("Arial", Font.BOLD, 12));
+        chart.getStyler().setLegendFont(new Font("Arial", Font.PLAIN, 11));
+    }
+    
+    private static BufferedImage combineTwoCharts(XYChart leftChart, XYChart rightChart) {
+        BufferedImage leftImage = BitmapEncoder.getBufferedImage(leftChart);
+        BufferedImage rightImage = BitmapEncoder.getBufferedImage(rightChart);
+        
+        int width = leftImage.getWidth() + rightImage.getWidth();
+        int height = Math.max(leftImage.getHeight(), rightImage.getHeight());
+        
+        BufferedImage combined = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = combined.createGraphics();
+        g.setColor(Color.WHITE);
+        g.fillRect(0, 0, width, height);
+        g.drawImage(leftImage, 0, 0, null);
+        g.drawImage(rightImage, leftImage.getWidth(), 0, null);
+        g.dispose();
+        
+        return combined;
+    }
+    
+    private static List<Double> smoothData(List<Double> data, int windowSize) {
+        List<Double> smoothed = new ArrayList<>();
+        for (int i = 0; i < data.size(); i++) {
+            int start = Math.max(0, i - windowSize / 2);
+            int end = Math.min(data.size(), i + windowSize / 2 + 1);
+            double sum = 0;
+            for (int j = start; j < end; j++) {
+                sum += data.get(j);
+            }
+            smoothed.add(sum / (end - start));
+        }
+        return smoothed;
     }
 }
