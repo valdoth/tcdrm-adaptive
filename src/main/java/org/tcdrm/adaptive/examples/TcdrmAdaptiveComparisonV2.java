@@ -67,27 +67,35 @@ public class TcdrmAdaptiveComparisonV2 {
     }
     
     /**
-     * Entraîne le modèle avec curriculum learning (10,000 requêtes)
+     * Entraîne le modèle avec curriculum learning (500,000 requêtes)
      */
     private static QLearningAgent trainWithCurriculumLearning(Long seed) {
         Random random = new Random(seed);
         
-        // Phase 1 : Petites requêtes (15000)
-        System.out.println("Phase 1 : Petites requêtes (1-5 GB) - 15000 requêtes, 800 épisodes");
-        List<QueryConfig> smallQueries = generateQueriesInRange(1.0, 5.0, 15000, seed);
-        QLearningAgent agent = trainPhase(smallQueries, 800, seed, null);
+        // Phase 1: Petites requêtes (1-5 GB)
+        List<QueryConfig> smallQueries = generateQueriesInRange(1.0, 5.0, 150_000, random.nextLong());
         
-        // Phase 2 : Moyennes requêtes (20000)
-        System.out.println("\nPhase 2 : Moyennes requêtes (5-10 GB) - 20000 requêtes, 800 épisodes");
-        List<QueryConfig> mediumQueries = generateQueriesInRange(5.0, 10.0, 20000, seed + 1);
-        agent = trainPhase(mediumQueries, 800, seed + 1, agent);
+        // Phase 2: Moyennes requêtes (5-10 GB)
+        List<QueryConfig> mediumQueries = generateQueriesInRange(5.0, 10.0, 200_000, random.nextLong());
         
-        // Phase 3 : Grandes requêtes (15000)
-        System.out.println("\nPhase 3 : Grandes requêtes (10-20 GB) - 15000 requêtes, 400 épisodes");
-        List<QueryConfig> largeQueries = generateQueriesInRange(10.0, 20.0, 15000, seed + 2);
-        agent = trainPhase(largeQueries, 400, seed + 2, agent);
+        // Phase 3: Grandes requêtes (10-20 GB)
+        List<QueryConfig> largeQueries = generateQueriesInRange(10.0, 20.0, 150_000, random.nextLong());
         
-        System.out.println("\n✓ Entraînement terminé avec 50,000 requêtes");
+        QLearningAgent agent = null;
+        
+        // Phase 1 : Petites requêtes
+        System.out.println("Phase 1 : Petites requêtes (1-5 GB) - 150000 requêtes, 800 épisodes");
+        agent = trainPhase(smallQueries, 800, random.nextLong(), agent);
+        
+        // Phase 2 : Moyennes requêtes
+        System.out.println("\nPhase 2 : Moyennes requêtes (5-10 GB) - 200000 requêtes, 800 épisodes");
+        agent = trainPhase(mediumQueries, 800, random.nextLong(), agent);
+        
+        // Phase 3 : Grandes requêtes
+        System.out.println("\nPhase 3 : Grandes requêtes (10-20 GB) - 150000 requêtes, 400 épisodes");
+        agent = trainPhase(largeQueries, 400, random.nextLong(), agent);
+        
+        System.out.println("\n✓ Entraînement terminé avec 500,000 requêtes");
         agent.getQTable().printStatistics();
         
         // Générer graphiques de convergence
@@ -623,18 +631,19 @@ public class TcdrmAdaptiveComparisonV2 {
         AdaptiveSimulationResult adaptiveResult = simulateAdaptiveV2(agent, dataGb, seed);
         
         // Générer les graphiques combinés
-        generateCombinedResponseTime(queryId, tcdrmData, adaptiveResult, norepData);
+        generateCombinedResponseTime(queryId, tcdrmData, adaptiveResult, norepData, dataGb);
         generateCombinedCost(queryId, tcdrmData, adaptiveResult, norepData);
         generateCombinedReplicas(queryId, tcdrmData, adaptiveResult);
     }
     
     private static void generateCombinedResponseTime(String queryId, BenchmarkDataPerQuery tcdrmData,
                                                        AdaptiveSimulationResult adaptiveResult,
-                                                       BenchmarkDataPerQuery norepData) throws IOException {
+                                                       BenchmarkDataPerQuery norepData,
+                                                       double dataGb) throws IOException {
         XYChart rawChart = createRLResponseTimeChart("Response Time: Static vs Adaptive (Raw)",
-                                                       tcdrmData, adaptiveResult, norepData, false);
+                                                       tcdrmData, adaptiveResult, norepData, dataGb, false);
         XYChart smoothedChart = createRLResponseTimeChart("Response Time: Static vs Adaptive (Smoothed)",
-                                                            tcdrmData, adaptiveResult, norepData, true);
+                                                            tcdrmData, adaptiveResult, norepData, dataGb, true);
         
         BufferedImage combined = combineTwoCharts(rawChart, smoothedChart);
         String filename = "images/combined_rl_response_time_" + queryId + ".png";
@@ -673,16 +682,21 @@ public class TcdrmAdaptiveComparisonV2 {
     
     private static XYChart createRLResponseTimeChart(String title, BenchmarkDataPerQuery tcdrmData,
                                                        AdaptiveSimulationResult adaptiveResult,
-                                                       BenchmarkDataPerQuery norepData, boolean smoothed) {
+                                                       BenchmarkDataPerQuery norepData, double dataGb, boolean smoothed) {
         XYChart chart = new XYChartBuilder()
             .width(500).height(400).title(title)
             .xAxisTitle("Number of Queries").yAxisTitle("Response Time (seconds)").build();
         
         styleRLChart(chart);
         
-        List<Double> tcdrmTimes = smoothed ? smoothData(tcdrmData.timePerQueryMs(), 20) : tcdrmData.timePerQueryMs();
-        List<Double> adaptiveTimes = smoothed ? smoothData(adaptiveResult.latencies, 20) : adaptiveResult.latencies;
-        List<Double> norepTimes = smoothed ? smoothData(norepData.timePerQueryMs(), 20) : norepData.timePerQueryMs();
+        // Utiliser le même lissage et la même transformation que les graphiques de comparaison
+        int window = 50;
+        List<Double> tcdrmTimes = smoothed ? toList(movingAverage(new ArrayList<>(tcdrmData.timePerQueryMs()), window))
+                                           : tcdrmData.timePerQueryMs();
+        List<Double> norepTimes = smoothed ? toList(movingAverage(new ArrayList<>(norepData.timePerQueryMs()), window))
+                                           : norepData.timePerQueryMs();
+        List<Double> adaptiveTimesRaw = computeAdaptiveResponseTimes(adaptiveResult, dataGb);
+        List<Double> adaptiveTimes = smoothed ? toList(movingAverage(adaptiveTimesRaw, window)) : adaptiveTimesRaw;
         
         XYSeries adaptiveSeries = chart.addSeries("TCDRM-Adaptive (RL)", adaptiveResult.queryNumbers, adaptiveTimes);
         adaptiveSeries.setLineColor(new Color(44, 160, 44));
@@ -700,6 +714,24 @@ public class TcdrmAdaptiveComparisonV2 {
         norepSeries.setMarker(org.knowm.xchart.style.markers.SeriesMarkers.NONE);
         
         return chart;
+    }
+
+    /**
+     * Calcule le temps de réponse adaptatif avec la même logique que generateResponseTimeGraph3Curves
+     */
+    private static List<Double> computeAdaptiveResponseTimes(AdaptiveSimulationResult adaptiveResult, double dataGb) {
+        List<Double> adaptiveResponseTime = new ArrayList<>();
+        for (int i = 0; i < adaptiveResult.latencies.size(); i++) {
+            double latencyMs = adaptiveResult.latencies.get(i);
+            int replicaCount = adaptiveResult.replicaCounts.get(i);
+            
+            double bwGbps = (replicaCount > 0 && latencyMs < 50) ? 10.0 : 1.0;
+            double transferMs = (dataGb * 8000.0 / bwGbps) + latencyMs;
+            double processingMs = dataGb * 0.5 * 60000.0;
+            double totalTimeSeconds = (transferMs + processingMs) / 1000.0;
+            adaptiveResponseTime.add(totalTimeSeconds);
+        }
+        return adaptiveResponseTime;
     }
     
     private static XYChart createRLCostChart(String title, BenchmarkDataPerQuery tcdrmData,
