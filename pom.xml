@@ -84,5 +84,10 @@
             <artifactId>xchart</artifactId>
             <version>3.8.8</version>
         </dependency>
+        <dependency>
+            <groupId>net.sf.py4j</groupId>
+            <artifactId>py4j</artifactId>
+            <version>0.10.9.7</version>
+        </dependency>
     </dependencies>
 </project>

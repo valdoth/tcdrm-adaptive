@@ -1,0 +1,41 @@
+# Tabular Q-Learning Configuration for TCDRM-ADAPTIVE
+# This mirrors your Java Q-Learning implementation
+
+environment:
+  data_gb: 5.3
+  max_queries: 1000
+  initial_budget: 100.0
+  sla_threshold: 150.0
+  max_replicas: 3
+
+training:
+  n_episodes: 500
+  learning_rate: 0.1 # alpha
+  discount_factor: 0.95 # gamma
+  epsilon: 1.0 # initial exploration
+  epsilon_decay: 0.995 # decay per episode
+  epsilon_min: 0.01 # minimum exploration
+
+state_space:
+  n_states: 108 # 3 * 3 * 3 * 4 = 108
+  discretization:
+    budget_levels: 3 # LOW, MEDIUM, HIGH
+    latency_levels: 3 # LOW, MEDIUM, HIGH
+    popularity_levels: 3 # LOW, MEDIUM, HIGH
+    replica_levels: 4 # 0, 1, 2, 3
+
+action_space:
+  n_actions: 3 # CREATE, DELETE, DO_NOTHING
+
+evaluation:
+  n_eval_episodes: 10
+  eval_freq: 10
+
+checkpoints:
+  save_path: "models/qlearning_tcdrm"
+
+logging:
+  log_path: "logs/qlearning_tcdrm"
+  verbose: 1
+
+seed: 42
