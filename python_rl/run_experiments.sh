@@ -104,28 +104,8 @@ case "${1:-all}" in
         fi
         ;;
     
-    compare-java)
-        echo "Comparaison Python vs Java Q-Learning"
-        
-        # Vérifier si le log Java existe
-        if [ -f "../logs/qlearning_training.log" ]; then
-            uv run python compare_with_java.py \
-                --java-log ../logs/qlearning_training.log \
-                --episodes 500 \
-                --output-dir results/comparison
-            echo -e "${GREEN}✅ Comparaison terminée${NC}"
-        else
-            echo -e "${YELLOW}⚠️  Log Java non trouvé. Exécutez d'abord l'entraînement Java.${NC}"
-        fi
-        ;;
-    
-    test-java)
-        echo "Test de connexion Python-Java (Py4J)"
-        uv run python test_java_connection.py
-        ;;
-    
     all)
-        echo "Workflow complet: Entraînement + Évaluation + Comparaison"
+        echo "Workflow complet: Entraînement + Évaluation"
         
         # Entraîner tous les scénarios
         train_qlearning 5.3 1000 "r1_simple"
@@ -136,20 +116,18 @@ case "${1:-all}" in
         sleep 2
         $0 evaluate
         
-        # Comparaison avec Java (si disponible)
-        if [ -f "../logs/qlearning_training.log" ]; then
-            $0 compare-java
-        fi
-        
         echo ""
         echo -e "${GREEN}============================================================${NC}"
-        echo -e "${GREEN}  ✅ Toutes les expériences terminées avec succès!${NC}"
+        echo -e "${GREEN}  ✅ Entraînement terminé avec succès!${NC}"
         echo -e "${GREEN}============================================================${NC}"
         echo ""
-        echo "Résultats disponibles dans:"
-        echo "  - results/qlearning/     (modèles entraînés)"
-        echo "  - results/evaluation/    (métriques d'évaluation)"
-        echo "  - results/comparison/    (comparaison Python vs Java)"
+        echo "Modèles entraînés dans: results/qlearning/"
+        echo ""
+        echo "Prochaine étape: Simulations et comparaisons en Java"
+        echo "  cd .."
+        echo "  mvn clean package"
+        echo "  java -cp target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar \\"
+        echo "    org.tcdrm.adaptive.examples.TcdrmComparisonCloudSim"
         ;;
     
     clean)
@@ -164,7 +142,7 @@ case "${1:-all}" in
         ;;
     
     *)
-        echo "Usage: $0 {train-r1|train-r2|train-r3|train-all|evaluate|compare-java|test-java|all|clean}"
+        echo "Usage: $0 {train-r1|train-r2|train-r3|train-all|evaluate|all|clean}"
         echo ""
         echo "Commandes:"
         echo "  train-r1       - Entraîner pour R1 (5.3 GB)"
@@ -172,15 +150,14 @@ case "${1:-all}" in
         echo "  train-r3       - Entraîner pour R3 (20 GB)"
         echo "  train-all      - Entraîner tous les scénarios"
         echo "  evaluate       - Évaluer les modèles entraînés"
-        echo "  compare-java   - Comparer Python vs Java"
-        echo "  test-java      - Tester la connexion Py4J"
         echo "  all            - Workflow complet (défaut)"
         echo "  clean          - Nettoyer les résultats"
         echo ""
         echo "Exemples:"
-        echo "  $0 all              # Tout exécuter"
+        echo "  $0 all              # Entraîner tous les scénarios"
         echo "  $0 train-r1         # Entraîner R1 uniquement"
-        echo "  $0 evaluate         # Évaluer les modèles"
+        echo ""
+        echo "Note: Les simulations et comparaisons se font en Java avec CloudSim"
         exit 1
         ;;
 esac

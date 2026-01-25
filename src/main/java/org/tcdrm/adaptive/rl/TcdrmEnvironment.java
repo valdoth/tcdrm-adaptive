@@ -10,8 +10,8 @@ import java.util.Random;
 public class TcdrmEnvironment implements Environment<TcdrmState, TcdrmAction> {
     
     // Paramètres de l'environnement
-    private static final int MAX_QUERIES = 1000;
-    private static final double INITIAL_BUDGET = 100.0;
+    private static final int MAX_QUERIES = 2000;
+    private static final double INITIAL_BUDGET = 2000.0;  // Augmenté pour permettre 2000 requêtes complètes
     private static final double SLA_LATENCY_THRESHOLD = 150.0;  // ms
     private static final int MAX_REPLICAS = 3;
     
@@ -237,4 +237,5 @@ public class TcdrmEnvironment implements Environment<TcdrmState, TcdrmAction> {
     public int getAccessCount() { return accessCount; }
     public int getCurrentReplicaCount() { return currentReplicaCount; }
     public int getCurrentQuery() { return currentQuery; }
+    public double getDataGb() { return dataGb; }
 }

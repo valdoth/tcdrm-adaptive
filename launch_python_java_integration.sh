@@ -2,6 +2,7 @@
 
 # Script pour lancer l'intégration Python-Java TCDRM-ADAPTIVE
 # Lance le gateway Java et permet d'exécuter des scripts Python
+# Architecture: Python RL (Reinforcement Learning) + Java Environment (TcdrmEnvironment)
 
 set -e
 
@@ -234,7 +235,8 @@ show_menu() {
 # Workflow complet automatique
 run_full_workflow() {
     echo -e "${BLUE}============================================================${NC}"
-    echo -e "${BLUE}  Workflow Complet: Compilation → Gateway → Test → Train${NC}"
+    echo -e "${BLUE}  Workflow Complet: Compilation → Gateway → Test${NC}"
+    echo -e "${BLUE}  Architecture: Python RL + Java Environment (Py4J)${NC}"
     echo -e "${BLUE}============================================================${NC}"
     
     check_maven
@@ -247,10 +249,16 @@ run_full_workflow() {
     echo -e "${GREEN}✅ Workflow complet terminé!${NC}"
     echo ""
     echo "Le gateway Java est maintenant actif."
-    echo "Vous pouvez:"
+    echo "Vous pouvez maintenant:"
+    echo "  - Lancer la comparaison complète: ./run_full_workflow.sh"
     echo "  - Entraîner un agent: ./launch_python_java_integration.sh train ppo"
     echo "  - Arrêter le gateway: ./launch_python_java_integration.sh stop"
     echo "  - Voir le statut: ./launch_python_java_integration.sh status"
+    echo ""
+    echo "Note: Le système utilise 3 approches:"
+    echo "  1. TCDRM avec Python RL (Reinforcement Learning)"
+    echo "  2. TCDRM Statique (seuils fixes: TSLA=150ms, PSLA=200, CSLA=20%)"
+    echo "  3. NOREP (pas de réplication - baseline)"
 }
 
 # Point d'entrée principal

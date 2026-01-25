@@ -289,3 +289,13 @@ class TcdrmAdaptiveEnv(gym.Env):
     
     def close(self):
         pass
+    
+    def get_state_space_size(self):
+        """Retourne la taille de l'espace d'états pour Q-Learning tabulaire"""
+        # Pour Q-Learning tabulaire, on utilise un état discret
+        # 3 niveaux de budget × 3 niveaux de latence × 3 niveaux de popularité × 4 niveaux de réplicas
+        return 3 * 3 * 3 * 4  # 108 états
+    
+    def get_action_space_size(self):
+        """Retourne la taille de l'espace d'actions"""
+        return self.action_space.n  # 3 actions

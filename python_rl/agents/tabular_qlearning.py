@@ -335,38 +335,42 @@ class TabularQLearningAgent:
         print("="*60)
     
     def save(self, filepath: str):
-        """Save Q-table and parameters"""
+        """Save Q-table and parameters using pickle"""
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
         save_dict = {
-            'q_table': self.q_table.tolist(),
+            'q_table': self.q_table,
             'n_states': self.n_states,
             'n_actions': self.n_actions,
             'learning_rate': self.learning_rate,
             'discount_factor': self.discount_factor,
             'epsilon': self.epsilon,
             'episode_rewards': self.episode_rewards,
-            'state_visit_counts': self.state_visit_counts.tolist()
+            'state_visit_counts': self.state_visit_counts,
+            'state_space': (3, 3, 3, 4),  # Pour compatibilité avec Java
+            'action_space': 3
         }
         
-        with open(filepath, 'w') as f:
-            json.dump(save_dict, f, indent=2)
+        import pickle
+        with open(filepath, 'wb') as f:
+            pickle.dump(save_dict, f)
         
         print(f"Q-Learning agent saved to {filepath}")
     
     def load(self, filepath: str):
-        """Load Q-table and parameters"""
-        with open(filepath, 'r') as f:
-            save_dict = json.load(f)
+        """Load Q-table and parameters from pickle"""
+        import pickle
+        with open(filepath, 'rb') as f:
+            save_dict = pickle.load(f)
         
-        self.q_table = np.array(save_dict['q_table'])
+        self.q_table = save_dict['q_table']
         self.n_states = save_dict['n_states']
         self.n_actions = save_dict['n_actions']
         self.learning_rate = save_dict['learning_rate']
         self.discount_factor = save_dict['discount_factor']
         self.epsilon = save_dict['epsilon']
-        self.episode_rewards = save_dict['episode_rewards']
-        self.state_visit_counts = np.array(save_dict['state_visit_counts'])
+        self.episode_rewards = save_dict.get('episode_rewards', [])
+        self.state_visit_counts = save_dict.get('state_visit_counts', np.zeros(self.n_states))
         
         print(f"Q-Learning agent loaded from {filepath}")
     

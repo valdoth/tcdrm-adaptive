@@ -10,12 +10,12 @@ import numpy as np
 import pandas as pd
 
 from agents.tabular_qlearning import TabularQLearningAgent
-from envs.tcdrm_env import TcdrmEnv
+from envs.tcdrm_env import TcdrmAdaptiveEnv
 from utils.logger import setup_logger
 from utils.metrics import MetricsTracker
 from utils.visualization import plot_evaluation_results, plot_action_distribution
 
-logger = setup_logger("TCDRM-Evaluation")
+logger = setup_logger("TCDRM-Evaluation", "logs")
 
 
 def evaluate_model(agent, env, num_episodes=100, render=False):
@@ -125,13 +125,13 @@ def main():
     
     # Créer l'environnement
     logger.info(f"\n>>> Création de l'environnement ({args.data_gb} GB)")
-    env = TcdrmEnv(data_gb=args.data_gb)
+    env = TcdrmAdaptiveEnv(data_gb=args.data_gb)
     
     # Charger le modèle
     logger.info(f"\n>>> Chargement du modèle: {args.model}")
     agent = TabularQLearningAgent(
-        state_space_size=env.get_state_space_size(),
-        action_space_size=env.get_action_space_size()
+        n_states=env.get_state_space_size(),
+        n_actions=env.get_action_space_size()
     )
     agent.load(args.model)
     logger.info("✅ Modèle chargé avec succès")

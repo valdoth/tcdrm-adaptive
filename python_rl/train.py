@@ -7,15 +7,16 @@ Mécanisme adaptatif auto-apprenant pour la réplication multi-cloud
 import argparse
 import os
 import yaml
+import numpy as np
 from datetime import datetime
 
 from agents.tabular_qlearning import TabularQLearningAgent
-from envs.tcdrm_env import TcdrmEnv
+from envs.tcdrm_env import TcdrmAdaptiveEnv
 from utils.logger import setup_logger
 from utils.metrics import MetricsTracker
-from utils.visualization import plot_training_results, plot_qtable_heatmap
+from utils.visualization import plot_training_results
 
-logger = setup_logger("TCDRM-Training")
+logger = setup_logger("TCDRM-Training", "logs")
 
 
 def load_config(config_path):
@@ -38,8 +39,18 @@ def train_qlearning(args):
     
     # Charger la configuration
     if args.config:
-        config = load_config(args.config)
+        config_file = load_config(args.config)
         logger.info(f"Configuration chargée depuis: {args.config}")
+        # Extraire les valeurs du YAML
+        config = {
+            'alpha': config_file['training']['learning_rate'],
+            'gamma': config_file['training']['discount_factor'],
+            'epsilon_start': config_file['training']['epsilon'],
+            'epsilon_decay': config_file['training']['epsilon_decay'],
+            'epsilon_min': config_file['training']['epsilon_min'],
+            'data_gb': args.data_gb if args.data_gb else config_file['environment']['data_gb'],
+            'episodes': args.episodes if args.episodes else config_file['training']['n_episodes'],
+        }
     else:
         config = {
             'alpha': args.alpha,
@@ -53,7 +64,7 @@ def train_qlearning(args):
     
     # Créer l'environnement Gymnasium
     logger.info(f"\n>>> Création de l'environnement TCDRM ({config['data_gb']} GB)")
-    env = TcdrmEnv(data_gb=config['data_gb'])
+    env = TcdrmAdaptiveEnv(data_gb=config['data_gb'])
     
     logger.info(f"Espace d'états: {env.observation_space}")
     logger.info(f"Espace d'actions: {env.action_space}")
@@ -63,10 +74,10 @@ def train_qlearning(args):
     # Créer l'agent Q-Learning
     logger.info("\n>>> Création de l'agent Q-Learning")
     agent = TabularQLearningAgent(
-        state_space_size=env.get_state_space_size(),
-        action_space_size=env.get_action_space_size(),
-        alpha=config['alpha'],
-        gamma=config['gamma'],
+        n_states=env.get_state_space_size(),
+        n_actions=env.get_action_space_size(),
+        learning_rate=config['alpha'],
+        discount_factor=config['gamma'],
         epsilon=config['epsilon_start'],
         epsilon_decay=config['epsilon_decay'],
         epsilon_min=config['epsilon_min']
@@ -78,123 +89,65 @@ def train_qlearning(args):
     logger.info(f"  - Epsilon (exploration): {config['epsilon_start']} → {config['epsilon_min']}")
     logger.info(f"  - Epsilon decay: {config['epsilon_decay']}")
     
-    # Créer le tracker de métriques
-    metrics = MetricsTracker()
-    
     # Créer le répertoire de sortie
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "models"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "plots"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "metrics"), exist_ok=True)
     
-    # Entraînement
+    # Entraînement avec la méthode intégrée de l'agent
     logger.info(f"\n>>> Entraînement pour {config['episodes']} épisodes")
     logger.info("Objectif: Apprendre à décider QUAND répliquer pour optimiser coût/SLA")
     logger.info("")
     
-    best_reward = float('-inf')
+    training_stats = agent.train(
+        env=env,
+        n_episodes=config['episodes'],
+        max_steps_per_episode=1000,
+        eval_freq=args.log_interval,
+        verbose=True
+    )
     
-    for episode in range(config['episodes']):
-        state, _ = env.reset()
-        episode_reward = 0
-        episode_cost = 0
-        episode_sla_violations = 0
-        done = False
-        step = 0
-        
-        while not done:
-            # Choisir une action (exploration vs exploitation)
-            action = agent.choose_action(state)
-            
-            # Exécuter l'action
-            next_state, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
-            
-            # Mettre à jour la Q-Table (apprentissage)
-            agent.update(state, action, reward, next_state, done)
-            
-            # Accumuler les métriques
-            episode_reward += reward
-            episode_cost += info.get('cost', 0)
-            if info.get('sla_violation', False):
-                episode_sla_violations += 1
-            
-            state = next_state
-            step += 1
-        
-        # Décroissance de l'exploration
-        agent.decay_epsilon()
-        
-        # Enregistrer les métriques
-        metrics.record_episode(
-            episode=episode,
-            reward=episode_reward,
-            cost=episode_cost,
-            sla_compliance=1.0 - (episode_sla_violations / max(step, 1)),
-            steps=step
-        )
-        
-        # Affichage périodique
-        if (episode + 1) % args.log_interval == 0:
-            avg_reward = metrics.get_average_reward(window=args.log_interval)
-            avg_cost = metrics.get_average_cost(window=args.log_interval)
-            avg_sla = metrics.get_average_sla_compliance(window=args.log_interval)
-            
-            logger.info(
-                f"Épisode {episode + 1}/{config['episodes']} | "
-                f"Récompense: {episode_reward:.2f} (avg: {avg_reward:.2f}) | "
-                f"Coût: {episode_cost:.2f} | "
-                f"SLA: {avg_sla:.2%} | "
-                f"ε: {agent.epsilon:.3f}"
-            )
-        
-        # Sauvegarder le meilleur modèle
-        if episode_reward > best_reward:
-            best_reward = episode_reward
-            model_path = os.path.join(output_dir, "models", "best_model.pkl")
-            agent.save(model_path)
-            if (episode + 1) % 100 == 0:
-                logger.info(f"  → Nouveau meilleur modèle sauvegardé: {model_path}")
+    # Sauvegarder le modèle
+    model_path = os.path.join(output_dir, "models", "best_model.pkl")
+    agent.save(model_path)
+    logger.info(f"\n✅ Modèle sauvegardé: {model_path}")
     
-    # Sauvegarder le modèle final
-    final_model_path = os.path.join(output_dir, "models", "final_model.pkl")
-    agent.save(final_model_path)
-    logger.info(f"\n✅ Modèle final sauvegardé: {final_model_path}")
-    
-    # Sauvegarder les métriques
-    metrics_path = os.path.join(output_dir, "training_metrics.csv")
-    metrics.save_to_csv(metrics_path)
+    # Sauvegarder les métriques d'entraînement
+    import pandas as pd
+    metrics_df = pd.DataFrame({
+        'episode': range(len(training_stats['episode_rewards'])),
+        'reward': training_stats['episode_rewards'],
+        'length': training_stats['episode_lengths']
+    })
+    metrics_path = os.path.join(output_dir, "metrics", "training_metrics.csv")
+    metrics_df.to_csv(metrics_path, index=False)
     logger.info(f"✅ Métriques sauvegardées: {metrics_path}")
     
     # Générer les visualisations
     logger.info("\n>>> Génération des visualisations...")
-    
-    # Courbes d'apprentissage
     plot_path = os.path.join(output_dir, "plots", "training_curves.png")
-    plot_training_results(metrics, save_path=plot_path)
-    logger.info(f"✅ Courbes d'apprentissage: {plot_path}")
-    
-    # Heatmap de la Q-Table
-    heatmap_path = os.path.join(output_dir, "plots", "qtable_heatmap.png")
-    plot_qtable_heatmap(agent.q_table, save_path=heatmap_path)
-    logger.info(f"✅ Heatmap Q-Table: {heatmap_path}")
+    try:
+        plot_training_results(metrics_path, save_path=plot_path)
+        logger.info(f"✅ Courbes d'apprentissage: {plot_path}")
+    except Exception as e:
+        logger.warning(f"⚠️  Impossible de générer les courbes: {e}")
     
     # Résumé final
     logger.info("\n" + "="*80)
     logger.info("RÉSUMÉ DE L'ENTRAÎNEMENT")
     logger.info("="*80)
-    summary = metrics.get_summary()
-    logger.info(f"Récompense moyenne: {summary['mean_reward']:.2f} ± {summary['std_reward']:.2f}")
-    logger.info(f"Coût moyen: {summary['mean_cost']:.2f} ± {summary['std_cost']:.2f}")
-    logger.info(f"Conformité SLA moyenne: {summary['mean_sla_compliance']:.2%}")
-    logger.info(f"Meilleure récompense: {best_reward:.2f}")
+    logger.info(f"Récompense moyenne: {np.mean(training_stats['episode_rewards']):.2f} ± {np.std(training_stats['episode_rewards']):.2f}")
+    logger.info(f"Récompense finale (derniers 100): {np.mean(training_stats['episode_rewards'][-100:]):.2f}")
+    logger.info(f"Epsilon final: {training_stats['final_epsilon']:.4f}")
     logger.info("="*80)
     
     logger.info("\n✅ Entraînement terminé avec succès!")
-    logger.info(f"Modèles sauvegardés dans: {output_dir}/models/")
-    logger.info(f"Visualisations dans: {output_dir}/plots/")
+    logger.info(f"Modèle sauvegardé dans: {output_dir}/models/")
+    logger.info(f"Métriques dans: {output_dir}/metrics/")
     
-    return agent, metrics
+    return agent, training_stats
 
 
 def main():
