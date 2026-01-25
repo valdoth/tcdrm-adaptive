@@ -15,6 +15,7 @@ public class Py4JGateway {
     
     private GatewayServer gatewayServer;
     private PythonQLearningAgent pythonAgent;
+    private Object pythonBridge;  // Pont Python pour appels directs
     private boolean isRunning = false;
     
     /**
@@ -35,7 +36,7 @@ public class Py4JGateway {
             InetAddress address = InetAddress.getByName("0.0.0.0");
             
             gatewayServer = new GatewayServer(
-                pythonAgent,                                    // Entry point
+                this,                                          // Entry point (le Gateway lui-même)
                 port,                                           // Gateway port (25333)
                 address,                                        // Listen on all interfaces
                 GatewayServer.DEFAULT_CONNECT_TIMEOUT,         // Connect timeout
@@ -91,6 +92,22 @@ public class Py4JGateway {
      */
     public PythonQLearningAgent getPythonAgent() {
         return pythonAgent;
+    }
+    
+    /**
+     * Enregistre le pont Python (appelé depuis Python)
+     */
+    public void registerPythonBridge(Object bridge) {
+        this.pythonBridge = bridge;
+        System.out.println("✅ Pont Python enregistré: " + bridge.getClass().getName());
+    }
+    
+    /**
+     * Retourne le pont Python directement (pour appels via réflexion)
+     * Ceci permet d'appeler les méthodes Python exposées via Py4J
+     */
+    public Object getPythonBridge() {
+        return pythonBridge;
     }
     
     /**

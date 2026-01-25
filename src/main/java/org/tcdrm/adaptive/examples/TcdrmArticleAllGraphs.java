@@ -27,6 +27,9 @@ public class TcdrmArticleAllGraphs {
     public static void main(String[] args) throws IOException {
         System.out.println("================ TCDRM Article - ALL Graphs Generation ================\n");
         
+        // Créer le répertoire images/ s'il n'existe pas
+        new File("images").mkdirs();
+        
         // R1 = F1 + F41 + F80 (3 fragments from different regions)
         generateAllGraphsForQuery("R1", Arrays.asList(1.5, 2.0, 1.8), 3);
         

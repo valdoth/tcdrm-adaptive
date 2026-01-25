@@ -1,7 +1,6 @@
 #!/bin/bash
-
-# Script complet pour exécuter tout le workflow TCDRM-ADAPTIVE
-# Combine l'entraînement Python, le serveur Py4J et la comparaison Java
+# Script unifié pour le workflow complet TCDRM-ADAPTIVE
+# Combine: Entraînement Python + Génération de graphes avec VRAI modèle RL via Py4J
 
 set -e
 
@@ -15,45 +14,50 @@ NC='\033[0m'
 # Variables
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="$PROJECT_ROOT/python_rl"
-PY4J_PID=""
 SCENARIO="r1"  # Par défaut R1
 PYTHON_PID=""
 JAVA_PID=""
 
-# Fonction de nettoyage
+# Fonction de nettoyage initial (avant démarrage)
+cleanup_initial() {
+    echo -e "${BLUE}🧹 Nettoyage des processus et ports existants...${NC}"
+    
+    # Tuer tous les processus Java/Python liés au workflow
+    pkill -f "TcdrmArticleAllGraphs3CurvesWithPy4J" 2>/dev/null || true
+    pkill -f "connect_to_java_for_graphs.py" 2>/dev/null || true
+    pkill -f "TcdrmArticleGraphs" 2>/dev/null || true
+    
+    # Libérer les ports Py4J (25333 et 25334)
+    lsof -ti:25333 2>/dev/null | xargs kill -9 2>/dev/null || true
+    lsof -ti:25334 2>/dev/null | xargs kill -9 2>/dev/null || true
+    
+    # Attendre un peu pour que les ports soient libérés
+    sleep 2
+    
+    echo -e "${GREEN}✅ Nettoyage initial terminé${NC}"
+    echo ""
+}
+
+# Fonction de nettoyage (à la fin)
 cleanup() {
     echo ""
     echo -e "${BLUE}🧹 Nettoyage...${NC}"
     
-    # Arrêter le client Python s'il est actif
+    # Arrêter le client Python
     if [ ! -z "$PYTHON_PID" ]; then
         echo "Arrêt du client Python (PID: $PYTHON_PID)..."
         kill $PYTHON_PID 2>/dev/null || true
     fi
     
-    # Arrêter le client Python combiné s'il est actif
-    if [ ! -z "$PYTHON_COMBINED_PID" ]; then
-        echo "Arrêt du client Python combiné (PID: $PYTHON_COMBINED_PID)..."
-        kill $PYTHON_COMBINED_PID 2>/dev/null || true
-    fi
-    
-    # Arrêter Java s'il est actif
+    # Arrêter Java
     if [ ! -z "$JAVA_PID" ]; then
         echo "Arrêt de Java (PID: $JAVA_PID)..."
         kill $JAVA_PID 2>/dev/null || true
     fi
     
-    # Arrêter Java combiné s'il est actif
-    if [ ! -z "$COMBINED_PID" ]; then
-        echo "Arrêt de Java combiné (PID: $COMBINED_PID)..."
-        kill $COMBINED_PID 2>/dev/null || true
-    fi
-    
     # Tuer tous les processus restants
-    pkill -f "connect_to_java.py" 2>/dev/null || true
-    pkill -f "TcdrmComparisonCloudSim" 2>/dev/null || true
-    pkill -f "TcdrmCombinedComparisonGraphs" 2>/dev/null || true
-    pkill -f "TcdrmArticleGraphs" 2>/dev/null || true
+    pkill -f "connect_to_java_for_graphs.py" 2>/dev/null || true
+    pkill -f "TcdrmArticleAllGraphs" 2>/dev/null || true
     
     echo -e "${GREEN}✅ Nettoyage terminé${NC}"
 }
@@ -75,7 +79,7 @@ show_help() {
     echo "  $0                           # Workflow complet avec R1"
     echo "  $0 --scenario r2             # Workflow complet avec R2"
     echo "  $0 --skip-training           # Sauter entraînement, utiliser modèles existants"
-    echo "  $0 --skip-training --skip-compile  # Seulement comparaison"
+    echo "  $0 --skip-training --skip-compile  # Seulement génération de graphes"
 }
 
 # Parser les arguments
@@ -135,10 +139,13 @@ case $SCENARIO in
 esac
 
 echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}  TCDRM-ADAPTIVE: Workflow Complet (3 Approches)${NC}"
+echo -e "${BLUE}  TCDRM-ADAPTIVE: Workflow Complet${NC}"
 echo -e "${BLUE}  Scénario: ${SCENARIO_FULL} (${DATA_GB} GB)${NC}"
 echo -e "${BLUE}============================================================${NC}"
 echo ""
+
+# Nettoyage initial des processus et ports
+cleanup_initial
 
 # ============================================================
 # ÉTAPE 1: Entraînement Python (optionnel)
@@ -146,7 +153,7 @@ echo ""
 
 if [ "$SKIP_TRAINING" = false ]; then
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  ÉTAPE 1/4: Entraînement Python RL (Tabular Q-Learning)${NC}"
+    echo -e "${YELLOW}  ÉTAPE 1/5: Entraînement Python RL (Tabular Q-Learning)${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
@@ -179,7 +186,7 @@ fi
 
 if [ "$SKIP_COMPILE" = false ]; then
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  ÉTAPE 2/4: Compilation Java${NC}"
+    echo -e "${YELLOW}  ÉTAPE 2/5: Compilation Java${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
@@ -207,139 +214,40 @@ else
 fi
 
 # ============================================================
-# ÉTAPE 3: Préparation du modèle Python pour Py4J
+# ÉTAPE 3: Vérification du modèle entraîné
 # ============================================================
 
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  ÉTAPE 3/4: Préparation du modèle Python pour Py4J${NC}"
+echo -e "${YELLOW}  ÉTAPE 3/5: Vérification du modèle Python RL${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# Trouver le modèle entraîné
+# Trouver le modèle entraîné le plus récent
 MODEL_PATH=$(find python_rl/results/qlearning/${SCENARIO_FULL} -name "best_model.pkl" -type f 2>/dev/null | sort -r | head -1)
 
 if [ -z "$MODEL_PATH" ]; then
-    echo -e "${RED}❌ Aucun modèle trouvé pour ${SCENARIO_FULL}${NC}"
-    echo "Entraînez d'abord le modèle Python"
+    echo -e "${RED}❌ Aucun modèle entraîné trouvé pour ${SCENARIO_FULL}${NC}"
+    echo "Entraînez d'abord le modèle avec:"
+    echo "  $0 --scenario ${SCENARIO}"
     exit 1
 fi
 
 echo -e "${GREEN}>>> Modèle trouvé: ${MODEL_PATH}${NC}"
-echo -e "${BLUE}>>> Architecture Py4J: Java GatewayServer + Python Client${NC}"
+echo -e "${BLUE}>>> Architecture: Java Gateway Server + Python Client${NC}"
 echo ""
 
-# Sauvegarder le chemin du modèle pour le client Python
+# Sauvegarder le chemin du modèle
 export PYTHON_MODEL_PATH="$MODEL_PATH"
 
 # ============================================================
-# ÉTAPE 4: Comparaison Java CloudSim
+# ÉTAPE 4: Génération des graphes article (2 courbes)
 # ============================================================
 
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  ÉTAPE 4/4: Comparaison Java CloudSim (3 Approches)${NC}"
+echo -e "${YELLOW}  ÉTAPE 4/5: Génération des graphes article (2 courbes)${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-echo -e "${BLUE}>>> Lancement de Java GatewayServer...${NC}"
-echo ""
-
-# Lancer Java en arrière-plan (démarre le GatewayServer Py4J)
-java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
-    org.tcdrm.adaptive.examples.TcdrmComparisonCloudSim > /tmp/java_comparison.log 2>&1 &
-JAVA_PID=$!
-
-echo -e "${GREEN}✅ Java GatewayServer démarré (PID: $JAVA_PID)${NC}"
-echo ""
-
-# Attendre que le GatewayServer soit prêt
-echo -e "${BLUE}>>> Attente du démarrage du GatewayServer (5s)...${NC}"
-sleep 5
-
-# Démarrer le client Python qui se connecte au GatewayServer Java
-echo -e "${BLUE}>>> Démarrage du client Python...${NC}"
-cd python_rl
-uv run python connect_to_java.py --model "../$PYTHON_MODEL_PATH" > /tmp/python_client.log 2>&1 &
-PYTHON_PID=$!
-cd ..
-
-echo -e "${GREEN}✅ Client Python démarré (PID: $PYTHON_PID)${NC}"
-echo ""
-
-# Attendre que Java termine la comparaison
-echo -e "${BLUE}>>> Attente de la fin de la comparaison...${NC}"
-wait $JAVA_PID
-JAVA_EXIT_CODE=$?
-
-# Arrêter le client Python
-echo -e "${BLUE}>>> Arrêt du client Python...${NC}"
-kill $PYTHON_PID 2>/dev/null || true
-
-echo ""
-if [ $JAVA_EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}✅ Comparaison terminée avec succès${NC}"
-    echo ""
-    echo -e "${BLUE}Dernières lignes du log Java:${NC}"
-    tail -50 /tmp/java_comparison.log
-else
-    echo -e "${RED}❌ Erreur lors de la comparaison (code: $JAVA_EXIT_CODE)${NC}"
-    echo ""
-    echo -e "${YELLOW}Logs Java:${NC}"
-    tail -100 /tmp/java_comparison.log
-    echo ""
-    echo -e "${YELLOW}Logs Python:${NC}"
-    tail -50 /tmp/python_client.log
-fi
-echo ""
-
-# ============================================================
-# ÉTAPE 5: Génération des graphes combinés (images/)
-# ============================================================
-
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  ÉTAPE 5/5: Génération des graphes combinés (2 par image)${NC}"
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-echo -e "${BLUE}>>> Génération des graphes combinés avec 3 courbes...${NC}"
-echo ""
-
-# Lancer Java pour générer les graphes combinés
-java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
-    org.tcdrm.adaptive.examples.TcdrmCombinedComparisonGraphs > /tmp/combined_graphs.log 2>&1 &
-COMBINED_PID=$!
-
-# Attendre 5 secondes pour le démarrage du Gateway
-sleep 5
-
-# Démarrer le client Python
-echo -e "${BLUE}>>> Connexion Python pour les graphes combinés...${NC}"
-cd python_rl
-uv run python connect_to_java.py --model "../$PYTHON_MODEL_PATH" > /tmp/python_combined.log 2>&1 &
-PYTHON_COMBINED_PID=$!
-cd ..
-
-# Attendre que Java termine
-wait $COMBINED_PID
-COMBINED_EXIT_CODE=$?
-
-# Arrêter le client Python
-kill $PYTHON_COMBINED_PID 2>/dev/null || true
-
-echo ""
-if [ $COMBINED_EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}✅ Graphes combinés générés avec succès${NC}"
-    echo ""
-    echo -e "${BLUE}Graphes générés dans images/:${NC}"
-    ls -lh images/*.png 2>/dev/null | awk '{print "   - " $9 " (" $5 ")"}'
-else
-    echo -e "${RED}❌ Erreur lors de la génération des graphes combinés${NC}"
-    echo ""
-    echo -e "${YELLOW}Logs:${NC}"
-    tail -50 /tmp/combined_graphs.log
-fi
-echo ""
-
-# Générer aussi les graphes article et autres (sans Py4J, dans images/)
 echo -e "${BLUE}>>> Génération des graphes article (TcdrmArticleGraphs)...${NC}"
 java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
     org.tcdrm.adaptive.examples.TcdrmArticleGraphs
@@ -355,10 +263,70 @@ java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
     org.tcdrm.adaptive.examples.TcdrmArticleAllGraphs
 
 echo ""
-echo -e "${GREEN}✅ Tous les graphes générés${NC}"
+echo -e "${GREEN}✅ Graphes article (2 courbes) générés dans images/${NC}"
 echo ""
-echo -e "${BLUE}Note: Graphes avec 3 courbes (Python RL, TCDRM Statique, NOREP) dans results/cloudsim_comparison/${NC}"
-echo -e "${BLUE}Note: Graphes article (2 courbes) dans images/${NC}"
+
+# ============================================================
+# ÉTAPE 5: Génération des graphes avec 3 courbes (VRAI modèle RL)
+# ============================================================
+
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}  ÉTAPE 5/5: Génération des graphes avec 3 courbes (VRAI modèle RL)${NC}"
+echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+echo -e "${BLUE}>>> Lancement du Java Gateway Server...${NC}"
+echo ""
+
+# Lancer Java en arrière-plan
+java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
+    org.tcdrm.adaptive.examples.TcdrmArticleAllGraphs3CurvesWithPy4J > /tmp/java_graphs_3curves.log 2>&1 &
+JAVA_PID=$!
+
+echo -e "${GREEN}✅ Java Gateway Server démarré (PID: $JAVA_PID)${NC}"
+echo ""
+
+# Attendre que le GatewayServer soit prêt
+echo -e "${BLUE}>>> Attente du démarrage du Gateway Server (5s)...${NC}"
+sleep 5
+
+# Démarrer le client Python avec le modèle entraîné
+echo -e "${BLUE}>>> Démarrage du client Python avec le modèle entraîné...${NC}"
+cd python_rl
+uv run python connect_to_java_for_graphs.py --model "../$MODEL_PATH" > /tmp/python_graphs_client.log 2>&1 &
+PYTHON_PID=$!
+cd ..
+
+echo -e "${GREEN}✅ Client Python démarré (PID: $PYTHON_PID)${NC}"
+echo ""
+
+# Attendre que Java termine la génération des graphes
+echo -e "${BLUE}>>> Génération des graphes avec le VRAI modèle Python RL...${NC}"
+echo -e "${BLUE}>>> Cela peut prendre quelques minutes...${NC}"
+echo ""
+
+wait $JAVA_PID
+JAVA_EXIT_CODE=$?
+
+# Arrêter le client Python
+echo -e "${BLUE}>>> Arrêt du client Python...${NC}"
+kill $PYTHON_PID 2>/dev/null || true
+
+echo ""
+if [ $JAVA_EXIT_CODE -eq 0 ]; then
+    echo -e "${GREEN}✅ Génération des graphes 3 courbes terminée avec succès${NC}"
+    echo ""
+    echo -e "${BLUE}Dernières lignes du log Java:${NC}"
+    tail -30 /tmp/java_graphs_3curves.log
+else
+    echo -e "${RED}❌ Erreur lors de la génération des graphes (code: $JAVA_EXIT_CODE)${NC}"
+    echo ""
+    echo -e "${YELLOW}Logs Java:${NC}"
+    tail -50 /tmp/java_graphs_3curves.log
+    echo ""
+    echo -e "${YELLOW}Logs Python:${NC}"
+    tail -30 /tmp/python_graphs_client.log
+fi
 echo ""
 
 # ============================================================
@@ -382,28 +350,27 @@ else
     echo -e "${YELLOW}⏭️  Compilation Java: Ignorée${NC}"
 fi
 
-echo -e "${GREEN}✅ Comparaison CloudSim: Réussie${NC}"
 echo -e "${GREEN}✅ Génération des graphes: Terminée${NC}"
 
 echo ""
 echo "Résultats disponibles dans:"
 echo "  - Modèles Python: python_rl/results/qlearning/${SCENARIO_FULL}/"
-echo "  - Graphes avec 3 courbes (Python RL, TCDRM Statique, NOREP): results/cloudsim_comparison/"
-echo "  - Graphes article (2 courbes): images/"
+echo "  - Graphes (2 courbes): images/tcdrm_*.png"
+echo "  - Graphes (3 courbes avec VRAI RL): images/*_3curves.png"
 
 echo ""
 echo "Graphes générés:"
 echo ""
-echo "  📊 Dans results/cloudsim_comparison/ (avec 3 courbes):"
-ls -1 results/cloudsim_comparison/*.png 2>/dev/null | sed 's/^/     - /' || echo "     (aucun graphe)"
+echo "  📊 Graphes avec 2 courbes (TCDRM Statique vs NOREP):"
+ls -1 images/tcdrm_combined_*.png 2>/dev/null | grep -v "_3curves" | sed 's/^/     - /' || echo "     (aucun graphe)"
 
 echo ""
-echo "  📊 Dans images/ (graphes article):"
-ls -1 images/*.png 2>/dev/null | sed 's/^/     - /' || echo "     (aucun graphe)"
+echo "  📊 Graphes avec 3 courbes (Python RL + TCDRM Statique + NOREP):"
+ls -1 images/*_3curves.png 2>/dev/null | sed 's/^/     - /' || echo "     (aucun graphe)"
 
 echo ""
 echo "Voir tous les graphes:"
-echo "  open results/cloudsim_comparison/*.png images/*.png"
+echo "  open images/*.png"
 echo ""
 
 echo -e "${BLUE}============================================================${NC}"

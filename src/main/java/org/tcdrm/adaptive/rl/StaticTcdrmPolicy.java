@@ -3,9 +3,10 @@ package org.tcdrm.adaptive.rl;
 /**
  * Politique TCDRM Statique (Baseline)
  * Utilise des seuils fixes pour les décisions de réplication
+ * Correspond exactement aux seuils définis dans l'article (Section 3.2)
  * 
  * Seuils:
- * - TSLA (Threshold SLA): Seuil de latence = 80ms (ajusté pour données réelles)
+ * - TSLA (Threshold SLA): Seuil de latence = 150ms
  * - PSLA (Popularity SLA): Seuil de popularité = 200 accès
  * - CSLA (Cost SLA): Seuil de budget = 20%
  */
@@ -23,10 +24,10 @@ public class StaticTcdrmPolicy {
     
     /**
      * Constructeur avec seuils par défaut
-     * TSLA=80ms (ajusté pour les données réelles), PSLA=200, CSLA=20%
+     * TSLA=150ms, PSLA=200, CSLA=20% (conformément à l'article)
      */
     public StaticTcdrmPolicy() {
-        this(80.0, 200, 0.2, 3);
+        this(150.0, 200, 0.2, 3);
     }
     
     /**
@@ -42,10 +43,11 @@ public class StaticTcdrmPolicy {
     
     /**
      * Choisit une action basée sur des seuils fixes
+     * Correspond à l'Algorithm 1 de l'article (Section 3.2)
      * 
      * Règles de décision:
      * 1. Si budget < 20% ET réplicas > 0 → DELETE (prioritaire)
-     * 2. Si popularité ≥ 200 ET latence > 80ms ET réplicas < max → CREATE
+     * 2. Si popularité ≥ 200 ET latence > 150ms ET réplicas < max → CREATE
      * 3. Si popularité < 200 ET réplicas > 0 → DELETE
      * 4. Sinon → DO_NOTHING
      */
