@@ -159,19 +159,64 @@ class TcdrmAdaptiveEnv(gym.Env):
             return True
     
     def _simulate_query(self) -> float:
+        """
+        Simule le temps total d'une requête incluant:
+        - Temps de transfert des données (basé sur la bande passante)
+        - Latence réseau
+        - Temps de traitement CPU
+        
+        Cohérent avec TcdrmBenchmarkPerQuery.java
+        """
+        # Déterminer si on utilise un réplica local ou distant
+        use_local = False
         if self.current_replica_count > 0:
             # Probability of local access based on replica count
             local_probability = self.current_replica_count / (self.current_replica_count + 2)
             use_local = self.np_random.random() < local_probability
-            
-            if use_local:
-                # Local access with small variance
-                return self.LAT_LOCAL_MS + self.np_random.normal(0, 0.5)
         
-        # Remote access with variance
-        return self.LAT_REMOTE_MS * (1.0 + self.np_random.normal(0, 0.15))
+        # Paramètres réseau selon le type d'accès
+        if use_local:
+            bw_gbps = self.BW_LOCAL_GBPS  # 10.0 Gbps
+            latency_ms = self.LAT_LOCAL_MS  # 1.0 ms
+        else:
+            bw_gbps = self.BW_REMOTE_GBPS  # 1.0 Gbps
+            latency_ms = self.LAT_REMOTE_MS  # 100.0 ms
+        
+        # Temps de transfert des données (data_gb * 8000 bits/byte / bw_gbps) + latence
+        transfer_ms = (self.data_gb * 8_000.0 / bw_gbps) + latency_ms
+        
+        # Ajouter du jitter (variance) au temps de transfert
+        jitter_ratio = 0.05
+        transfer_ms *= (1.0 + jitter_ratio * (self.np_random.random() * 2 - 1))
+        
+        # Temps de traitement CPU (0.5 minutes par GB)
+        processing_min_per_gb = 0.5
+        processing_min = self.data_gb * processing_min_per_gb
+        
+        # Ajouter du jitter au temps de traitement
+        cpu_jitter_ratio = 0.05
+        processing_min *= (1.0 + cpu_jitter_ratio * (self.np_random.random() * 2 - 1))
+        
+        # Convertir le temps de traitement en millisecondes
+        processing_ms = processing_min * 60_000.0
+        
+        # Temps total de la requête
+        total_time_ms = transfer_ms + processing_ms
+        
+        # Retourner en secondes pour cohérence avec Java
+        return total_time_ms / 1000.0
     
     def _calculate_query_cost(self) -> float:
+        """
+        Calcule le coût total d'une requête incluant:
+        - Coût de transfert réseau (bande passante)
+        - Coût CPU (traitement)
+        - Coût de stockage (si réplicas existent)
+        
+        Cohérent avec TcdrmBenchmarkPerQuery.java
+        """
+        # Déterminer si on utilise un réplica local ou distant
+        use_local = False
         if self.current_replica_count > 0:
             local_probability = self.current_replica_count / (self.current_replica_count + 2)
             use_local = self.np_random.random() < local_probability
@@ -179,10 +224,21 @@ class TcdrmAdaptiveEnv(gym.Env):
         else:
             transfer_cost = self.data_gb * self.COST_BW_INTER_PROVIDER
         
-        # Storage cost proportional to replica count
-        storage_cost = self.current_replica_count * self.data_gb * self.STORAGE_COST_PER_GB_PER_HOUR
+        # Coût CPU basé sur le temps de traitement
+        CPU_COST_PER_HOUR = 0.02  # Article: 0.020
+        PROCESSING_MIN_PER_GB = 0.5
+        processing_min = self.data_gb * PROCESSING_MIN_PER_GB
+        cpu_cost = (processing_min / 60.0) * CPU_COST_PER_HOUR
         
-        return transfer_cost + storage_cost
+        # Coût de stockage proportionnel au nombre de réplicas
+        # Calculé par heure d'utilisation (temps de la requête)
+        storage_cost = 0.0
+        if self.current_replica_count > 0:
+            # Temps de la requête en heures (approximation basée sur le temps de traitement)
+            query_duration_hours = processing_min / 60.0
+            storage_cost = self.current_replica_count * self.data_gb * self.STORAGE_COST_PER_GB_PER_HOUR * query_duration_hours
+        
+        return transfer_cost + cpu_cost + storage_cost
     
     def _calculate_reward(self, action: int, action_executed: bool, 
                          previous_replica_count: int, previous_budget: float,

@@ -9,6 +9,10 @@ import argparse
 import pickle
 import numpy as np
 from py4j.java_gateway import JavaGateway, CallbackServerParameters
+from py4j.java_collections import ListConverter
+
+# Variable globale pour stocker le gateway (nécessaire pour ListConverter)
+_gateway = None
 import sys
 import os
 
@@ -19,11 +23,14 @@ from envs.tcdrm_env import TcdrmAdaptiveEnv
 from agents.tabular_qlearning import TabularQLearningAgent
 
 
-class PythonQLearningBridge:
+class PythonQLearningCallback:
     """
     Pont entre Python et Java pour exécuter le modèle RL entraîné
-    Implémente les callbacks nécessaires pour l'exécution d'épisodes
+    Implémente l'interface Java PythonRLBridge via Py4J
     """
+    
+    class Java:
+        implements = ["org.tcdrm.adaptive.rl.PythonRLBridge"]
     
     def __init__(self, model_path: str):
         """
@@ -61,30 +68,43 @@ class PythonQLearningBridge:
         self.env = None
         self.current_state = None
         
-    def register_to_java(self, java_agent):
+    def register_to_java(self, java_agent, gateway):
         """
         Enregistre la Q-table dans l'agent Java
         
         Args:
             java_agent: Instance de PythonQLearningAgent Java
+            gateway: JavaGateway pour la conversion de types
         """
         print("📡 Enregistrement de la Q-table dans Java...")
         
-        # Convertir numpy array en liste de listes pour Py4J
-        q_table_list = self.agent.q_table.tolist()
+        # Convertir la Q-table en format compatible Py4J
+        # On doit aplatir la Q-table et l'envoyer ligne par ligne
+        n_states = int(self.agent.n_states)  # Convertir en int Python natif
+        n_actions = int(self.agent.n_actions)  # Convertir en int Python natif
         
         # Informations sur le modèle
-        info = f"Q-Learning Model (States: {self.agent.n_states}, Actions: {self.agent.n_actions})"
+        info = f"Q-Learning Model (States: {n_states}, Actions: {n_actions})"
         
-        # Enregistrer dans Java
-        java_agent.registerQTable(q_table_list, info)
+        # Enregistrer les dimensions d'abord
+        java_agent.setQTableDimensions(n_states, n_actions)
         
-        print("✅ Q-table enregistrée dans Java")
+        # Enregistrer chaque ligne de la Q-table
+        for state_idx in range(n_states):
+            q_values = self.agent.q_table[state_idx].tolist()
+            # Convertir la liste Python en ArrayList Java
+            java_list = ListConverter().convert(q_values, gateway._gateway_client)
+            java_agent.setQTableRow(state_idx, java_list)
+        
+        # Marquer le modèle comme chargé
+        java_agent.setModelInfo(info)
+        
+        print(f"✅ Q-table enregistrée dans Java: {n_states} états × {n_actions} actions")
     
-    def reset_episode(self, data_gb: float, seed: int):
+    def resetEpisode(self, data_gb: float, seed: int):
         """
         Réinitialise un épisode dans l'environnement Python
-        Appelé depuis Java via callback
+        Appelé depuis Java via Py4J (implémente PythonRLBridge.resetEpisode)
         
         Args:
             data_gb: Taille des données en GB
@@ -100,21 +120,28 @@ class PythonQLearningBridge:
         observation, info = self.env.reset(seed=seed)
         self.current_state = observation
         
-        return observation.tolist()
+        # Ne rien retourner (void) pour éviter les problèmes de sérialisation Py4J
     
-    def get_current_state(self):
+    def getCurrentState(self):
         """
         Retourne l'état actuel de l'environnement
         Appelé depuis Java via callback
         
         Returns:
-            Liste représentant l'état actuel
+            ArrayList Java représentant l'état actuel
         """
+        global _gateway
         if self.current_state is None:
-            return [0.5, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        return self.current_state.tolist()
+            state_list = [0.5, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        else:
+            state_list = self.current_state.tolist()
+        
+        # Convertir en ArrayList Java pour Py4J
+        if _gateway is not None:
+            return ListConverter().convert(state_list, _gateway._gateway_client)
+        return state_list
     
-    def select_action(self, state):
+    def selectAction(self, state):
         """
         Sélectionne une action en utilisant la Q-table entraînée
         Appelé depuis Java via callback
@@ -134,7 +161,13 @@ class PythonQLearningBridge:
         
         return int(action)
     
-    def execute_step(self, action: int):
+    def get_bridge_instance(self):
+        """
+        Retourne cette instance (pour que Java puisse obtenir une référence)
+        """
+        return self
+    
+    def executeStep(self, action: int):
         """
         Exécute un step dans l'environnement
         Appelé depuis Java via callback
@@ -143,33 +176,31 @@ class PythonQLearningBridge:
             action: Action à exécuter (0=CREATE, 1=DELETE, 2=DO_NOTHING)
         
         Returns:
-            Liste [latency, cost, replicas, reward, done]
+            ArrayList Java [latency, cost, replicas, reward, done]
         """
+        global _gateway
         if self.env is None:
-            print("⚠️  Environnement non initialisé")
-            return [100.0, 0.5, 1.0, 0.0, 0.0]
+            raise RuntimeError("Environnement non initialisé. Appelez resetEpisode d'abord.")
         
-        # Exécuter l'action
+        # Exécuter l'action dans l'environnement
         observation, reward, terminated, truncated, info = self.env.step(action)
         self.current_state = observation
         
-        # Extraire les informations
-        latency = observation[1]  # Latence
+        # Extraire les métriques de l'info
+        latency = info.get('latency', 100.0)
+        cost = info.get('cost', 0.5)
+        replicas = info.get('replicas', 1)
         
-        # Calculer le coût (simplifié)
-        replica_count = int(observation[3])
-        if replica_count > 0:
-            cost = self.env.data_gb * self.env.COST_BW_INTRA_DC
-        else:
-            cost = self.env.data_gb * self.env.COST_BW_INTER_PROVIDER
-        cost += replica_count * self.env.data_gb * self.env.STORAGE_COST_PER_GB_PER_HOUR
+        # Pour la génération de graphes, ignorer truncated (budget épuisé)
+        # afin de continuer jusqu'à 1000 requêtes comme les autres politiques
+        done = 1.0 if terminated else 0.0
         
-        done = 1.0 if (terminated or truncated) else 0.0
+        result_list = [latency, cost, float(replicas), reward, done]
         
-        return [float(latency), float(cost), float(replica_count), float(reward), float(done)]
-    
-    class Java:
-        implements = ["org.tcdrm.adaptive.rl.PythonQLearningBridge"]
+        # Convertir en ArrayList Java pour Py4J
+        if _gateway is not None:
+            return ListConverter().convert(result_list, _gateway._gateway_client)
+        return result_list
 
 
 def main():
@@ -195,17 +226,27 @@ def main():
         print(f"❌ ERREUR: Modèle introuvable: {args.model}")
         sys.exit(1)
     
-    # Créer le pont Python-Java
-    bridge = PythonQLearningBridge(args.model)
+    # Charger le modèle
+    bridge = PythonQLearningCallback(args.model)
     
     # Se connecter au Gateway Java
     print(f"\n📡 Connexion au Gateway Java sur {args.host}:{args.port}...")
     
     try:
+        # Démarrer le callback server Python explicitement
+        print("🔧 Démarrage du callback server Python sur le port 25334...")
+        callback_params = CallbackServerParameters(port=25334, daemonize=True, daemonize_connections=True)
+        
         gateway = JavaGateway(
             gateway_parameters=None,
-            callback_server_parameters=CallbackServerParameters(port=25334)
+            callback_server_parameters=callback_params
         )
+        
+        # Stocker le gateway dans la variable globale pour ListConverter
+        global _gateway
+        _gateway = gateway
+        
+        print("✅ Callback server Python démarré")
         
         # Obtenir le Gateway Java (entry point)
         java_gateway = gateway.entry_point
@@ -215,10 +256,15 @@ def main():
         
         # Enregistrer la Q-table dans l'agent Java
         java_agent = java_gateway.getPythonAgent()
-        bridge.register_to_java(java_agent)
+        bridge.register_to_java(java_agent, gateway)
         
-        # Enregistrer le pont Python dans le Gateway pour les appels directs
-        java_gateway.registerPythonBridge(bridge)
+        # Enregistrer le pont Python dans l'agent
+        # Maintenant que bridge implémente l'interface Java PythonRLBridge,
+        # Py4J peut le passer correctement
+        java_agent.setPythonBridge(bridge)
+        
+        # Signaler à Java que Python est prêt
+        gateway.jvm.System.setProperty("python_bridge_ready", "true")
         
         print()
         print("="*80)

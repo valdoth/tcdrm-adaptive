@@ -43,11 +43,15 @@ public class TcdrmBenchmarkPerQuery {
     /**
      * Sélection intelligente du réplica basée sur la proximité géographique
      * Simule la sélection du réplica le plus proche parmi les disponibles
+     * 
+     * Avec 3 réplicas distribués géographiquement, la probabilité d'avoir
+     * un réplica dans la même région ou datacenter est élevée
      */
     private boolean selectBestReplica(int queryNumber, int totalReplicas) {
         // Probabilité d'utiliser un réplica local augmente avec le nombre de réplicas
-        // Plus il y a de réplicas, plus la chance d'en avoir un proche est élevée
-        double localProbability = (double) totalReplicas / (totalReplicas + 2);
+        // Formule ajustée pour refléter une meilleure distribution géographique
+        // Avec 3 réplicas: 3/(3+1) = 0.75 = 75% local (au lieu de 60%)
+        double localProbability = (double) totalReplicas / (totalReplicas + 1);
         return rnd.nextDouble() < localProbability;
     }
 

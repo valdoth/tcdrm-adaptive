@@ -15,7 +15,7 @@ public class Py4JGateway {
     
     private GatewayServer gatewayServer;
     private PythonQLearningAgent pythonAgent;
-    private Object pythonBridge;  // Pont Python pour appels directs
+    private Object pythonBridgeInstance;  // Instance du pont Python
     private boolean isRunning = false;
     
     /**
@@ -34,6 +34,7 @@ public class Py4JGateway {
             
             // Configurer le GatewayServer exactement comme rl-cloudsimplus-greenscheduling
             InetAddress address = InetAddress.getByName("0.0.0.0");
+            InetAddress callbackAddress = InetAddress.getByName("127.0.0.1");  // localhost pour callback
             
             gatewayServer = new GatewayServer(
                 this,                                          // Entry point (le Gateway lui-même)
@@ -44,7 +45,7 @@ public class Py4JGateway {
                 null,                                          // Custom commands
                 new CallbackClient(                            // Callback client for Python callbacks
                     GatewayServer.DEFAULT_PYTHON_PORT,         // Python callback port (25334)
-                    address                                    // Callback address
+                    callbackAddress                            // Callback address (localhost)
                 )
             );
             
@@ -95,19 +96,18 @@ public class Py4JGateway {
     }
     
     /**
-     * Enregistre le pont Python (appelé depuis Python)
+     * Enregistre l'instance du pont Python (appelé depuis Python)
      */
-    public void registerPythonBridge(Object bridge) {
-        this.pythonBridge = bridge;
-        System.out.println("✅ Pont Python enregistré: " + bridge.getClass().getName());
+    public void setPythonBridgeInstance(Object bridge) {
+        this.pythonBridgeInstance = bridge;
+        System.out.println("✅ Instance du pont Python enregistrée");
     }
     
     /**
-     * Retourne le pont Python directement (pour appels via réflexion)
-     * Ceci permet d'appeler les méthodes Python exposées via Py4J
+     * Retourne l'instance du pont Python
      */
-    public Object getPythonBridge() {
-        return pythonBridge;
+    public Object getPythonBridgeInstance() {
+        return pythonBridgeInstance;
     }
     
     /**

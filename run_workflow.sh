@@ -287,7 +287,27 @@ echo -e "${GREEN}✅ Java Gateway Server démarré (PID: $JAVA_PID)${NC}"
 echo ""
 
 # Attendre que le GatewayServer soit prêt
-echo -e "${BLUE}>>> Attente du démarrage du Gateway Server (5s)...${NC}"
+echo -e "${BLUE}>>> Attente du démarrage du Gateway Server...${NC}"
+sleep 10
+
+# Vérifier que le port est ouvert
+echo -e "${BLUE}>>> Vérification que le Gateway est prêt...${NC}"
+for i in {1..10}; do
+    if lsof -i:25333 > /dev/null 2>&1; then
+        echo -e "${GREEN}✅ Gateway prêt sur le port 25333${NC}"
+        break
+    fi
+    if [ $i -eq 10 ]; then
+        echo -e "${RED}❌ ERREUR: Gateway non prêt après 20s${NC}"
+        tail -30 /tmp/java_graphs_3curves.log
+        exit 1
+    fi
+    echo "   Attente... ($i/10)"
+    sleep 2
+done
+
+# Attendre un peu plus pour que Java soit vraiment prêt à accepter les connexions
+echo -e "${BLUE}>>> Attente supplémentaire pour stabilisation du Gateway (5s)...${NC}"
 sleep 5
 
 # Démarrer le client Python avec le modèle entraîné
@@ -298,6 +318,17 @@ PYTHON_PID=$!
 cd ..
 
 echo -e "${GREEN}✅ Client Python démarré (PID: $PYTHON_PID)${NC}"
+
+# Vérifier que Python démarre correctement
+sleep 3
+if ! ps -p $PYTHON_PID > /dev/null 2>&1; then
+    echo -e "${RED}❌ ERREUR: Le client Python s'est arrêté immédiatement${NC}"
+    echo "Logs Python:"
+    cat /tmp/python_graphs_client.log
+    exit 1
+fi
+
+echo -e "${GREEN}✅ Client Python actif${NC}"
 echo ""
 
 # Attendre que Java termine la génération des graphes

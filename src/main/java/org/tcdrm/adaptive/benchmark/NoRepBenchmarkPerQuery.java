@@ -63,10 +63,7 @@ public class NoRepBenchmarkPerQuery {
             double transferCost = dataGb * COST_BW_INTER_PROVIDER;
             double cpuCost = (processingMin / 60.0) * CPU_COST_PER_HOUR;
             
-            // Coût additionnel pour la gestion inter-provider (overhead)
-            double overheadCost = transferCost * 0.05; // 5% overhead
-            
-            double queryCost = transferCost + cpuCost + overheadCost;
+            double queryCost = transferCost + cpuCost;
             totalCost += queryCost;
 
             queryNumbers.add(q);

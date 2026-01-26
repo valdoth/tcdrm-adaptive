@@ -5,7 +5,8 @@ import org.knowm.xchart.style.Styler;
 import org.tcdrm.adaptive.benchmark.*;
 import org.tcdrm.adaptive.gateway.Py4JGateway;
 import org.tcdrm.adaptive.rl.PythonQLearningAgent;
-
+import org.tcdrm.adaptive.rl.PythonRLBridge;
+import org.tcdrm.adaptive.rl.TcdrmEnvironment;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -57,10 +58,37 @@ public class TcdrmArticleAllGraphs3CurvesWithPy4J {
             System.exit(1);
         }
         
-        // Obtenir le pont Python directement
-        pythonBridge = gateway.getPythonBridge();
+        // Attendre que Python signale qu'il est prêt
+        System.out.println("⏳ Attente que le client Python soit prêt...");
+        
+        int maxWait = 30; // 30 secondes max
+        boolean pythonBridgeReady = false;
+        for (int i = 0; i < maxWait; i++) {
+            String ready = System.getProperty("python_bridge_ready");
+            if ("true".equals(ready)) {
+                pythonBridgeReady = true;
+                break;
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        
+        if (!pythonBridgeReady) {
+            System.err.println("❌ ERREUR: Le client Python n'est pas prêt après " + maxWait + "s.");
+            gateway.stop();
+            System.exit(1);
+        }
+        
+        // Obtenir l'agent Python (contient les méthodes de délégation)
+        PythonQLearningAgent pythonAgent = gateway.getPythonAgent();
+        pythonBridge = pythonAgent;  // Utiliser l'agent comme pont
+        
         System.out.println("✅ Client Python connecté avec le modèle entraîné!");
-        System.out.println("✅ Pont Python obtenu: " + pythonBridge.getClass().getName());
+        System.out.println("✅ Utilisation de l'agent Python pour les appels de méthodes");
         System.out.println();
         
         // Créer le répertoire de sortie
@@ -128,9 +156,12 @@ public class TcdrmArticleAllGraphs3CurvesWithPy4J {
         BenchmarkDataPerQuery pythonRLData = runRealPythonQLearning(queryId, dataGb, 42L);
         
         // Log data sizes for verification
-        System.out.println("  Sample Python RL time at query 500: " + String.format("%.2f", pythonRLData.timePerQueryMs().get(500)) + " s");
-        System.out.println("  Sample TCDRM time at query 500: " + String.format("%.2f", tcdrmData.timePerQueryMs().get(500)) + " s");
-        System.out.println("  Sample NOREP time at query 500: " + String.format("%.2f", norepData.timePerQueryMs().get(500)) + " s");
+        int sampleIndex = Math.min(500, pythonRLData.timePerQueryMs().size() - 1);
+        if (sampleIndex >= 0) {
+            System.out.println("  Sample Python RL time at query " + sampleIndex + ": " + String.format("%.2f", pythonRLData.timePerQueryMs().get(sampleIndex)) + " s");
+            System.out.println("  Sample TCDRM time at query " + sampleIndex + ": " + String.format("%.2f", tcdrmData.timePerQueryMs().get(sampleIndex)) + " s");
+            System.out.println("  Sample NOREP time at query " + sampleIndex + ": " + String.format("%.2f", norepData.timePerQueryMs().get(sampleIndex)) + " s");
+        }
 
         // 1. Response Time (dual: raw + smoothed)
         generateDualGraph(queryId, "response_time", "Impact of Replication on Response Time",
@@ -190,55 +221,31 @@ public class TcdrmArticleAllGraphs3CurvesWithPy4J {
         double cumCost = 0.0;
         
         try {
-            // Utiliser la réflexion Java pour appeler les méthodes Python
-            Class<?> bridgeClass = pythonBridge.getClass();
+            // Obtenir le pont Python via l'agent
+            PythonQLearningAgent agent = (PythonQLearningAgent) pythonBridge;
+            PythonRLBridge bridge = (PythonRLBridge) agent.getPythonBridge();
+            
+            if (bridge == null) {
+                throw new RuntimeException("Pont Python non initialisé dans l'agent");
+            }
             
             // Initialiser l'épisode dans le modèle Python
-            java.lang.reflect.Method resetMethod = bridgeClass.getMethod("reset_episode", double.class, int.class);
-            resetMethod.invoke(pythonBridge, dataGb, seed.intValue());
+            bridge.resetEpisode(dataGb, seed.intValue());
             
             for (int i = 0; i < maxQueries; i++) {
                 // Obtenir l'état actuel depuis Python
-                java.lang.reflect.Method getStateMethod = bridgeClass.getMethod("get_current_state");
-                Object stateObj = getStateMethod.invoke(pythonBridge);
-                
-                // Convertir l'état en double[]
-                double[] state;
-                if (stateObj instanceof java.util.List) {
-                    java.util.List<?> stateList = (java.util.List<?>) stateObj;
-                    state = new double[stateList.size()];
-                    for (int j = 0; j < stateList.size(); j++) {
-                        state[j] = ((Number) stateList.get(j)).doubleValue();
-                    }
-                } else {
-                    state = new double[]{0.5, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-                }
+                java.util.List<Double> state = bridge.getCurrentState();
                 
                 // Le modèle Python sélectionne l'action (utilise la Q-table entraînée)
-                java.lang.reflect.Method selectActionMethod = bridgeClass.getMethod("select_action", Object.class);
-                Object actionObj = selectActionMethod.invoke(pythonBridge, stateObj);
-                int action = ((Number) actionObj).intValue();
+                int action = bridge.selectAction(state);
                 
                 // Exécuter l'action et obtenir les résultats
-                java.lang.reflect.Method executeStepMethod = bridgeClass.getMethod("execute_step", int.class);
-                Object stepResultObj = executeStepMethod.invoke(pythonBridge, action);
-                
-                // Convertir stepResult en double[]
-                double[] stepResult;
-                if (stepResultObj instanceof java.util.List) {
-                    java.util.List<?> resultList = (java.util.List<?>) stepResultObj;
-                    stepResult = new double[resultList.size()];
-                    for (int j = 0; j < resultList.size(); j++) {
-                        stepResult[j] = ((Number) resultList.get(j)).doubleValue();
-                    }
-                } else {
-                    stepResult = new double[]{100.0, 0.5, 1.0, 0.0, 0.0};
-                }
+                java.util.List<Double> stepResult = bridge.executeStep(action);
                 
                 // stepResult = [latency, cost, replicas, reward, done]
-                double latency = stepResult[0];
-                double cost = stepResult[1];
-                int replicas = (int) stepResult[2];
+                double latency = stepResult.get(0);
+                double cost = stepResult.get(1);
+                int replicas = stepResult.get(2).intValue();
                 
                 queryNumbers.add(i);
                 timePerQuery.add(latency);
@@ -248,7 +255,7 @@ public class TcdrmArticleAllGraphs3CurvesWithPy4J {
                 replicaCount.add(replicas);
                 
                 // Si l'épisode est terminé, on arrête
-                if (stepResult[4] > 0.5) {
+                if (stepResult.get(4) > 0.5) {
                     break;
                 }
             }

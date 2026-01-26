@@ -13,9 +13,174 @@ public class PythonQLearningAgent {
     private String modelInfo = "";
     private int nStates = 108;  // 3*3*3*4
     private int nActions = 3;   // CREATE, DELETE, DO_NOTHING
+    private Object pythonBridge;  // Pont Python pour callbacks
+    private Object bridgeGetter;  // Fonction Python qui retourne le pont
+    private py4j.GatewayServer gatewayServer;  // Référence au Gateway pour accéder à Python
+    
+    // Callbacks Python
+    private Object resetEpisodeCallback;
+    private Object getCurrentStateCallback;
+    private Object selectActionCallback;
+    private Object executeStepCallback;
     
     /**
-     * Appelé par Python pour enregistrer la Q-table
+     * Définit les dimensions de la Q-table (appelé avant setQTableRow)
+     */
+    public void setQTableDimensions(int states, int actions) {
+        this.nStates = states;
+        this.nActions = actions;
+        this.qTable = new double[states][actions];
+        System.out.println("📐 Dimensions Q-table définies: " + states + " états × " + actions + " actions");
+    }
+    
+    /**
+     * Définit une ligne de la Q-table (appelé pour chaque état)
+     */
+    public void setQTableRow(int stateIndex, List<Double> qValues) {
+        if (qTable == null) {
+            System.err.println("❌ Q-table non initialisée. Appelez setQTableDimensions d'abord.");
+            return;
+        }
+        
+        for (int i = 0; i < qValues.size() && i < nActions; i++) {
+            qTable[stateIndex][i] = qValues.get(i);
+        }
+    }
+    
+    /**
+     * Définit les informations du modèle et marque comme chargé
+     */
+    public void setModelInfo(String info) {
+        this.modelInfo = info;
+        this.modelLoaded = true;
+        System.out.println("✅ Q-Table Python enregistrée: " + info);
+        System.out.println("   Dimensions: " + nStates + " états × " + nActions + " actions");
+    }
+    
+    /**
+     * Enregistre le pont Python pour les callbacks
+     * Le pont est un objet Python accessible via Py4J
+     */
+    public void setPythonBridge(Object bridge) {
+        this.pythonBridge = bridge;
+        System.out.println("✅ Pont Python enregistré pour callbacks: " + bridge.getClass().getName());
+    }
+    
+    /**
+     * Retourne le pont Python
+     */
+    public Object getPythonBridge() {
+        return pythonBridge;
+    }
+    
+    /**
+     * Enregistre l'objet Python callback complet
+     * Cet objet expose les méthodes reset_episode, get_current_state, select_action, execute_step
+     */
+    public void setPythonCallbackObject(Object callbackObject) {
+        this.pythonBridge = callbackObject;
+        System.out.println("✅ Objet callback Python enregistré: " + callbackObject.getClass().getName());
+    }
+    
+    /**
+     * Stocke une fonction Python qui retourne le pont
+     */
+    public void storeBridgeGetter(Object getter) {
+        this.bridgeGetter = getter;
+        System.out.println("✅ Fonction getter du pont Python stockée");
+    }
+    
+    /**
+     * Initialise le pont Python en appelant la fonction getter
+     */
+    public void initializePythonBridge() throws Exception {
+        if (bridgeGetter == null) {
+            throw new RuntimeException("Fonction getter non stockée");
+        }
+        Class<?> getterClass = bridgeGetter.getClass();
+        java.lang.reflect.Method method = getterClass.getMethod("__call__");
+        this.pythonBridge = method.invoke(bridgeGetter);
+        System.out.println("✅ Pont Python initialisé: " + pythonBridge.getClass().getName());
+    }
+    
+    /**
+     * Retourne le callback reset_episode
+     */
+    public Object getResetEpisodeCallback() {
+        return resetEpisodeCallback;
+    }
+    
+    /**
+     * Retourne le callback get_current_state
+     */
+    public Object getCurrentStateCallback() {
+        return getCurrentStateCallback;
+    }
+    
+    /**
+     * Retourne le callback select_action
+     */
+    public Object getSelectActionCallback() {
+        return selectActionCallback;
+    }
+    
+    /**
+     * Retourne le callback execute_step
+     */
+    public Object getExecuteStepCallback() {
+        return executeStepCallback;
+    }
+    
+    /**
+     * Délègue l'appel reset_episode au pont Python
+     */
+    public void reset_episode(double dataGb, int seed) throws Exception {
+        if (pythonBridge == null) {
+            throw new RuntimeException("Pont Python non initialisé");
+        }
+        Class<?> bridgeClass = pythonBridge.getClass();
+        java.lang.reflect.Method method = bridgeClass.getMethod("reset_episode", double.class, int.class);
+        method.invoke(pythonBridge, dataGb, seed);
+    }
+    
+    /**
+     * Délègue l'appel get_current_state au pont Python
+     */
+    public Object get_current_state() throws Exception {
+        if (pythonBridge == null) {
+            throw new RuntimeException("Pont Python non initialisé");
+        }
+        Class<?> bridgeClass = pythonBridge.getClass();
+        java.lang.reflect.Method method = bridgeClass.getMethod("get_current_state");
+        return method.invoke(pythonBridge);
+    }
+    
+    /**
+     * Délègue l'appel select_action au pont Python
+     */
+    public Object select_action(Object state) throws Exception {
+        if (pythonBridge == null) {
+            throw new RuntimeException("Pont Python non initialisé");
+        }
+        Class<?> bridgeClass = pythonBridge.getClass();
+        java.lang.reflect.Method method = bridgeClass.getMethod("select_action", Object.class);
+        return method.invoke(pythonBridge, state);
+    }
+    
+    /**
+     * Délègue l'appel execute_step au pont Python
+     */
+    public Object execute_step(int action) throws Exception {
+        if (pythonBridge == null) {
+            throw new RuntimeException("Pont Python non initialisé");
+        }
+        Class<?> bridgeClass = pythonBridge.getClass();
+        java.lang.reflect.Method method = bridgeClass.getMethod("execute_step", int.class);
+        return method.invoke(pythonBridge, action);
+    }
+    
+    /**
+     * Appelé par Python pour enregistrer la Q-table (ancienne méthode, gardée pour compatibilité)
      * @param qTableList Q-table sous forme de liste de listes
      * @param info Informations sur le modèle
      */
