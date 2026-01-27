@@ -45,7 +45,7 @@ class TcdrmAdaptiveEnv(gym.Env):
         
         # Constants
         self.MAX_QUERIES = 1000
-        self.INITIAL_BUDGET = 100.0
+        self.INITIAL_BUDGET = 1000.0
         self.SLA_LATENCY_THRESHOLD = 150.0
         self.MAX_REPLICAS = 3
         
@@ -61,27 +61,30 @@ class TcdrmAdaptiveEnv(gym.Env):
         self.LAT_LOCAL_MS = 1.0
         self.LAT_REMOTE_MS = 100.0
         
+        # Action space: 0=CREATE_REPLICA, 1=DELETE_REPLICA, 2=DO_NOTHING
+        self.action_space = spaces.Discrete(3)
+        
         # Observation space: [budget_ratio, latency, access_count_norm, replica_count, 
-        #                     query_complexity, sla_violation_rate, cost_rate]
+        #                     query_complexity, sla_violation_rate, cost_rate, popularity]
         self.observation_space = spaces.Box(
-            low=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 300.0, 1.0, 3.0, 1.0, 1.0, 1.0], dtype=np.float32),
+            low=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            high=np.array([1.0, 300.0, 1.0, float(self.MAX_REPLICAS), 1.0, 1.0, 1.0, 1.0]),
             dtype=np.float32
         )
         
-        # Action space: discrete actions
-        self.action_space = spaces.Discrete(3)
-        
         # State variables
         self.current_budget = self.INITIAL_BUDGET
-        self.current_latency = self.LAT_REMOTE_MS
-        self.access_count = 0
+        self.current_latency = 0.0
         self.current_replica_count = 0
+        self.pending_replica_count = 0  # Réplicas en cours de création (disponibles à la requête suivante)
+        self.access_count = 0
         self.current_query = 0
         self.sla_violations = 0
         self.total_cost = 0.0
         self.episode_rewards = []
+        self.last_action = 2  # DO_NOTHING par défaut
         
+        # Random number generator
         self.np_random = None
         
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -91,10 +94,12 @@ class TcdrmAdaptiveEnv(gym.Env):
         self.current_latency = self.LAT_REMOTE_MS
         self.access_count = 0
         self.current_replica_count = 0
+        self.pending_replica_count = 0
         self.current_query = 0
         self.sla_violations = 0
         self.total_cost = 0.0
         self.episode_rewards = []
+        self.last_action = 2  # DO_NOTHING par défaut
         
         observation = self._get_observation()
         info = self._get_info()
@@ -105,12 +110,20 @@ class TcdrmAdaptiveEnv(gym.Env):
         previous_replica_count = self.current_replica_count
         previous_budget = self.current_budget
         
-        # Execute action
-        action_executed = self._execute_action(action)
+        # Appliquer les réplicas en attente (créés à la requête précédente)
+        # Cela simule le délai de création des réplicas comme dans TCDRM Statique
+        if self.pending_replica_count > 0:
+            self.current_replica_count += self.pending_replica_count
+            self.pending_replica_count = 0
         
-        # Simulate query
+        # IMPORTANT: Simuler la requête AVANT d'exécuter l'action
+        # pour que les réplicas créés ne bénéficient qu'aux requêtes suivantes
+        # (cohérent avec TCDRM Statique)
         query_latency = self._simulate_query()
         query_cost = self._calculate_query_cost()
+        
+        # Execute action (après la simulation de la requête)
+        action_executed = self._execute_action(action)
         
         # Update state
         self.current_budget -= query_cost
@@ -141,17 +154,23 @@ class TcdrmAdaptiveEnv(gym.Env):
     
     def _execute_action(self, action: int) -> bool:
         if action == 0:  # CREATE_REPLICA
-            if self.current_replica_count < self.MAX_REPLICAS:
+            # Les réplicas sont mis en attente et seront disponibles à la requête suivante
+            total_replicas = self.current_replica_count + self.pending_replica_count
+            if total_replicas < self.MAX_REPLICAS:
                 creation_cost = self.data_gb * self.REPLICATION_COST_PER_GB
                 if self.current_budget >= creation_cost:
-                    self.current_replica_count += 1
+                    self.pending_replica_count += 1
                     self.current_budget -= creation_cost
                     return True
             return False
             
         elif action == 1:  # DELETE_REPLICA
+            # La suppression est immédiate (pas de délai)
             if self.current_replica_count > 0:
                 self.current_replica_count -= 1
+                # Annuler aussi les réplicas en attente si nécessaire
+                if self.pending_replica_count > 0:
+                    self.pending_replica_count -= 1
                 return True
             return False
             
@@ -240,73 +259,105 @@ class TcdrmAdaptiveEnv(gym.Env):
         
         return transfer_cost + cpu_cost + storage_cost
     
-    def _calculate_reward(self, action: int, action_executed: bool, 
-                         previous_replica_count: int, previous_budget: float,
-                         query_cost: float, query_latency: float) -> float:
+    def _calculate_reward(
+        self, 
+        action: int, 
+        action_executed: bool,
+        previous_replica_count: int,
+        previous_budget: float,
+        query_cost: float,
+        query_latency: float
+    ) -> float:
         """
-        Advanced multi-objective reward function
-        Inspired by rl-cloudsimplus projects
+        Fonction de récompense multi-objectif pour TCDRM-ADAPTIVE.
+        
+        Objectifs:
+        1. Respect du SLA (latence)
+        2. Minimisation des coûts
+        3. Efficacité budgétaire
+        4. Stabilité des décisions
+        5. Timing stratégique basé sur popularité
         """
         reward = 0.0
         
-        # 1. SLA Compliance Reward (highest priority)
-        if query_latency < self.SLA_LATENCY_THRESHOLD:
-            reward += 10.0
-            # Extra bonus for very low latency
-            if query_latency < 50.0:
-                reward += 5.0
+        # Poids des différentes composantes
+        ALPHA = 10.0   # SLA compliance
+        BETA = 5.0     # Cost penalty
+        GAMMA = 15.0   # Budget efficiency
+        DELTA = 8.0    # Instability penalty
+        EPSILON = 20.0 # Strategic timing
+        
+        # Calculer la popularité normalisée (accès récents / temps)
+        popularity = min(1.0, self.access_count / 200.0)
+        
+        # 1. SLA COMPLIANCE REWARD
+        sla_compliance_reward = 0.0
+        if query_latency <= self.SLA_LATENCY_THRESHOLD:
+            sla_compliance_reward = ALPHA
         else:
-            # Penalty proportional to violation severity
-            violation_ratio = (query_latency - self.SLA_LATENCY_THRESHOLD) / self.SLA_LATENCY_THRESHOLD
-            reward -= 15.0 * violation_ratio
+            # Pénalité proportionnelle au dépassement
+            sla_compliance_reward = -ALPHA * 2.0 * (query_latency / self.SLA_LATENCY_THRESHOLD - 1.0)
         
-        # 2. Cost Efficiency Reward
-        if self.current_replica_count > 0 and query_latency < self.LAT_REMOTE_MS:
-            # Reward for bandwidth savings
-            savings = self.data_gb * (self.COST_BW_INTER_PROVIDER - self.COST_BW_INTRA_DC)
-            reward += savings * 20.0
+        # 2. COST PENALTY
+        cost_penalty = query_cost * BETA
+        if action == 0 and action_executed:  # CREATE_REPLICA
+            replication_cost = self.data_gb * self.REPLICATION_COST_PER_GB
+            cost_penalty += replication_cost * 2.0
         
-        # 3. Budget Management
+        # 3. BUDGET EFFICIENCY REWARD
         budget_ratio = self.current_budget / self.INITIAL_BUDGET
-        if budget_ratio < 0.1:
-            reward -= 50.0  # Critical budget
-        elif budget_ratio < 0.2:
-            reward -= 20.0  # Low budget warning
-        elif budget_ratio > 0.5:
-            reward += 5.0   # Good budget management
+        budget_efficiency_reward = 0.0
+        if budget_ratio > 0.5:
+            budget_efficiency_reward = GAMMA
+        elif budget_ratio > 0.2:
+            budget_efficiency_reward = GAMMA / 3.0
+        else:
+            budget_efficiency_reward = -GAMMA
         
-        # 4. Resource Efficiency
-        if self.current_replica_count > 2:
-            # Penalty for over-replication
-            reward -= 3.0 * (self.current_replica_count - 2)
+        # 4. INSTABILITY PENALTY (pénaliser changements fréquents)
+        instability_penalty = 0.0
+        if action in [0, 1] and action_executed:  # CREATE ou DELETE
+            # Vérifier si on change souvent de stratégie
+            if hasattr(self, 'last_action') and self.last_action != action:
+                instability_penalty = DELTA
         
-        # 5. Smart Action Rewards
-        if action == 1 and action_executed and self.access_count < 150:
-            # Good decision to delete replica when low popularity
-            reward += 5.0
+        # 5. STRATEGIC TIMING REWARD (créer au bon moment)
+        strategic_timing_reward = 0.0
+        if action == 0 and action_executed:  # CREATE_REPLICA
+            if popularity > 0.7:
+                # Excellente décision: créer quand popularité élevée
+                strategic_timing_reward = EPSILON
+            elif popularity < 0.3:
+                # Mauvaise décision: créer trop tôt
+                strategic_timing_reward = -EPSILON * 0.75
+            else:
+                # Décision acceptable
+                strategic_timing_reward = EPSILON * 0.5
+        elif action == 1 and action_executed:  # DELETE_REPLICA
+            if popularity < 0.3:
+                # Bonne décision: supprimer quand popularité faible
+                strategic_timing_reward = EPSILON * 0.5
+            elif popularity > 0.7:
+                # Mauvaise décision: supprimer quand popularité élevée
+                strategic_timing_reward = -EPSILON
+        elif action == 2:  # DO_NOTHING
+            # Récompenser la patience avant le bon moment
+            if popularity < 0.7 and self.current_replica_count == 0:
+                strategic_timing_reward = EPSILON * 0.3
         
-        if action == 0 and action_executed and self.access_count > 250:
-            # Good decision to create replica when high popularity
-            reward += 5.0
+        # Sauvegarder l'action pour le prochain step
+        self.last_action = action
         
-        # 6. Failed Action Penalty
-        if not action_executed and action != 2:
-            reward -= 3.0
+        # COMBINER TOUTES LES COMPOSANTES
+        total_reward = (
+            sla_compliance_reward
+            - cost_penalty
+            + budget_efficiency_reward
+            - instability_penalty
+            + strategic_timing_reward
+        )
         
-        # 7. Progressive SLA Compliance Bonus
-        if self.current_query > 0:
-            sla_compliance_rate = 1.0 - (self.sla_violations / self.current_query)
-            if sla_compliance_rate > 0.95:
-                reward += 10.0
-            elif sla_compliance_rate > 0.90:
-                reward += 5.0
-        
-        # 8. Cost-Latency Trade-off Balance
-        if query_cost < 0.5 and query_latency < self.SLA_LATENCY_THRESHOLD:
-            # Excellent balance
-            reward += 8.0
-        
-        return reward
+        return total_reward
     
     def _get_observation(self) -> np.ndarray:
         budget_ratio = np.clip(self.current_budget / self.INITIAL_BUDGET, 0.0, 1.0)
@@ -316,10 +367,11 @@ class TcdrmAdaptiveEnv(gym.Env):
         query_complexity = np.clip(self.data_gb / 20.0, 0.0, 1.0)  # Normalize by max expected size
         sla_violation_rate = self.sla_violations / max(1, self.current_query)
         cost_rate = np.clip(self.total_cost / self.INITIAL_BUDGET, 0.0, 1.0)
+        popularity = np.clip(self.access_count / 200.0, 0.0, 1.0)  # Popularité normalisée
         
         return np.array([
             budget_ratio, latency, access_count_norm, replica_count,
-            query_complexity, sla_violation_rate, cost_rate
+            query_complexity, sla_violation_rate, cost_rate, popularity
         ], dtype=np.float32)
     
     def _get_info(self) -> Dict[str, Any]:

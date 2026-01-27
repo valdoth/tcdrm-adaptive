@@ -71,60 +71,62 @@ class TabularQLearningAgent:
         
     def discretize_state(self, observation: np.ndarray) -> int:
         """
-        Convert continuous observation to discrete state index
+        Discrétise l'observation continue en un état discret.
         
-        Observation format: [budget_ratio, latency, access_count_norm, replica_count, ...]
+        Observation: [budget_ratio, latency, access_count_norm, replica_count, 
+                      query_complexity, sla_violation_rate, cost_rate, popularity]
         
-        Discretization (same as Java):
-        - Budget: LOW (0-0.33), MEDIUM (0.33-0.66), HIGH (0.66-1.0)
-        - Latency: LOW (<100ms), MEDIUM (100-200ms), HIGH (>200ms)
-        - Popularity: LOW (<150), MEDIUM (150-250), HIGH (>250)
-        - Replicas: 0, 1, 2, 3
+        Discrétisation (focus sur les dimensions les plus importantes):
+        - budget_ratio: 3 bins (low, medium, high)
+        - latency: 3 bins (low, medium, high)
+        - popularity: 3 bins (low, medium, high) - NOUVEAU
+        - replica_count: 4 bins (0, 1, 2, 3+)
         
-        State index = budget * 36 + latency * 12 + popularity * 4 + replicas
-        Total: 3 * 3 * 3 * 4 = 108 states
+        Total states: 3 * 3 * 3 * 4 = 108 états
         """
         budget_ratio = observation[0]
         latency = observation[1]
-        access_count_norm = observation[2]
         replica_count = int(observation[3])
+        popularity = observation[7]  # Nouvelle dimension
         
-        # Discretize budget (3 levels)
+        # Discrétiser budget_ratio en 3 bins
         if budget_ratio < 0.33:
-            budget_level = 0  # LOW
-        elif budget_ratio < 0.66:
-            budget_level = 1  # MEDIUM
+            budget_bin = 0  # low
+        elif budget_ratio < 0.67:
+            budget_bin = 1  # medium
         else:
-            budget_level = 2  # HIGH
+            budget_bin = 2  # high
         
-        # Discretize latency (3 levels)
-        if latency < 100:
-            latency_level = 0  # LOW
-        elif latency < 200:
-            latency_level = 1  # MEDIUM
+        # Discrétiser latency en 3 bins (basé sur SLA)
+        SLA_THRESHOLD = 150.0
+        if latency < SLA_THRESHOLD * 0.8:
+            latency_bin = 0  # low (good)
+        elif latency < SLA_THRESHOLD * 1.2:
+            latency_bin = 1  # medium (near SLA)
         else:
-            latency_level = 2  # HIGH
+            latency_bin = 2  # high (violation)
         
-        # Discretize popularity (3 levels)
-        # access_count_norm is in [0, 1], denormalize to [0, 1000]
-        access_count = access_count_norm * 1000
-        if access_count < 150:
-            popularity_level = 0  # LOW
-        elif access_count < 250:
-            popularity_level = 1  # MEDIUM
+        # Discrétiser popularity en 3 bins (NOUVEAU - remplace access_count_norm)
+        if popularity < 0.5:
+            popularity_bin = 0  # low (pas encore populaire)
+        elif popularity < 0.85:
+            popularity_bin = 1  # medium (en croissance)
         else:
-            popularity_level = 2  # HIGH
+            popularity_bin = 2  # high (très populaire)
         
-        # Clip replica count to [0, 3]
-        replica_count = np.clip(replica_count, 0, 3)
+        # Discrétiser replica_count en 4 bins
+        replica_bin = min(replica_count, 3)  # 0, 1, 2, 3+
         
-        # Calculate state index
-        state_index = (budget_level * 36 + 
-                      latency_level * 12 + 
-                      popularity_level * 4 + 
-                      replica_count)
+        # Calculer l'index de l'état
+        # Formule: budget_bin * 36 + latency_bin * 12 + popularity_bin * 4 + replica_bin
+        state_idx = (
+            budget_bin * 36 +
+            latency_bin * 12 +
+            popularity_bin * 4 +
+            replica_bin
+        )
         
-        return state_index
+        return state_idx
     
     def select_action(self, state_index: int, training: bool = True) -> int:
         """

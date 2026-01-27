@@ -1,8 +1,8 @@
 #!/bin/bash
-# Script unifié pour le workflow complet TCDRM-ADAPTIVE avec nouvelle approche RL
-# 1. Entraînement sur 10,000 requêtes variées
+# Script unifié pour le workflow complet TCDRM-ADAPTIVE
+# 1. Entraînement avec fonction de récompense multi-objectif adaptative
 # 2. Génération des actions optimales pour R1 et R2
-# 3. Génération des graphes avec répétition des actions optimales
+# 3. Génération des graphes avec 3 courbes (Python RL + TCDRM Statique + NOREP)
 
 set -e
 
@@ -64,25 +64,29 @@ show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --skip-training       Sauter l'entraînement général (utiliser modèle existant)"
+    echo "  --skip-training       Sauter l'entraînement adaptatif (utiliser modèle existant)"
     echo "  --skip-actions        Sauter la génération des actions optimales"
     echo "  --skip-compile        Sauter la compilation Java"
-    echo "  --n-queries N         Nombre de requêtes d'entraînement [défaut: 10000]"
-    echo "  --n-episodes N        Nombre d'épisodes d'entraînement [défaut: 100]"
+    echo "  --n-queries N         Nombre de requêtes par épisode [défaut: 1000]"
+    echo "  --n-episodes N        Nombre d'épisodes d'entraînement [défaut: 200]"
     echo "  --help                Afficher cette aide"
     echo ""
     echo "Exemples:"
-    echo "  $0                                    # Workflow complet"
+    echo "  $0                                    # Workflow complet (200 épisodes)"
     echo "  $0 --skip-training                    # Utiliser modèle existant"
-    echo "  $0 --n-queries 5000 --n-episodes 50   # Entraînement rapide"
+    echo "  $0 --n-queries 500 --n-episodes 50    # Entraînement rapide"
+    echo ""
+    echo "Note: TCDRM-ADAPTIVE utilise l'apprentissage par renforcement avec"
+    echo "      fonction de récompense multi-objectif pour apprendre les seuils"
+    echo "      de réplication de manière adaptative."
 }
 
 # Parser les arguments
 SKIP_TRAINING=false
 SKIP_ACTIONS=false
 SKIP_COMPILE=false
-N_QUERIES=10000
-N_EPISODES=100
+N_QUERIES=1000
+N_EPISODES=200
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -133,30 +137,36 @@ echo "  - Skip actions: $SKIP_ACTIONS"
 echo "  - Skip compile: $SKIP_COMPILE"
 echo ""
 
-# ÉTAPE 1: Entraînement général
+# ÉTAPE 1: Entraînement TCDRM-ADAPTIVE
 if [ "$SKIP_TRAINING" = false ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  ÉTAPE 1/5: Entraînement d'une politique RL générale"
+    echo "  ÉTAPE 1/5: Entraînement TCDRM-ADAPTIVE (Récompense Multi-objectif)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
     cd "$PYTHON_DIR"
     
-    echo ">>> Entraînement sur $N_QUERIES requêtes variées..."
-    uv run python train_general_policy.py \
-        --n-queries $N_QUERIES \
-        --n-episodes $N_EPISODES \
-        --output-dir results/qlearning/general_policy
+    echo ">>> Entraînement adaptatif avec $N_EPISODES épisodes de $N_QUERIES requêtes..."
+    echo ">>> Fonction de récompense: SLA + Coût + Budget + Stabilité + Timing"
+    uv run python train_adaptive_policy.py \
+        --episodes $N_EPISODES \
+        --queries $N_QUERIES \
+        --lr 0.1 \
+        --gamma 0.95 \
+        --epsilon-start 1.0 \
+        --epsilon-end 0.01 \
+        --epsilon-decay 0.995 \
+        --output-dir results/tcdrm_adaptive
     
     # Trouver le dernier modèle entraîné
-    LATEST_RUN=$(ls -td results/qlearning/general_policy/run_* 2>/dev/null | head -1)
+    LATEST_RUN=$(ls -td results/tcdrm_adaptive/full_run_* 2>/dev/null | head -1)
     if [ -z "$LATEST_RUN" ]; then
         echo -e "${RED}❌ ERREUR: Aucun modèle entraîné trouvé${NC}"
         exit 1
     fi
     
-    MODEL_PATH="$LATEST_RUN/models/best_model.pkl"
-    echo -e "${GREEN}✅ Modèle entraîné: $MODEL_PATH${NC}"
+    MODEL_PATH="$LATEST_RUN/adaptive_model.pkl"
+    echo -e "${GREEN}✅ Modèle TCDRM-ADAPTIVE entraîné: $MODEL_PATH${NC}"
     echo ""
     
     cd "$PROJECT_ROOT"
@@ -166,15 +176,21 @@ else
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
-    # Trouver le dernier modèle
-    LATEST_RUN=$(ls -td "$PYTHON_DIR/results/qlearning/general_policy/run_"* 2>/dev/null | head -1)
+    # Trouver le dernier modèle TCDRM-ADAPTIVE
+    LATEST_RUN=$(ls -td "$PYTHON_DIR/results/tcdrm_adaptive/full_run_"* 2>/dev/null | head -1)
     if [ -z "$LATEST_RUN" ]; then
-        echo -e "${RED}❌ ERREUR: Aucun modèle existant trouvé${NC}"
-        echo "Lancez d'abord l'entraînement sans --skip-training"
-        exit 1
+        # Fallback: chercher l'ancien format
+        LATEST_RUN=$(ls -td "$PYTHON_DIR/results/qlearning/general_policy/run_"* 2>/dev/null | head -1)
+        if [ -z "$LATEST_RUN" ]; then
+            echo -e "${RED}❌ ERREUR: Aucun modèle existant trouvé${NC}"
+            echo "Lancez d'abord l'entraînement sans --skip-training"
+            exit 1
+        fi
+        MODEL_PATH="$LATEST_RUN/models/best_model.pkl"
+    else
+        MODEL_PATH="$LATEST_RUN/adaptive_model.pkl"
     fi
     
-    MODEL_PATH="$LATEST_RUN/models/best_model.pkl"
     echo ">>> Utilisation du modèle existant: $MODEL_PATH"
     echo ""
 fi
@@ -356,7 +372,9 @@ echo ""
 if [ "$SKIP_TRAINING" = true ]; then
     echo "⏭️  Entraînement: Ignoré"
 else
-    echo "✅ Entraînement: Terminé ($N_QUERIES requêtes, $N_EPISODES épisodes)"
+    echo "✅ Entraînement TCDRM-ADAPTIVE: Terminé ($N_EPISODES épisodes × $N_QUERIES requêtes)"
+    echo "   - Fonction de récompense multi-objectif (5 composantes)"
+    echo "   - Apprentissage adaptatif des seuils de réplication"
 fi
 
 if [ "$SKIP_ACTIONS" = true ]; then
@@ -374,10 +392,12 @@ fi
 echo "✅ Génération des graphes: Terminée"
 echo ""
 echo "Résultats disponibles dans:"
-echo "  - Modèle général: $MODEL_PATH"
+echo "  - Modèle TCDRM-ADAPTIVE: $MODEL_PATH"
+echo "  - Métriques d'entraînement: $(dirname $MODEL_PATH)/training_metrics.pkl"
+echo "  - Graphiques d'entraînement: $(dirname $MODEL_PATH)/training_metrics.png"
 echo "  - Actions optimales: python_rl/results/optimal_actions/"
 echo "  - Graphes (2 courbes): images/tcdrm_*.png"
-echo "  - Graphes (3 courbes avec RL): images/*_3curves.png"
+echo "  - Graphes (3 courbes avec RL adaptatif): images/*_3curves.png"
 echo ""
 echo "Graphes générés:"
 echo ""

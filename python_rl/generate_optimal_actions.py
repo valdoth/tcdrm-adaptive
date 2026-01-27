@@ -45,10 +45,15 @@ def generate_optimal_actions_for_scenario(
     seed: int = 42
 ) -> List[int]:
     """
-    Génère les actions optimales pour un scénario donné
+    Génère les actions optimales basées sur la stratégie TCDRM Statique (TCDRM v2)
+    
+    Stratégie TCDRM Statique:
+    - Avant 200 requêtes: DO_NOTHING (attendre le seuil de popularité)
+    - À 200-202 requêtes: CREATE (créer 3 réplicas)
+    - Après 202 requêtes: DO_NOTHING (maintenir les réplicas)
     
     Args:
-        model_path: Chemin vers le modèle entraîné
+        model_path: Chemin vers le modèle entraîné (non utilisé, stratégie fixe)
         data_gb: Taille totale des données en GB
         n_queries: Nombre de requêtes à simuler
         seed: Seed pour la reproductibilité
@@ -56,43 +61,37 @@ def generate_optimal_actions_for_scenario(
     Returns:
         Liste des actions optimales (une par requête)
     """
-    print(f"📦 Chargement du modèle depuis: {model_path}")
-    agent, model_info = load_trained_model(model_path)
-    
-    print(f"✅ Modèle chargé:")
-    print(f"   États: {agent.n_states}")
-    print(f"   Actions: {agent.n_actions}")
-    print(f"   Episode d'entraînement: {model_info.get('episode', 'N/A')}")
-    print()
-    
-    # Créer l'environnement
-    env = TcdrmAdaptiveEnv(data_gb=data_gb)
-    state, info = env.reset(seed=seed)
-    
     print(f"🎯 Génération des actions optimales pour:")
     print(f"   Taille des données: {data_gb:.2f} GB")
     print(f"   Nombre de requêtes: {n_queries}")
+    print(f"   Stratégie: TCDRM Statique (seuil de popularité = 200)")
     print()
     
-    # Générer les actions optimales
+    # Paramètres TCDRM Statique
+    POPULARITY_THRESHOLD = 200
+    TARGET_REPLICAS = 3
+    
+    # Actions: 0=CREATE, 1=DELETE, 2=DO_NOTHING
     optimal_actions = []
+    current_replicas = 0
     
     for query_idx in range(n_queries):
-        # Discrétiser l'état
-        state_idx = agent.discretize_state(state)
-        
-        # Sélectionner l'action optimale (exploitation pure, pas d'exploration)
-        action = agent.select_action(state_idx, training=False)
-        optimal_actions.append(action)
-        
-        # Exécuter l'action dans l'environnement
-        next_state, reward, terminated, truncated, info = env.step(action)
-        
-        if terminated or truncated:
-            # Si l'épisode se termine, réinitialiser
-            state, info = env.reset(seed=seed + query_idx + 1)
+        # Stratégie TCDRM Statique basée sur le seuil de popularité
+        if query_idx < POPULARITY_THRESHOLD:
+            # Avant le seuil: attendre (DO_NOTHING)
+            action = 2  # DO_NOTHING
+        elif query_idx < POPULARITY_THRESHOLD + TARGET_REPLICAS:
+            # Au seuil: créer des réplicas (3 fois CREATE)
+            if current_replicas < TARGET_REPLICAS:
+                action = 0  # CREATE
+                current_replicas += 1
+            else:
+                action = 2  # DO_NOTHING
         else:
-            state = next_state
+            # Après le seuil: maintenir les réplicas (DO_NOTHING)
+            action = 2  # DO_NOTHING
+        
+        optimal_actions.append(action)
     
     print(f"✅ {len(optimal_actions)} actions optimales générées")
     
