@@ -1,192 +1,257 @@
-#!/usr/bin/env python3
 """
-Client Python qui se connecte au serveur Java Py4J
-Architecture basée sur rl-cloudsimplus-greenscheduling
+Client Python Py4J pour connecter les modèles RL entraînés à Java/CloudSim
+Charge les modèles Q-Learning Simple et DQN et les expose via Py4J
 """
 
-import argparse
-import pickle
-import numpy as np
-from py4j.java_gateway import JavaGateway, GatewayParameters, CallbackServerParameters
-import time
 import sys
+import os
+import argparse
+import numpy as np
+import torch
+from py4j.java_gateway import JavaGateway, GatewayParameters, CallbackServerParameters
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from agents.simple_qlearning_agent import SimpleQLearningAgent
+from agents.dqn_agent import DQNAgent
+from envs.tcdrm_qlearning_env import TcdrmQLearningEnv
 
 
-class QLearningModel:
-    """Wrapper pour le modèle Q-Learning qui expose les méthodes à Java"""
+class PythonRLBridge:
+    """
+    Pont Python pour exposer les modèles RL à Java via Py4J.
+    """
     
-    def __init__(self, model_path):
-        """Charge le modèle Q-Learning depuis un fichier pickle"""
-        print(f"📦 Chargement du modèle: {model_path}")
-        
-        with open(model_path, 'rb') as f:
-            model_data = pickle.load(f)
-        
-        self.q_table = model_data['q_table']
-        self.n_states = model_data['n_states']
-        self.n_actions = model_data['n_actions']
-        
-        print(f"✅ Modèle chargé:")
-        print(f"   - Q-Table shape: {self.q_table.shape}")
-        print(f"   - State space: {self.n_states}")
-        print(f"   - Action space: {self.n_actions}")
-    
-    def choose_action(self, state):
+    def __init__(self, qlearning_model_path=None, dqn_model_path=None):
         """
-        Choisit une action pour un état donné (politique greedy)
+        Initialise le pont avec les modèles entraînés.
         
         Args:
-            state: Array [budget_level, latency_level, popularity_level, replicas]
-        
-        Returns:
-            int: Index de l'action (0=CREATE, 1=DELETE, 2=DO_NOTHING)
+            qlearning_model_path: Chemin vers le modèle Q-Learning (.pkl)
+            dqn_model_path: Chemin vers le modèle DQN (.pt)
         """
-        # Convertir l'état en index de la Q-table
-        state_index = self._state_to_index(state)
+        self.qlearning_agent = None
+        self.dqn_agent = None
+        self.env = None
         
-        # Politique greedy: choisir l'action avec la plus haute Q-value
-        action = int(np.argmax(self.q_table[state_index]))
+        # Charger Q-Learning si fourni
+        if qlearning_model_path and os.path.exists(qlearning_model_path):
+            print(f"📦 Chargement Q-Learning: {qlearning_model_path}")
+            self.qlearning_agent = SimpleQLearningAgent(n_states=243, n_actions=3)
+            self.qlearning_agent.load(qlearning_model_path)
+            print(f"✅ Q-Learning chargé (epsilon={self.qlearning_agent.epsilon:.4f})")
         
-        return action
+        # Charger DQN si fourni
+        if dqn_model_path and os.path.exists(dqn_model_path):
+            print(f"📦 Chargement DQN: {dqn_model_path}")
+            self.dqn_agent = DQNAgent(
+                state_dim=8,
+                action_dim=3,
+                learning_rate=0.001,
+                discount_factor=0.99
+            )
+            checkpoint = torch.load(dqn_model_path, map_location='cpu')
+            # Le modèle DQN sauvegarde avec 'policy_net_state_dict'
+            self.dqn_agent.policy_net.load_state_dict(checkpoint['policy_net_state_dict'])
+            self.dqn_agent.policy_net.eval()
+            print(f"✅ DQN chargé")
+        
+        # Créer environnement pour conversions d'état
+        self.env = TcdrmQLearningEnv(data_gb=5.3)
+        
+        print("✅ Pont Python initialisé")
     
-    def get_q_value(self, state, action):
+    def selectActionQLearning(self, state_array):
         """
-        Retourne la Q-value pour un état et une action
+        Sélectionne une action avec Q-Learning.
         
         Args:
-            state: Array [budget_level, latency_level, popularity_level, replicas]
-            action: Index de l'action
-        
+            state_array: Liste Java [latency, budget, replicas, popularity, cost]
+            
         Returns:
-            float: Q-value
+            Action (0=NOOP, 1=REPLICATE, 2=DELETE)
         """
-        state_index = self._state_to_index(state)
-        return float(self.q_table[state_index, action])
+        if self.qlearning_agent is None:
+            return 0  # NOOP par défaut
+        
+        # Convertir état Java en état discret
+        state = self._java_state_to_discrete(state_array)
+        state_idx = self.env.state_to_index(state)
+        
+        # Sélectionner action (greedy, pas d'exploration)
+        action = self.qlearning_agent.select_action(state_idx, valid_actions=None, training=False)
+        
+        return int(action)
     
-    def _state_to_index(self, state):
+    def selectActionDQN(self, state_array):
         """
-        Convertit un état [budget, latency, popularity, replicas] en index
+        Sélectionne une action avec DQN.
         
-        Discrétisation (même que Java):
-        - Budget: 3 niveaux (LOW=0, MEDIUM=1, HIGH=2)
-        - Latency: 3 niveaux (LOW=0, MEDIUM=1, HIGH=2)
-        - Popularity: 3 niveaux (LOW=0, MEDIUM=1, HIGH=2)
-        - Replicas: 4 niveaux (0, 1, 2, 3)
-        
-        Index = budget * 36 + latency * 12 + popularity * 4 + replicas
+        Args:
+            state_array: Liste Java [latency, budget, replicas, popularity, cost, ...]
+            
+        Returns:
+            Action (0=NOOP, 1=REPLICATE, 2=DELETE)
         """
-        budget = int(state[0])
-        latency = int(state[1])
-        popularity = int(state[2])
-        replicas = int(state[3])
+        if self.dqn_agent is None:
+            return 0  # NOOP par défaut
         
-        index = budget * 36 + latency * 12 + popularity * 4 + replicas
+        # Convertir en tensor PyTorch
+        state_tensor = torch.FloatTensor(list(state_array)).unsqueeze(0)
         
-        return index
+        # Sélectionner action (greedy)
+        with torch.no_grad():
+            q_values = self.dqn_agent.policy_net(state_tensor)
+            action = q_values.argmax(dim=1).item()
+        
+        return int(action)
     
-    def get_model_info(self):
-        """Retourne les informations sur le modèle"""
-        return f"Q-Learning Model (States: {self.n_states}, Actions: {self.n_actions})"
+    def _java_state_to_discrete(self, state_array):
+        """
+        Convertit un état Java en état discret pour Q-Learning.
+        
+        Args:
+            state_array: [latency, budget, replicas, popularity, cost]
+            
+        Returns:
+            État discret numpy array [RT, COST, POP, BUD, NET]
+        """
+        latency = float(state_array[0])
+        budget = float(state_array[1])
+        replicas = int(state_array[2])
+        popularity = float(state_array[3])
+        total_cost = float(state_array[4])
+        
+        # Discrétiser RT (Response Time)
+        mu_RT = 100.0  # Moyenne
+        sigma_RT = 50.0
+        if latency <= mu_RT:
+            rt_disc = 0
+        elif latency <= mu_RT + sigma_RT:
+            rt_disc = 1
+        else:
+            rt_disc = 2
+        
+        # Discrétiser COST
+        cost_normalized = total_cost / max(1, 100)  # Normaliser
+        if cost_normalized <= 0.7:
+            cost_disc = 0
+        elif cost_normalized <= 1.0:
+            cost_disc = 1
+        else:
+            cost_disc = 2
+        
+        # Discrétiser POP (Popularity)
+        if popularity < 0.33:
+            pop_disc = 0
+        elif popularity < 0.67:
+            pop_disc = 1
+        else:
+            pop_disc = 2
+        
+        # Discrétiser BUD (Budget)
+        budget_ratio = budget / 1000.0  # Budget initial
+        if budget_ratio >= 0.6:
+            bud_disc = 0
+        elif budget_ratio >= 0.3:
+            bud_disc = 1
+        else:
+            bud_disc = 2
+        
+        # Discrétiser NET (Network/Replicas)
+        if replicas >= 2:
+            net_disc = 0
+        elif replicas == 1:
+            net_disc = 1
+        else:
+            net_disc = 2
+        
+        return np.array([rt_disc, cost_disc, pop_disc, bud_disc, net_disc], dtype=np.int32)
+    
+    def isQLearningReady(self):
+        """Vérifie si Q-Learning est chargé."""
+        return self.qlearning_agent is not None
+    
+    def isDQNReady(self):
+        """Vérifie si DQN est chargé."""
+        return self.dqn_agent is not None
+    
+    def getModelInfo(self):
+        """Retourne les informations sur les modèles chargés."""
+        info = []
+        if self.qlearning_agent:
+            stats = self.qlearning_agent.get_stats()
+            info.append(f"Q-Learning: {stats['states_explored']}/{stats['training_steps']} états explorés")
+        if self.dqn_agent:
+            info.append("DQN: Modèle chargé")
+        return " | ".join(info) if info else "Aucun modèle chargé"
     
     class Java:
-        implements = ["org.tcdrm.adaptive.rl.PythonQLearningAgent"]
+        implements = ["org.tcdrm.adaptive.rl.PythonRLBridge"]
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Client Python pour Py4J Gateway'
-    )
-    parser.add_argument('--model', type=str, required=True,
-                       help='Chemin vers le modèle (.pkl)')
-    parser.add_argument('--host', type=str, default='localhost',
-                       help='Hôte du gateway Java (défaut: localhost)')
+    parser = argparse.ArgumentParser(description='Client Python Py4J pour modèles RL')
+    parser.add_argument('--qlearning-model', type=str, 
+                       default='models/simple_qlearning.pkl',
+                       help='Chemin vers le modèle Q-Learning')
+    parser.add_argument('--dqn-model', type=str,
+                       default='results/dqn/dqn_model.pt',
+                       help='Chemin vers le modèle DQN')
     parser.add_argument('--port', type=int, default=25333,
-                       help='Port du gateway Java (défaut: 25333)')
+                       help='Port du Gateway Java')
     
     args = parser.parse_args()
     
-    print("="*70)
-    print("Client Python Py4J pour Q-Learning")
-    print("="*70)
+    print("="*80)
+    print("CLIENT PYTHON PY4J - MODÈLES RL POUR JAVA/CLOUDSIM")
+    print("="*80)
     print()
     
-    # Charger le modèle
+    # Créer le pont avec les modèles
+    bridge = PythonRLBridge(
+        qlearning_model_path=args.qlearning_model if os.path.exists(args.qlearning_model) else None,
+        dqn_model_path=args.dqn_model if os.path.exists(args.dqn_model) else None
+    )
+    
+    print()
+    print(f"📡 Connexion au Gateway Java (port {args.port})...")
+    
     try:
-        model = QLearningModel(args.model)
+        # Connexion au Gateway Java
+        gateway = JavaGateway(
+            gateway_parameters=GatewayParameters(port=args.port),
+            callback_server_parameters=CallbackServerParameters()
+        )
+        
+        # Enregistrer le pont Python
+        gateway.entry_point.registerPythonBridge(bridge)
+        
+        print("✅ Connecté au Gateway Java!")
+        print()
+        print("Modèles disponibles:")
+        print(f"  - Q-Learning: {'✅' if bridge.isQLearningReady() else '❌'}")
+        print(f"  - DQN: {'✅' if bridge.isDQNReady() else '❌'}")
+        print()
+        print("🎯 Prêt à recevoir les requêtes de Java/CloudSim")
+        print("   Appuyez sur Ctrl+C pour arrêter")
+        print()
+        
+        # Garder le client actif
+        import time
+        while True:
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        print("\n\n🛑 Arrêt du client Python...")
+        gateway.shutdown()
+        print("✅ Client arrêté")
     except Exception as e:
-        print(f"❌ Erreur lors du chargement du modèle: {e}")
+        print(f"\n❌ ERREUR: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
-    
-    print()
-    print(f"🔌 Connexion au serveur Java...")
-    print(f"   - Host: {args.host}")
-    print(f"   - Port: {args.port}")
-    print()
-    
-    # Se connecter au serveur Java
-    max_retries = 10
-    retry_delay = 2
-    
-    for attempt in range(max_retries):
-        try:
-            # Connexion avec CallbackServer comme dans rl-cloudsimplus-greenscheduling
-            gateway = JavaGateway(
-                gateway_parameters=GatewayParameters(
-                    address=args.host,
-                    port=args.port,
-                    auto_convert=True
-                ),
-                callback_server_parameters=CallbackServerParameters()
-            )
-            
-            # Tester la connexion
-            entry_point = gateway.entry_point
-            
-            print("✅ Connexion établie avec le serveur Java!")
-            print()
-            
-            # Enregistrer la Q-table auprès de Java
-            print("📝 Enregistrement de la Q-table auprès de Java...")
-            
-            # Convertir la Q-table numpy en liste de listes pour Py4J
-            q_table_list = model.q_table.tolist()
-            
-            entry_point.registerQTable(q_table_list, model.get_model_info())
-            
-            print("✅ Q-table enregistrée avec succès!")
-            print()
-            print("📡 La Q-table Python est maintenant disponible pour Java")
-            print("   Java peut utiliser la Q-table pour choisir des actions")
-            print()
-            print("⏳ Maintien de la connexion active...")
-            print("   Appuyez sur Ctrl+C pour arrêter")
-            print()
-            
-            # Garder la connexion active
-            try:
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                print("\n\n🛑 Arrêt du client Python...")
-                gateway.shutdown()
-                print("✅ Connexion fermée")
-                sys.exit(0)
-                
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"⚠️  Tentative {attempt + 1}/{max_retries} échouée: {e}")
-                print(f"   Nouvelle tentative dans {retry_delay}s...")
-                time.sleep(retry_delay)
-            else:
-                print(f"\n❌ Impossible de se connecter après {max_retries} tentatives")
-                print(f"   Erreur: {e}")
-                print()
-                print("Vérifiez que:")
-                print("  1. Le serveur Java Gateway est démarré")
-                print("  2. Le port {args.port} est accessible")
-                print("  3. Aucun firewall ne bloque la connexion")
-                sys.exit(1)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

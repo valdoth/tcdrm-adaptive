@@ -1,6 +1,8 @@
 #!/bin/bash
-# Script unifié pour le workflow complet TCDRM-ADAPTIVE
-# Combine: Entraînement Python + Génération de graphes avec VRAI modèle RL via Py4J
+# Script d'entraînement des modèles RL pour TCDRM-ADAPTIVE
+# 1. Entraîne Q-Learning Simple (Python)
+# 2. Entraîne DQN (Python)
+# Les graphiques sont générés par Java/CloudSim avec Py4J
 
 set -e
 
@@ -14,55 +16,63 @@ NC='\033[0m'
 # Variables
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="$PROJECT_ROOT/python_rl"
-SCENARIO="r1"  # Par défaut R1
 PYTHON_PID=""
 JAVA_PID=""
 
-# Fonction de nettoyage initial (avant démarrage)
+# Fonction de nettoyage initial
 cleanup_initial() {
     echo -e "${BLUE}🧹 Nettoyage des processus et ports existants...${NC}"
     
-    # Tuer tous les processus Java/Python liés au workflow
+    # Tuer les processus
     pkill -f "TcdrmArticleAllGraphs3CurvesWithPy4J" 2>/dev/null || true
-    pkill -f "connect_to_java_for_graphs.py" 2>/dev/null || true
+    pkill -f "connect_to_java" 2>/dev/null || true
     pkill -f "TcdrmArticleGraphs" 2>/dev/null || true
     
-    # Libérer les ports Py4J (25333 et 25334)
     lsof -ti:25333 2>/dev/null | xargs kill -9 2>/dev/null || true
     lsof -ti:25334 2>/dev/null | xargs kill -9 2>/dev/null || true
     
-    # Attendre un peu pour que les ports soient libérés
     sleep 2
+    
+    echo -e "${BLUE}🧹 Suppression des anciens fichiers générés...${NC}"
+    
+    # Supprimer les anciens graphes
+    rm -f images/tcdrm_*.png 2>/dev/null || true
+    rm -f images/*_3curves*.png 2>/dev/null || true
+    rm -f images/*_4curves*.png 2>/dev/null || true
+    
+    # Supprimer les anciens résultats d'entraînement
+    rm -rf "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null || true
+    rm -rf "$PYTHON_DIR/models/simple_qlearning.pkl" 2>/dev/null || true
+    
+    # Supprimer les logs temporaires
+    rm -f /tmp/java_*.log 2>/dev/null || true
+    rm -f /tmp/python_*.log 2>/dev/null || true
     
     echo -e "${GREEN}✅ Nettoyage initial terminé${NC}"
     echo ""
 }
 
-# Fonction de nettoyage (à la fin)
+# Fonction de nettoyage final
 cleanup() {
     echo ""
     echo -e "${BLUE}🧹 Nettoyage...${NC}"
     
-    # Arrêter le client Python
     if [ ! -z "$PYTHON_PID" ]; then
         echo "Arrêt du client Python (PID: $PYTHON_PID)..."
         kill $PYTHON_PID 2>/dev/null || true
     fi
     
-    # Arrêter Java
     if [ ! -z "$JAVA_PID" ]; then
         echo "Arrêt de Java (PID: $JAVA_PID)..."
         kill $JAVA_PID 2>/dev/null || true
     fi
     
-    # Tuer tous les processus restants
-    pkill -f "connect_to_java_for_graphs.py" 2>/dev/null || true
+    pkill -f "connect_to_java" 2>/dev/null || true
     pkill -f "TcdrmArticleAllGraphs" 2>/dev/null || true
     
     echo -e "${GREEN}✅ Nettoyage terminé${NC}"
 }
 
-# Configurer le trap pour nettoyer à la sortie
 trap cleanup EXIT INT TERM
 
 # Fonction d'aide
@@ -70,34 +80,37 @@ show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --skip-training    Sauter l'entraînement Python (utiliser modèles existants)"
-    echo "  --skip-compile     Sauter la compilation Java"
-    echo "  --scenario SCENARIO Scénario à utiliser (r1, r2, r3) [défaut: r1]"
-    echo "  --help             Afficher cette aide"
+    echo "  --skip-qlearning      Sauter l'entraînement Q-Learning Simple"
+    echo "  --skip-dqn            Sauter l'entraînement DQN"
+    echo "  --n-episodes N        Nombre d'épisodes d'entraînement [défaut: 1000]"
+    echo "  --help                Afficher cette aide"
     echo ""
     echo "Exemples:"
-    echo "  $0                           # Workflow complet avec R1"
-    echo "  $0 --scenario r2             # Workflow complet avec R2"
-    echo "  $0 --skip-training           # Sauter entraînement, utiliser modèles existants"
-    echo "  $0 --skip-training --skip-compile  # Seulement génération de graphes"
+    echo "  $0                                    # Entraîner les 2 modèles"
+    echo "  $0 --skip-dqn                         # Seulement Q-Learning Simple"
+    echo "  $0 --n-episodes 2000                  # Entraînement prolongé"
+    echo ""
+    echo "Note: Ce script entraîne les modèles RL (Q-Learning Simple, DQN)."
+    echo "      Les graphiques sont générés par Java/CloudSim avec Py4J."
 }
 
 # Parser les arguments
-SKIP_TRAINING=false
-SKIP_COMPILE=false
+SKIP_QLEARNING=false
+SKIP_DQN=false
+N_EPISODES=1000
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --skip-training)
-            SKIP_TRAINING=true
+        --skip-qlearning)
+            SKIP_QLEARNING=true
             shift
             ;;
-        --skip-compile)
-            SKIP_COMPILE=true
+        --skip-dqn)
+            SKIP_DQN=true
             shift
             ;;
-        --scenario)
-            SCENARIO="$2"
+        --n-episodes)
+            N_EPISODES="$2"
             shift 2
             ;;
         --help)
@@ -112,301 +125,143 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Valider le scénario
-case $SCENARIO in
-    r1|r2|r3)
-        ;;
-    *)
-        echo -e "${RED}❌ Scénario invalide: $SCENARIO (doit être r1, r2 ou r3)${NC}"
-        exit 1
-        ;;
-esac
-
-# Mapper scénario vers nom complet
-case $SCENARIO in
-    r1)
-        SCENARIO_FULL="r1_simple"
-        DATA_GB="5.3"
-        ;;
-    r2)
-        SCENARIO_FULL="r2_complex"
-        DATA_GB="11.9"
-        ;;
-    r3)
-        SCENARIO_FULL="r3_large"
-        DATA_GB="20.0"
-        ;;
-esac
-
-echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}  TCDRM-ADAPTIVE: Workflow Complet${NC}"
-echo -e "${BLUE}  Scénario: ${SCENARIO_FULL} (${DATA_GB} GB)${NC}"
-echo -e "${BLUE}============================================================${NC}"
-echo ""
-
-# Nettoyage initial des processus et ports
+# Nettoyage initial
 cleanup_initial
 
-# ============================================================
-# ÉTAPE 1: Entraînement Python (optionnel)
-# ============================================================
+echo "============================================================"
+echo "  WORKFLOW TCDRM-ADAPTIVE - Q-Learning Simple + DQN"
+echo "============================================================"
+echo ""
+echo "Configuration:"
+echo "  - Épisodes d'entraînement: $N_EPISODES"
+echo "  - Skip Q-Learning Simple: $SKIP_QLEARNING"
+echo "  - Skip DQN: $SKIP_DQN"
+echo ""
 
-if [ "$SKIP_TRAINING" = false ]; then
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  ÉTAPE 1/5: Entraînement Python RL (Tabular Q-Learning)${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+# ÉTAPE 1: Entraînement des modèles RL
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  ÉTAPE 1/3: Entraînement des Modèles RL"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+cd "$PYTHON_DIR"
+
+# 1.1 Q-Learning Simple
+if [ "$SKIP_QLEARNING" = false ]; then
+    echo ">>> 1.1 Entraînement Q-Learning Simple ($N_EPISODES épisodes, 243 états)..."
+    uv run python train_simple_qlearning.py \
+        --episodes $N_EPISODES \
+        --data-gb 5.3 \
+        --output models/simple_qlearning.pkl
+    
+    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning.pkl"
+    echo -e "${GREEN}✅ Q-Learning Simple entraîné: $QLEARNING_MODEL${NC}"
     echo ""
-    
-    cd "$PYTHON_DIR"
-    
-    # Vérifier si uv est installé
-    if ! command -v uv &> /dev/null; then
-        echo -e "${RED}❌ uv n'est pas installé${NC}"
-        echo "Installation: curl -LsSf https://astral.sh/uv/install.sh | sh"
+else
+    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning.pkl"
+    if [ ! -f "$QLEARNING_MODEL" ]; then
+        echo -e "${RED}❌ ERREUR: Aucun modèle Q-Learning Simple trouvé${NC}"
         exit 1
     fi
-    
-    # Entraîner le scénario spécifique
-    echo -e "${BLUE}>>> Entraînement pour ${SCENARIO_FULL} (${DATA_GB} GB)${NC}"
-    ./run_experiments.sh train-${SCENARIO}
-    
-    echo ""
-    echo -e "${GREEN}✅ Entraînement terminé${NC}"
-    echo ""
-    
-    cd "$PROJECT_ROOT"
-else
-    echo -e "${YELLOW}⏭️  Entraînement Python ignoré (--skip-training)${NC}"
+    echo "⏭️  Q-Learning Simple: Utilisation du modèle existant"
+    echo "   Modèle: $QLEARNING_MODEL"
     echo ""
 fi
 
-# ============================================================
-# ÉTAPE 2: Compilation Java (optionnel)
-# ============================================================
-
-if [ "$SKIP_COMPILE" = false ]; then
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  ÉTAPE 2/5: Compilation Java${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
+# 1.2 DQN
+if [ "$SKIP_DQN" = false ]; then
+    echo ">>> 1.2 Entraînement DQN ($N_EPISODES épisodes)..."
+    uv run python train_dqn_policy.py \
+        --episodes $N_EPISODES \
+        --queries 1000 \
+        --output-dir results/dqn
     
-    # Vérifier Maven
-    if ! command -v mvn &> /dev/null; then
-        echo -e "${RED}❌ Maven n'est pas installé${NC}"
-        echo "Installation: brew install maven"
-        exit 1
+    # Chercher d'abord dans run_*, sinon directement dans results/dqn/
+    DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
+    if [ -z "$DQN_RUN" ]; then
+        if [ -f "$PYTHON_DIR/results/dqn/dqn_model.pt" ]; then
+            DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model.pt"
+        else
+            DQN_MODEL=""
+        fi
+    else
+        DQN_MODEL="$DQN_RUN/dqn_model.pt"
     fi
-    
-    echo -e "${BLUE}>>> Compilation Maven...${NC}"
-    mvn clean package -q
-    
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ Erreur de compilation${NC}"
-        exit 1
+    echo -e "${GREEN}✅ DQN entraîné: $DQN_MODEL${NC}"
+    echo ""
+else
+    # Chercher d'abord dans run_*, sinon directement dans results/dqn/
+    DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
+    if [ -z "$DQN_RUN" ]; then
+        if [ -f "$PYTHON_DIR/results/dqn/dqn_model.pt" ]; then
+            DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model.pt"
+        else
+            DQN_MODEL=""
+        fi
+    else
+        DQN_MODEL="$DQN_RUN/dqn_model.pt"
     fi
-    
+    echo "⏭️  DQN: Utilisation du modèle existant"
+    echo "   Modèle: $DQN_MODEL"
     echo ""
-    echo -e "${GREEN}✅ Compilation réussie${NC}"
-    echo ""
+fi
+
+cd "$PROJECT_ROOT"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  ✅ ENTRAÎNEMENT TERMINÉ"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Modèles entraînés et prêts pour utilisation Java/CloudSim:"
+echo "  - Q-Learning Simple: $QLEARNING_MODEL"
+if [ ! -z "$DQN_MODEL" ] && [ -f "$DQN_MODEL" ]; then
+    echo "  - DQN: $DQN_MODEL"
+fi
+echo ""
+echo "Pour générer les graphiques avec Java/CloudSim:"
+echo "  1. Compiler le projet Java: mvn clean package"
+echo "  2. Lancer la simulation: java -cp target/... org.tcdrm.adaptive.examples.TcdrmComparisonCloudSim"
+echo ""
+
+# Résumé final
+echo ""
+echo "============================================================"
+echo "  RÉSUMÉ FINAL"
+echo "============================================================"
+echo ""
+
+echo "Modèles entraînés:"
+if [ "$SKIP_QLEARNING" = false ]; then
+    echo "  ✅ Q-Learning Simple (243 états): $QLEARNING_MODEL"
 else
-    echo -e "${YELLOW}⏭️  Compilation Java ignorée (--skip-compile)${NC}"
-    echo ""
+    echo "  ⏭️  Q-Learning Simple: Modèle existant utilisé"
 fi
 
-# ============================================================
-# ÉTAPE 3: Vérification du modèle entraîné
-# ============================================================
-
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  ÉTAPE 3/5: Vérification du modèle Python RL${NC}"
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-# Trouver le modèle entraîné le plus récent
-MODEL_PATH=$(find python_rl/results/qlearning/${SCENARIO_FULL} -name "best_model.pkl" -type f 2>/dev/null | sort -r | head -1)
-
-if [ -z "$MODEL_PATH" ]; then
-    echo -e "${RED}❌ Aucun modèle entraîné trouvé pour ${SCENARIO_FULL}${NC}"
-    echo "Entraînez d'abord le modèle avec:"
-    echo "  $0 --scenario ${SCENARIO}"
-    exit 1
-fi
-
-echo -e "${GREEN}>>> Modèle trouvé: ${MODEL_PATH}${NC}"
-echo -e "${BLUE}>>> Architecture: Java Gateway Server + Python Client${NC}"
-echo ""
-
-# Sauvegarder le chemin du modèle
-export PYTHON_MODEL_PATH="$MODEL_PATH"
-
-# ============================================================
-# ÉTAPE 4: Génération des graphes article (2 courbes)
-# ============================================================
-
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  ÉTAPE 4/5: Génération des graphes article (2 courbes)${NC}"
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-echo -e "${BLUE}>>> Génération des graphes article (TcdrmArticleGraphs)...${NC}"
-java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
-    org.tcdrm.adaptive.examples.TcdrmArticleGraphs
-
-echo ""
-echo -e "${BLUE}>>> Génération des graphes dual (TcdrmArticleGraphsDual)...${NC}"
-java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
-    org.tcdrm.adaptive.examples.TcdrmArticleGraphsDual
-
-echo ""
-echo -e "${BLUE}>>> Génération de tous les graphes article (TcdrmArticleAllGraphs)...${NC}"
-java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
-    org.tcdrm.adaptive.examples.TcdrmArticleAllGraphs
-
-echo ""
-echo -e "${GREEN}✅ Graphes article (2 courbes) générés dans images/${NC}"
-echo ""
-
-# ============================================================
-# ÉTAPE 5: Génération des graphes avec 3 courbes (VRAI modèle RL)
-# ============================================================
-
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  ÉTAPE 5/5: Génération des graphes avec 3 courbes (VRAI modèle RL)${NC}"
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-echo -e "${BLUE}>>> Lancement du Java Gateway Server...${NC}"
-echo ""
-
-# Lancer Java en arrière-plan
-java -cp "target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar" \
-    org.tcdrm.adaptive.examples.TcdrmArticleAllGraphs3CurvesWithPy4J > /tmp/java_graphs_3curves.log 2>&1 &
-JAVA_PID=$!
-
-echo -e "${GREEN}✅ Java Gateway Server démarré (PID: $JAVA_PID)${NC}"
-echo ""
-
-# Attendre que le GatewayServer soit prêt
-echo -e "${BLUE}>>> Attente du démarrage du Gateway Server...${NC}"
-sleep 10
-
-# Vérifier que le port est ouvert
-echo -e "${BLUE}>>> Vérification que le Gateway est prêt...${NC}"
-for i in {1..10}; do
-    if lsof -i:25333 > /dev/null 2>&1; then
-        echo -e "${GREEN}✅ Gateway prêt sur le port 25333${NC}"
-        break
-    fi
-    if [ $i -eq 10 ]; then
-        echo -e "${RED}❌ ERREUR: Gateway non prêt après 20s${NC}"
-        tail -30 /tmp/java_graphs_3curves.log
-        exit 1
-    fi
-    echo "   Attente... ($i/10)"
-    sleep 2
-done
-
-# Attendre un peu plus pour que Java soit vraiment prêt à accepter les connexions
-echo -e "${BLUE}>>> Attente supplémentaire pour stabilisation du Gateway (5s)...${NC}"
-sleep 5
-
-# Démarrer le client Python avec le modèle entraîné
-echo -e "${BLUE}>>> Démarrage du client Python avec le modèle entraîné...${NC}"
-cd python_rl
-uv run python connect_to_java_for_graphs.py --model "../$MODEL_PATH" > /tmp/python_graphs_client.log 2>&1 &
-PYTHON_PID=$!
-cd ..
-
-echo -e "${GREEN}✅ Client Python démarré (PID: $PYTHON_PID)${NC}"
-
-# Vérifier que Python démarre correctement
-sleep 3
-if ! ps -p $PYTHON_PID > /dev/null 2>&1; then
-    echo -e "${RED}❌ ERREUR: Le client Python s'est arrêté immédiatement${NC}"
-    echo "Logs Python:"
-    cat /tmp/python_graphs_client.log
-    exit 1
-fi
-
-echo -e "${GREEN}✅ Client Python actif${NC}"
-echo ""
-
-# Attendre que Java termine la génération des graphes
-echo -e "${BLUE}>>> Génération des graphes avec le VRAI modèle Python RL...${NC}"
-echo -e "${BLUE}>>> Cela peut prendre quelques minutes...${NC}"
-echo ""
-
-wait $JAVA_PID
-JAVA_EXIT_CODE=$?
-
-# Arrêter le client Python
-echo -e "${BLUE}>>> Arrêt du client Python...${NC}"
-kill $PYTHON_PID 2>/dev/null || true
-
-echo ""
-if [ $JAVA_EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}✅ Génération des graphes 3 courbes terminée avec succès${NC}"
-    echo ""
-    echo -e "${BLUE}Dernières lignes du log Java:${NC}"
-    tail -30 /tmp/java_graphs_3curves.log
+if [ "$SKIP_DQN" = false ]; then
+    echo "  ✅ DQN: $DQN_MODEL"
 else
-    echo -e "${RED}❌ Erreur lors de la génération des graphes (code: $JAVA_EXIT_CODE)${NC}"
-    echo ""
-    echo -e "${YELLOW}Logs Java:${NC}"
-    tail -50 /tmp/java_graphs_3curves.log
-    echo ""
-    echo -e "${YELLOW}Logs Python:${NC}"
-    tail -30 /tmp/python_graphs_client.log
-fi
-echo ""
-
-# ============================================================
-# Résumé Final
-# ============================================================
-
-echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}  RÉSUMÉ FINAL${NC}"
-echo -e "${BLUE}============================================================${NC}"
-echo ""
-
-if [ "$SKIP_TRAINING" = false ]; then
-    echo -e "${GREEN}✅ Entraînement Python: ${SCENARIO_FULL}${NC}"
-else
-    echo -e "${YELLOW}⏭️  Entraînement Python: Ignoré${NC}"
+    echo "  ⏭️  DQN: Modèle existant utilisé"
 fi
 
-if [ "$SKIP_COMPILE" = false ]; then
-    echo -e "${GREEN}✅ Compilation Java: Réussie${NC}"
-else
-    echo -e "${YELLOW}⏭️  Compilation Java: Ignorée${NC}"
+echo ""
+echo "Modèles disponibles pour Java/CloudSim:"
+echo "  - Q-Learning Simple: $QLEARNING_MODEL"
+if [ ! -z "$DQN_MODEL" ]; then
+    echo "  - DQN: $DQN_MODEL"
 fi
-
-echo -e "${GREEN}✅ Génération des graphes: Terminée${NC}"
-
 echo ""
-echo "Résultats disponibles dans:"
-echo "  - Modèles Python: python_rl/results/qlearning/${SCENARIO_FULL}/"
-echo "  - Graphes (2 courbes): images/tcdrm_*.png"
-echo "  - Graphes (3 courbes avec VRAI RL): images/*_3curves.png"
-
+echo "Prochaines étapes:"
+echo "  1. Compiler le projet Java:"
+echo "     cd /Users/valdo/Desktop/cloud/avancement/tcdrm-adaptive"
+echo "     mvn clean package"
 echo ""
-echo "Graphes générés:"
+echo "  2. Lancer la simulation CloudSim avec les modèles entraînés:"
+echo "     java -cp target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar \\"
+echo "       org.tcdrm.adaptive.examples.TcdrmComparisonCloudSim"
 echo ""
-echo "  📊 Graphes avec 2 courbes (TCDRM Statique vs NOREP):"
-ls -1 images/tcdrm_combined_*.png 2>/dev/null | grep -v "_3curves" | sed 's/^/     - /' || echo "     (aucun graphe)"
-
+echo "  3. Les graphiques seront générés par Java/CloudSim dans images/"
 echo ""
-echo "  📊 Graphes avec 3 courbes (Python RL + TCDRM Statique + NOREP):"
-ls -1 images/*_3curves.png 2>/dev/null | sed 's/^/     - /' || echo "     (aucun graphe)"
-
-echo ""
-echo "Voir tous les graphes:"
-echo "  open images/*.png"
-echo ""
-
-echo -e "${BLUE}============================================================${NC}"
-echo -e "${GREEN}  🎉 Workflow terminé!${NC}"
-echo -e "${BLUE}============================================================${NC}"
-
-# Le cleanup sera appelé automatiquement via trap EXIT
-exit $JAVA_EXIT_CODE
+echo "============================================================"
+echo "  🎉 Workflow terminé!"
+echo "============================================================"

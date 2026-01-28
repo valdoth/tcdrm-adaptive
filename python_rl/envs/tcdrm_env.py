@@ -2,6 +2,13 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 from typing import Optional, Tuple, Dict, Any
+import sys
+import os
+
+# Ajouter le chemin pour importer le module PLSA
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from utils.plsa_fast import PLSAPopularityModel
+from envs.reward_function_tsla import calculate_reward_with_dynamic_tsla
 
 
 class TcdrmAdaptiveEnv(gym.Env):
@@ -46,8 +53,14 @@ class TcdrmAdaptiveEnv(gym.Env):
         # Constants
         self.MAX_QUERIES = 1000
         self.INITIAL_BUDGET = 1000.0
-        self.SLA_LATENCY_THRESHOLD = 150.0
         self.MAX_REPLICAS = 3
+        
+        # TSLA Dynamique (appris par l'agent RL)
+        self.TSLA_MIN = 100.0  # Seuil minimum de latence (secondes)
+        self.TSLA_MAX = 250.0  # Seuil maximum de latence (secondes)
+        self.TSLA_INITIAL = 150.0  # Seuil initial
+        self.TSLA_STEP = 10.0  # Pas d'ajustement
+        self.current_tsla = self.TSLA_INITIAL  # TSLA dynamique
         
         # Costs (from article)
         self.COST_BW_INTRA_DC = 0.002
@@ -61,14 +74,22 @@ class TcdrmAdaptiveEnv(gym.Env):
         self.LAT_LOCAL_MS = 1.0
         self.LAT_REMOTE_MS = 100.0
         
-        # Action space: 0=CREATE_REPLICA, 1=DELETE_REPLICA, 2=DO_NOTHING
-        self.action_space = spaces.Discrete(3)
+        # Action space: Actions combinées (réplication + ajustement TSLA)
+        # 0=CREATE_REPLICA, 1=DELETE_REPLICA, 2=DO_NOTHING,
+        # 3=INCREASE_TSLA, 4=DECREASE_TSLA, 5=MAINTAIN_TSLA
+        # Total: 9 actions (3 réplication × 3 TSLA)
+        # Encodage: action = replica_action * 3 + tsla_action
+        self.action_space = spaces.Discrete(9)
+        
+        # Mapping des actions
+        self.REPLICA_ACTIONS = ['CREATE', 'DELETE', 'DO_NOTHING']
+        self.TSLA_ACTIONS = ['INCREASE', 'DECREASE', 'MAINTAIN']
         
         # Observation space: [budget_ratio, latency, access_count_norm, replica_count, 
-        #                     query_complexity, sla_violation_rate, cost_rate, popularity]
+        #                     query_complexity, sla_violation_rate, cost_rate, popularity, tsla_normalized]
         self.observation_space = spaces.Box(
-            low=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-            high=np.array([1.0, 300.0, 1.0, float(self.MAX_REPLICAS), 1.0, 1.0, 1.0, 1.0]),
+            low=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            high=np.array([1.0, 300.0, 1.0, float(self.MAX_REPLICAS), 1.0, 1.0, 1.0, 1.0, 1.0]),
             dtype=np.float32
         )
         
@@ -86,9 +107,16 @@ class TcdrmAdaptiveEnv(gym.Env):
         
         # Random number generator
         self.np_random = None
+        self._seed = None
+        
+        # PLSA model for popularity prediction (sera initialisé avec seed dans reset)
+        self.plsa_model = None
         
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         super().reset(seed=seed)
+        
+        # Sauvegarder le seed pour reproductibilité
+        self._seed = seed
         
         self.current_budget = self.INITIAL_BUDGET
         self.current_latency = self.LAT_REMOTE_MS
@@ -100,6 +128,16 @@ class TcdrmAdaptiveEnv(gym.Env):
         self.total_cost = 0.0
         self.episode_rewards = []
         self.last_action = 2  # DO_NOTHING par défaut
+        self.current_tsla = self.TSLA_INITIAL  # Réinitialiser TSLA
+        self.tsla_history = []  # Historique des ajustements TSLA
+        self.last_replica_action = 2  # Pour tracking instabilité
+        self.last_tsla_action = 2  # Pour tracking instabilité
+        
+        # Réinitialiser le modèle PLSA avec le même seed pour reproductibilité
+        if self.plsa_model is None:
+            self.plsa_model = PLSAPopularityModel(n_topics=3, max_iterations=20, seed=seed)
+        else:
+            self.plsa_model.reset(seed=seed)
         
         observation = self._get_observation()
         info = self._get_info()
@@ -109,6 +147,11 @@ class TcdrmAdaptiveEnv(gym.Env):
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         previous_replica_count = self.current_replica_count
         previous_budget = self.current_budget
+        previous_tsla = self.current_tsla
+        
+        # Décoder l'action combinée: action = replica_action * 3 + tsla_action
+        replica_action = action // 3  # 0=CREATE, 1=DELETE, 2=DO_NOTHING
+        tsla_action = action % 3      # 0=INCREASE, 1=DECREASE, 2=MAINTAIN
         
         # Appliquer les réplicas en attente (créés à la requête précédente)
         # Cela simule le délai de création des réplicas comme dans TCDRM Statique
@@ -122,8 +165,9 @@ class TcdrmAdaptiveEnv(gym.Env):
         query_latency = self._simulate_query()
         query_cost = self._calculate_query_cost()
         
-        # Execute action (après la simulation de la requête)
-        action_executed = self._execute_action(action)
+        # Execute actions (après la simulation de la requête)
+        replica_executed = self._execute_replica_action(replica_action)
+        tsla_executed = self._execute_tsla_action(tsla_action)
         
         # Update state
         self.current_budget -= query_cost
@@ -132,14 +176,18 @@ class TcdrmAdaptiveEnv(gym.Env):
         self.current_query += 1
         self.total_cost += query_cost
         
-        # Track SLA violations
-        if query_latency > self.SLA_LATENCY_THRESHOLD:
+        # Mettre à jour le modèle PLSA avec le nouvel accès
+        self.plsa_model.add_access(self.access_count)
+        
+        # Track SLA violations (utilise TSLA dynamique)
+        if query_latency > self.current_tsla:
             self.sla_violations += 1
         
-        # Calculate reward
-        reward = self._calculate_reward(
-            action, action_executed, previous_replica_count, 
-            previous_budget, query_cost, query_latency
+        # Calculate reward (avec TSLA dynamique)
+        reward = calculate_reward_with_dynamic_tsla(
+            self, replica_action, tsla_action, replica_executed, tsla_executed,
+            previous_replica_count, previous_tsla, previous_budget, 
+            query_cost, query_latency
         )
         self.episode_rewards.append(reward)
         
@@ -152,7 +200,8 @@ class TcdrmAdaptiveEnv(gym.Env):
         
         return observation, reward, terminated, truncated, info
     
-    def _execute_action(self, action: int) -> bool:
+    def _execute_replica_action(self, action: int) -> bool:
+        """Exécute l'action de réplication"""
         if action == 0:  # CREATE_REPLICA
             # Les réplicas sont mis en attente et seront disponibles à la requête suivante
             total_replicas = self.current_replica_count + self.pending_replica_count
@@ -175,6 +224,28 @@ class TcdrmAdaptiveEnv(gym.Env):
             return False
             
         else:  # DO_NOTHING
+            return True
+    
+    def _execute_tsla_action(self, action: int) -> bool:
+        """Exécute l'action d'ajustement TSLA"""
+        if action == 0:  # INCREASE_TSLA
+            new_tsla = min(self.current_tsla + self.TSLA_STEP, self.TSLA_MAX)
+            if new_tsla != self.current_tsla:
+                self.current_tsla = new_tsla
+                self.tsla_history.append(('INCREASE', self.current_tsla))
+                return True
+            return False
+            
+        elif action == 1:  # DECREASE_TSLA
+            new_tsla = max(self.current_tsla - self.TSLA_STEP, self.TSLA_MIN)
+            if new_tsla != self.current_tsla:
+                self.current_tsla = new_tsla
+                self.tsla_history.append(('DECREASE', self.current_tsla))
+                return True
+            return False
+            
+        else:  # MAINTAIN_TSLA
+            self.tsla_history.append(('MAINTAIN', self.current_tsla))
             return True
     
     def _simulate_query(self) -> float:
@@ -259,106 +330,6 @@ class TcdrmAdaptiveEnv(gym.Env):
         
         return transfer_cost + cpu_cost + storage_cost
     
-    def _calculate_reward(
-        self, 
-        action: int, 
-        action_executed: bool,
-        previous_replica_count: int,
-        previous_budget: float,
-        query_cost: float,
-        query_latency: float
-    ) -> float:
-        """
-        Fonction de récompense multi-objectif pour TCDRM-ADAPTIVE.
-        
-        Objectifs:
-        1. Respect du SLA (latence)
-        2. Minimisation des coûts
-        3. Efficacité budgétaire
-        4. Stabilité des décisions
-        5. Timing stratégique basé sur popularité
-        """
-        reward = 0.0
-        
-        # Poids des différentes composantes
-        ALPHA = 10.0   # SLA compliance
-        BETA = 5.0     # Cost penalty
-        GAMMA = 15.0   # Budget efficiency
-        DELTA = 8.0    # Instability penalty
-        EPSILON = 20.0 # Strategic timing
-        
-        # Calculer la popularité normalisée (accès récents / temps)
-        popularity = min(1.0, self.access_count / 200.0)
-        
-        # 1. SLA COMPLIANCE REWARD
-        sla_compliance_reward = 0.0
-        if query_latency <= self.SLA_LATENCY_THRESHOLD:
-            sla_compliance_reward = ALPHA
-        else:
-            # Pénalité proportionnelle au dépassement
-            sla_compliance_reward = -ALPHA * 2.0 * (query_latency / self.SLA_LATENCY_THRESHOLD - 1.0)
-        
-        # 2. COST PENALTY
-        cost_penalty = query_cost * BETA
-        if action == 0 and action_executed:  # CREATE_REPLICA
-            replication_cost = self.data_gb * self.REPLICATION_COST_PER_GB
-            cost_penalty += replication_cost * 2.0
-        
-        # 3. BUDGET EFFICIENCY REWARD
-        budget_ratio = self.current_budget / self.INITIAL_BUDGET
-        budget_efficiency_reward = 0.0
-        if budget_ratio > 0.5:
-            budget_efficiency_reward = GAMMA
-        elif budget_ratio > 0.2:
-            budget_efficiency_reward = GAMMA / 3.0
-        else:
-            budget_efficiency_reward = -GAMMA
-        
-        # 4. INSTABILITY PENALTY (pénaliser changements fréquents)
-        instability_penalty = 0.0
-        if action in [0, 1] and action_executed:  # CREATE ou DELETE
-            # Vérifier si on change souvent de stratégie
-            if hasattr(self, 'last_action') and self.last_action != action:
-                instability_penalty = DELTA
-        
-        # 5. STRATEGIC TIMING REWARD (créer au bon moment)
-        strategic_timing_reward = 0.0
-        if action == 0 and action_executed:  # CREATE_REPLICA
-            if popularity > 0.7:
-                # Excellente décision: créer quand popularité élevée
-                strategic_timing_reward = EPSILON
-            elif popularity < 0.3:
-                # Mauvaise décision: créer trop tôt
-                strategic_timing_reward = -EPSILON * 0.75
-            else:
-                # Décision acceptable
-                strategic_timing_reward = EPSILON * 0.5
-        elif action == 1 and action_executed:  # DELETE_REPLICA
-            if popularity < 0.3:
-                # Bonne décision: supprimer quand popularité faible
-                strategic_timing_reward = EPSILON * 0.5
-            elif popularity > 0.7:
-                # Mauvaise décision: supprimer quand popularité élevée
-                strategic_timing_reward = -EPSILON
-        elif action == 2:  # DO_NOTHING
-            # Récompenser la patience avant le bon moment
-            if popularity < 0.7 and self.current_replica_count == 0:
-                strategic_timing_reward = EPSILON * 0.3
-        
-        # Sauvegarder l'action pour le prochain step
-        self.last_action = action
-        
-        # COMBINER TOUTES LES COMPOSANTES
-        total_reward = (
-            sla_compliance_reward
-            - cost_penalty
-            + budget_efficiency_reward
-            - instability_penalty
-            + strategic_timing_reward
-        )
-        
-        return total_reward
-    
     def _get_observation(self) -> np.ndarray:
         budget_ratio = np.clip(self.current_budget / self.INITIAL_BUDGET, 0.0, 1.0)
         latency = np.clip(self.current_latency, 0.0, 300.0)
@@ -367,11 +338,12 @@ class TcdrmAdaptiveEnv(gym.Env):
         query_complexity = np.clip(self.data_gb / 20.0, 0.0, 1.0)  # Normalize by max expected size
         sla_violation_rate = self.sla_violations / max(1, self.current_query)
         cost_rate = np.clip(self.total_cost / self.INITIAL_BUDGET, 0.0, 1.0)
-        popularity = np.clip(self.access_count / 200.0, 0.0, 1.0)  # Popularité normalisée
+        popularity = self.plsa_model.predict_popularity()  # Popularité prédite par PLSA (PSLA)
+        tsla_normalized = (self.current_tsla - self.TSLA_MIN) / (self.TSLA_MAX - self.TSLA_MIN)  # TSLA normalisé [0,1]
         
         return np.array([
             budget_ratio, latency, access_count_norm, replica_count,
-            query_complexity, sla_violation_rate, cost_rate, popularity
+            query_complexity, sla_violation_rate, cost_rate, popularity, tsla_normalized
         ], dtype=np.float32)
     
     def _get_info(self) -> Dict[str, Any]:
@@ -383,7 +355,9 @@ class TcdrmAdaptiveEnv(gym.Env):
             'sla_violations': self.sla_violations,
             'sla_compliance_rate': 1.0 - (self.sla_violations / max(1, self.current_query)),
             'total_cost': self.total_cost,
-            'access_count': self.access_count
+            'access_count': self.access_count,
+            'current_tsla': self.current_tsla,  # TSLA dynamique actuel
+            'tsla_adjustments': len([a for a, _ in self.tsla_history if a != 'MAINTAIN'])  # Nombre d'ajustements
         }
     
     def render(self):

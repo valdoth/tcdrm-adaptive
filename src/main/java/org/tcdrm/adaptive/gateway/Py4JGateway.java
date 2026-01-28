@@ -104,9 +104,23 @@ public class Py4JGateway {
     }
     
     /**
+     * Enregistre le pont Python (alias pour setPythonBridgeInstance)
+     */
+    public void registerPythonBridge(Object bridge) {
+        setPythonBridgeInstance(bridge);
+    }
+    
+    /**
      * Retourne l'instance du pont Python
      */
     public Object getPythonBridgeInstance() {
+        return pythonBridgeInstance;
+    }
+    
+    /**
+     * Retourne le pont Python (alias pour getPythonBridgeInstance)
+     */
+    public Object getPythonBridge() {
         return pythonBridgeInstance;
     }
     
