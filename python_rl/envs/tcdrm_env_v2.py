@@ -53,14 +53,19 @@ class TcdrmV2Env(gym.Env):
         # Constantes
         self.MAX_QUERIES = 1000
         self.INITIAL_BUDGET = 1000.0
-        self.MAX_REPLICAS = 3
+        # MAX_REPLICAS selon l'article: 5 pour simple queries, 13 pour complex queries
+        self.MAX_REPLICAS_SIMPLE = 5
+        self.MAX_REPLICAS_COMPLEX = 13
+        self.COMPLEXITY_THRESHOLD = 10.0
+        self.MAX_REPLICAS = self.MAX_REPLICAS_SIMPLE if data_gb < self.COMPLEXITY_THRESHOLD else self.MAX_REPLICAS_COMPLEX
         self.RT_MAX = 250.0  # Temps de réponse maximum (secondes)
         
         # Coûts
         self.COST_BW_INTRA_DC = 0.002
         self.COST_BW_INTER_REGION = 0.05
         self.COST_BW_INTER_CLOUD = 0.10
-        self.STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0
+        # Storage cost réduit pour être négligeable comme dans l'article (Fig. 7)
+        self.STORAGE_COST_PER_GB_PER_HOUR = 0.0001  # Quasi-négligeable
         self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_CLOUD
         self.CPU_COST_PER_HOUR = 0.02
         
@@ -98,7 +103,15 @@ class TcdrmV2Env(gym.Env):
         self.total_inter_cloud_traffic = 0.0
         self.total_traffic = 0.0
         self.last_action = 0  # NOOP
+        
+        # Warm-up progressif des réplicas (pour descente graduelle)
+        self.replica_warmup_progress = {}  # {replica_id: warmup_progress [0, 1]}
+        self.WARMUP_QUERIES = 600  # Nombre de requêtes pour atteindre 100% d'efficacité (descente très progressive)
         self.action_history = []
+        
+        # Tracking cumulatif de la bande passante (Fig. 6)
+        self.cumulative_bandwidth = 0.0
+        self.bandwidth_history = []
         
         # PLSA model
         self.plsa_model = None
@@ -125,6 +138,11 @@ class TcdrmV2Env(gym.Env):
         self.last_action = 0
         self.action_history = []
         self.popularity_history = []
+        
+        # Réinitialiser warm-up et tracking bande passante
+        self.replica_warmup_progress = {}
+        self.cumulative_bandwidth = 0.0
+        self.bandwidth_history = []
         
         # Initialiser PLSA
         if self.plsa_model is None:
@@ -192,11 +210,16 @@ class TcdrmV2Env(gym.Env):
                 if self.current_budget >= creation_cost:
                     self.current_replica_count += 1
                     self.current_budget -= creation_cost
+                    # Initialiser le warm-up du nouveau réplica à 0
+                    self.replica_warmup_progress[self.current_replica_count] = 0.0
                     return True
             return False
         
         elif action == 2:  # DELETE
             if self.current_replica_count > 0:
+                # Supprimer le warm-up du réplica supprimé
+                if self.current_replica_count in self.replica_warmup_progress:
+                    del self.replica_warmup_progress[self.current_replica_count]
                 self.current_replica_count -= 1
                 return True
             return False
@@ -205,12 +228,36 @@ class TcdrmV2Env(gym.Env):
             return True
     
     def _simulate_query(self) -> float:
-        """Simule une requête et retourne la latence en secondes"""
+        """Simule une requête et retourne la latence en secondes avec warm-up progressif (sigmoid)"""
+        # Mettre à jour le warm-up des réplicas
+        for replica_id in list(self.replica_warmup_progress.keys()):
+            if self.replica_warmup_progress[replica_id] < 1.0:
+                self.replica_warmup_progress[replica_id] = min(
+                    1.0, 
+                    self.replica_warmup_progress[replica_id] + (1.0 / self.WARMUP_QUERIES)
+                )
+        
+        # Calculer l'efficacité moyenne des réplicas avec fonction sigmoid
+        if self.current_replica_count > 0:
+            # Appliquer une fonction sigmoid pour une montée progressive
+            warmup_values = []
+            for warmup_linear in self.replica_warmup_progress.values():
+                # Sigmoid: 1 / (1 + exp(-k*(x - 0.5)))
+                # k=5 pour une transition très douce (descente progressive comme dans l'article)
+                x = warmup_linear
+                warmup_sigmoid = 1.0 / (1.0 + np.exp(-5.0 * (x - 0.5)))
+                warmup_values.append(warmup_sigmoid)
+            avg_warmup = sum(warmup_values) / len(warmup_values)
+        else:
+            avg_warmup = 0.0
+        
         use_local = False
         traffic_type = 'inter_cloud'
         
         if self.current_replica_count > 0:
-            local_probability = self.current_replica_count / (self.current_replica_count + 2)
+            # Probabilité d'accès local ajustée par le warm-up
+            base_probability = self.current_replica_count / (self.current_replica_count + 2)
+            local_probability = base_probability * avg_warmup
             use_local = self.np_random.random() < local_probability
             
             if use_local:
@@ -237,6 +284,10 @@ class TcdrmV2Env(gym.Env):
         elif traffic_type == 'inter_cloud':
             self.total_inter_cloud_traffic += self.data_gb
         self.total_traffic += self.data_gb
+        
+        # Tracking cumulatif de la bande passante (Fig. 6)
+        self.cumulative_bandwidth += self.data_gb
+        self.bandwidth_history.append(self.cumulative_bandwidth)
         
         # Temps de transfert
         transfer_ms = (self.data_gb * 8_000.0 / bw_gbps) + latency_ms
@@ -271,7 +322,7 @@ class TcdrmV2Env(gym.Env):
         processing_min = self.data_gb * 0.5
         cpu_cost = (processing_min / 60.0) * self.CPU_COST_PER_HOUR
         
-        # Coût de stockage
+        # Coût de stockage (négligeable selon Fig. 7)
         storage_cost = 0.0
         if self.current_replica_count > 0:
             query_duration_hours = processing_min / 60.0
@@ -369,6 +420,11 @@ class TcdrmV2Env(gym.Env):
         ], dtype=np.float32)
     
     def _get_info(self) -> Dict[str, Any]:
+        # Calculer l'efficacité moyenne des réplicas
+        avg_warmup = 0.0
+        if self.replica_warmup_progress:
+            avg_warmup = sum(self.replica_warmup_progress.values()) / len(self.replica_warmup_progress)
+        
         return {
             'query': self.current_query,
             'budget': self.current_budget,
@@ -380,6 +436,8 @@ class TcdrmV2Env(gym.Env):
             'avg_cost_per_query': self.total_cost / max(1, self.current_query),
             'inter_region_traffic_ratio': self.total_inter_region_traffic / max(1, self.total_traffic),
             'inter_cloud_traffic_ratio': self.total_inter_cloud_traffic / max(1, self.total_traffic),
+            'cumulative_bandwidth': self.cumulative_bandwidth,  # Bande passante cumulative (Fig. 6)
+            'avg_replica_warmup': avg_warmup  # Efficacité moyenne des réplicas (Fig. 3)
         }
     
     def get_action_mask(self) -> np.ndarray:

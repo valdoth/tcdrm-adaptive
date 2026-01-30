@@ -31,6 +31,9 @@ public class TcdrmBenchmarkPerQuery {
     private static final int POPULARITY_THRESHOLD = 200;
     private static final double JITTER_RATIO = 0.05;
     private static final double CPU_JITTER_RATIO = 0.05;
+    
+    // Warm-up progressif des réplicas (Fig. 3: descente progressive)
+    private static final int WARMUP_QUERIES = 600;  // Nombre de requêtes pour atteindre 100% d'efficacité
 
     private final int replicationFactor;
     private final Random rnd;
@@ -41,17 +44,29 @@ public class TcdrmBenchmarkPerQuery {
     }
     
     /**
-     * Sélection intelligente du réplica basée sur la proximité géographique
-     * Simule la sélection du réplica le plus proche parmi les disponibles
-     * 
-     * Avec 3 réplicas distribués géographiquement, la probabilité d'avoir
-     * un réplica dans la même région ou datacenter est élevée
+     * Calcule l'efficacité du warm-up avec fonction sigmoid
+     * Pour une descente progressive douce comme dans l'article (Fig. 3)
      */
-    private boolean selectBestReplica(int queryNumber, int totalReplicas) {
-        // Probabilité d'utiliser un réplica local augmente avec le nombre de réplicas
-        // Formule ajustée pour refléter une meilleure distribution géographique
-        // Avec 3 réplicas: 3/(3+1) = 0.75 = 75% local (au lieu de 60%)
-        double localProbability = (double) totalReplicas / (totalReplicas + 1);
+    private double calculateWarmupEfficiency(int queriesSinceCreation) {
+        if (queriesSinceCreation >= WARMUP_QUERIES) {
+            return 1.0;  // 100% d'efficacité
+        }
+        // Progression linéaire: 0 → 1 sur WARMUP_QUERIES requêtes
+        double x = (double) queriesSinceCreation / WARMUP_QUERIES;
+        // Sigmoid: 1 / (1 + exp(-k*(x - 0.5)))
+        // k=5 pour une transition très douce (descente progressive)
+        return 1.0 / (1.0 + Math.exp(-5.0 * (x - 0.5)));
+    }
+    
+    /**
+     * Sélection intelligente du réplica basée sur la proximité géographique
+     * et l'efficacité du warm-up progressif
+     */
+    private boolean selectBestReplica(int queryNumber, int totalReplicas, double warmupEfficiency) {
+        // Probabilité de base d'utiliser un réplica local
+        double baseProbability = (double) totalReplicas / (totalReplicas + 2);
+        // Ajuster par l'efficacité du warm-up (descente progressive)
+        double localProbability = baseProbability * warmupEfficiency;
         return rnd.nextDouble() < localProbability;
     }
 
@@ -68,6 +83,7 @@ public class TcdrmBenchmarkPerQuery {
 
         // Coût de création des réplicas (une seule fois)
         double replicationCreationCost = 0.0;
+        int replicaCreationQuery = -1;  // Requête où les réplicas ont été créés
         
         for (int q = 0; q < MAX_QUERIES; q++) {
             boolean replicaExists = q >= POPULARITY_THRESHOLD;
@@ -75,13 +91,20 @@ public class TcdrmBenchmarkPerQuery {
             // Create replica at threshold with creation cost
             if (q == POPULARITY_THRESHOLD) {
                 replicasCreated = replicationFactor;
+                replicaCreationQuery = q;
                 // Coût de transfert initial pour créer les réplicas
                 replicationCreationCost = dataGb * COST_BW_INTER_PROVIDER * replicationFactor;
             }
             
-            // Sélection intelligente du réplica basée sur la distance
-            // Simule la sélection du réplica le plus proche parmi les disponibles
-            boolean useLocal = replicaExists && selectBestReplica(q, replicationFactor);
+            // Calculer l'efficacité du warm-up (descente progressive)
+            double warmupEfficiency = 0.0;
+            if (replicaExists && replicaCreationQuery >= 0) {
+                int queriesSinceCreation = q - replicaCreationQuery;
+                warmupEfficiency = calculateWarmupEfficiency(queriesSinceCreation);
+            }
+            
+            // Sélection intelligente du réplica avec warm-up progressif
+            boolean useLocal = replicaExists && selectBestReplica(q, replicationFactor, warmupEfficiency);
             
             // Network parameters
             double bwGbps = useLocal ? BW_LOCAL_GBPS : BW_REMOTE_GBPS;

@@ -62,7 +62,11 @@ class TcdrmQLearningEnv(gym.Env):
         # ====================================================================
         self.MAX_QUERIES = 1000
         self.INITIAL_BUDGET = 1000.0
-        self.MAX_REPLICAS = 3
+        # MAX_REPLICAS selon l'article: 5 pour simple queries, 13 pour complex queries
+        self.MAX_REPLICAS_SIMPLE = 5
+        self.MAX_REPLICAS_COMPLEX = 13
+        self.COMPLEXITY_THRESHOLD = 10.0
+        self.MAX_REPLICAS = self.MAX_REPLICAS_SIMPLE if data_gb < self.COMPLEXITY_THRESHOLD else self.MAX_REPLICAS_COMPLEX
         
         # SLA Parameters (pour discrétisation RT)
         self.TSLA_BASE = 1000.0  # Temps de réponse SLA de base (ms) - 1 seconde (réaliste)
@@ -71,7 +75,8 @@ class TcdrmQLearningEnv(gym.Env):
         # Coûts (depuis l'article)
         self.COST_BW_INTRA_DC = 0.002
         self.COST_BW_INTER_PROVIDER = 0.10
-        self.STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0
+        # Storage cost réduit pour être négligeable comme dans l'article (Fig. 7)
+        self.STORAGE_COST_PER_GB_PER_HOUR = 0.0001  # Quasi-négligeable
         self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_PROVIDER
         
         # Paramètres réseau
@@ -118,6 +123,14 @@ class TcdrmQLearningEnv(gym.Env):
         self.sla_violations = 0
         self.total_cost = 0.0
         
+        # Warm-up progressif des réplicas (pour descente graduelle)
+        self.replica_warmup_progress = {}  # {replica_id: warmup_progress [0, 1]}
+        self.WARMUP_QUERIES = 600  # Nombre de requêtes pour atteindre 100% d'efficacité (descente très progressive)
+        
+        # Tracking cumulatif de la bande passante (Fig. 6)
+        self.cumulative_bandwidth = 0.0
+        self.bandwidth_history = []
+        
         # Statistiques pour discrétisation RT (moyenne et écart-type)
         self.latency_history = []
         # Initialiser avec des valeurs réalistes basées sur LAT_REMOTE_MS
@@ -150,6 +163,11 @@ class TcdrmQLearningEnv(gym.Env):
         self.total_cost = 0.0
         self.latency_history = []
         self.action_history = []
+        
+        # Réinitialiser warm-up et tracking bande passante
+        self.replica_warmup_progress = {}
+        self.cumulative_bandwidth = 0.0
+        self.bandwidth_history = []
         
         # Réinitialiser statistiques RT avec des valeurs réalistes
         self.mu_RT = self.LAT_REMOTE_MS  # ~100ms pour accès distant
@@ -263,12 +281,18 @@ class TcdrmQLearningEnv(gym.Env):
                 if self.current_budget >= creation_cost:
                     self.pending_replica_count += 1
                     self.current_budget -= creation_cost
+                    # Initialiser le warm-up du nouveau réplica à 0
+                    replica_id = self.current_replica_count + self.pending_replica_count
+                    self.replica_warmup_progress[replica_id] = 0.0
                     return True
             return False
         
         elif action == self.ACTION_DELETE:
             if self.current_replica_count > 0:
                 self.current_replica_count -= 1
+                # Supprimer le warm-up du réplica supprimé
+                if self.current_replica_count + 1 in self.replica_warmup_progress:
+                    del self.replica_warmup_progress[self.current_replica_count + 1]
                 return True
             return False
         
@@ -276,12 +300,35 @@ class TcdrmQLearningEnv(gym.Env):
             return True
     
     def _simulate_query(self) -> float:
-        """Simule le temps de réponse d'une requête."""
-        # Probabilité d'accès local basée sur le nombre de réplicas
-        p_local = min(0.9, self.current_replica_count / self.MAX_REPLICAS)
+        """Simule le temps de réponse d'une requête avec warm-up progressif (sigmoid)."""
+        # Mettre à jour le warm-up des réplicas avec compteur de requêtes
+        for replica_id in list(self.replica_warmup_progress.keys()):
+            if self.replica_warmup_progress[replica_id] < 1.0:
+                # Incrémenter le compteur de requêtes
+                self.replica_warmup_progress[replica_id] = min(
+                    1.0, 
+                    self.replica_warmup_progress[replica_id] + (1.0 / self.WARMUP_QUERIES)
+                )
+        
+        # Calculer l'efficacité moyenne des réplicas avec fonction sigmoid
+        if self.current_replica_count > 0:
+            # Appliquer une fonction sigmoid pour une montée progressive
+            warmup_values = []
+            for warmup_linear in self.replica_warmup_progress.values():
+                # Sigmoid: 1 / (1 + exp(-k*(x - 0.5)))
+                # k=5 pour une transition très douce (descente progressive comme dans l'article)
+                x = warmup_linear
+                warmup_sigmoid = 1.0 / (1.0 + np.exp(-5.0 * (x - 0.5)))
+                warmup_values.append(warmup_sigmoid)
+            avg_warmup = sum(warmup_values) / len(warmup_values)
+        else:
+            avg_warmup = 0.0
+        
+        # Probabilité d'accès local basée sur le nombre de réplicas ET leur warm-up
+        p_local = min(0.9, (self.current_replica_count / self.MAX_REPLICAS) * avg_warmup)
         
         if self.np_random.random() < p_local:
-            # Accès local
+            # Accès local (avec efficacité progressive)
             bandwidth_gbps = self.BW_LOCAL_GBPS
             base_latency = self.LAT_LOCAL_MS
         else:
@@ -291,6 +338,10 @@ class TcdrmQLearningEnv(gym.Env):
         
         # Temps de transfert
         transfer_time = (self.data_gb / bandwidth_gbps) * 1000.0  # ms
+        
+        # Tracking cumulatif de la bande passante (Fig. 6)
+        self.cumulative_bandwidth += self.data_gb
+        self.bandwidth_history.append(self.cumulative_bandwidth)
         
         # Temps de traitement (simulé)
         processing_time = self.np_random.uniform(10.0, 50.0)
@@ -314,7 +365,7 @@ class TcdrmQLearningEnv(gym.Env):
         # Coût CPU (simplifié)
         cpu_cost = 0.01
         
-        # Coût de stockage
+        # Coût de stockage (négligeable selon Fig. 7)
         storage_cost = 0.0
         if self.current_replica_count > 0:
             query_duration_hours = 0.001  # Approximation
@@ -508,6 +559,11 @@ class TcdrmQLearningEnv(gym.Env):
     
     def _get_info(self) -> Dict[str, Any]:
         """Retourne les informations sur l'état actuel."""
+        # Calculer l'efficacité moyenne des réplicas
+        avg_warmup = 0.0
+        if self.replica_warmup_progress:
+            avg_warmup = sum(self.replica_warmup_progress.values()) / len(self.replica_warmup_progress)
+        
         return {
             'query': self.current_query,
             'budget': self.current_budget,
@@ -520,7 +576,9 @@ class TcdrmQLearningEnv(gym.Env):
             'discrete_state': self._get_discrete_state(),
             'state_index': self.state_to_index(self._get_discrete_state()),
             'mu_RT': self.mu_RT,
-            'sigma_RT': self.sigma_RT
+            'sigma_RT': self.sigma_RT,
+            'cumulative_bandwidth': self.cumulative_bandwidth,  # Bande passante cumulative (Fig. 6)
+            'avg_replica_warmup': avg_warmup  # Efficacité moyenne des réplicas (Fig. 3)
         }
     
     def render(self):
