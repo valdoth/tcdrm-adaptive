@@ -219,110 +219,99 @@ class PLSAPopularityModel:
         if len(self.access_history) < self.window_size:
             # Pas assez de données pour entraîner
             return
-        
+            
         # Créer la matrice document-terme
         doc_term_matrix = self._create_document_term_matrix()
         n_documents = doc_term_matrix.shape[0]
-        
+            
         # Initialiser P(z|d) si nécessaire (utiliser rng pour reproductibilité)
         if self.P_z_given_d is None or self.P_z_given_d.shape[0] != n_documents:
             self.P_z_given_d = self.rng.dirichlet(np.ones(self.n_topics), size=n_documents)
-        
+            
         # Algorithme EM
         prev_log_likelihood = -np.inf
-        
+            
         for iteration in range(self.max_iterations):
             log_likelihood = self._em_step(doc_term_matrix)
-            
+                
             # Vérifier la convergence
             if abs(log_likelihood - prev_log_likelihood) < self.convergence_threshold:
                 break
+                
+            prev_log_likelihood = log_likelihood
     
-def fit(self):
-    """
-    Entraîne le modèle PLSA sur l'historique des accès
-    """
-    if len(self.access_history) < self.window_size:
-        # Pas assez de données pour entraîner
-        return
-        
-    # Créer la matrice document-terme
-    doc_term_matrix = self._create_document_term_matrix()
-    n_documents = doc_term_matrix.shape[0]
-        
-    # Initialiser P(z|d) si nécessaire (utiliser rng pour reproductibilité)
-    if self.P_z_given_d is None or self.P_z_given_d.shape[0] != n_documents:
-        self.P_z_given_d = self.rng.dirichlet(np.ones(self.n_topics), size=n_documents)
-        
-    # Algorithme EM
-    prev_log_likelihood = -np.inf
-        
-    for iteration in range(self.max_iterations):
-        log_likelihood = self._em_step(doc_term_matrix)
+    def predict_popularity(self) -> float:
+        """
+        Prédit la popularité actuelle basée sur les patterns d'accès
+        OPTIMISÉ: Ne réentraîne que tous les refit_interval steps
+        Amélioré: Utilise une pondération exponentielle pour les accès récents
             
-        # Vérifier la convergence
-        if abs(log_likelihood - prev_log_likelihood) < self.convergence_threshold:
-            break
+        Returns:
+            Score de popularité entre 0 et 1
+        """
+        if len(self.access_history) < 10:
+            # Pas assez de données, retourner une popularité faible
+            return 0.1
             
-        prev_log_likelihood = log_likelihood
+        # Vérifier si on doit réentraîner
+        current_step = len(self.access_history)
+        should_refit = (current_step - self.last_fit_step) >= self.refit_interval
+            
+        # Entraîner le modèle uniquement si nécessaire
+        if should_refit or not self.is_fitted:
+            self.fit()
+            self.last_fit_step = current_step
+            self.is_fitted = True
+                
+            # Calculer et cacher la nouvelle popularité
+            if self.P_z_given_d is not None and len(self.P_z_given_d) > 0:
+                # Utiliser la distribution des topics du dernier document
+                topic_weights = self.P_z_given_d[-1, :]
+                # Scores des topics: 0=faible, 1=moyen, 2=élevé
+                topic_scores = np.array([0.2, 0.5, 0.9])
+                
+                # Pondération exponentielle des accès récents (plus de poids aux récents)
+                recent_window = min(30, len(self.access_history))
+                recent_accesses = self.access_history[-recent_window:]
+                weights = np.exp(np.linspace(-1, 0, len(recent_accesses)))
+                weights /= weights.sum()
+                weighted_avg = np.average(recent_accesses, weights=weights)
+                
+                # Combiner PLSA et moyenne pondérée (70% PLSA, 30% moyenne)
+                plsa_score = np.dot(topic_weights, topic_scores)
+                recent_score = weighted_avg / 4.0  # Normaliser [0-4] → [0-1]
+                self.cached_popularity = float(np.clip(0.7 * plsa_score + 0.3 * recent_score, 0.0, 1.0))
+            else:
+                # Fallback: utiliser la moyenne pondérée des accès récents
+                recent_window = min(20, len(self.access_history))
+                recent_accesses = self.access_history[-recent_window:]
+                weights = np.exp(np.linspace(-1, 0, len(recent_accesses)))
+                weights /= weights.sum()
+                weighted_avg = np.average(recent_accesses, weights=weights)
+                self.cached_popularity = float(np.clip(weighted_avg / 4.0, 0.0, 1.0))
+        
+        return self.cached_popularity
     
-def predict_popularity(self) -> float:
-    """
-    Prédit la popularité actuelle basée sur les patterns d'accès
-    OPTIMISÉ: Ne réentraîne que tous les refit_interval steps
-        
-    Returns:
-        Score de popularité entre 0 et 1
-    """
-    if len(self.access_history) < 10:
-        # Pas assez de données, retourner une popularité faible
-        return 0.1
-        
-    # Vérifier si on doit réentraîner
-    current_step = len(self.access_history)
-    should_refit = (current_step - self.last_fit_step) >= self.refit_interval
-        
-    # Entraîner le modèle uniquement si nécessaire
-    if should_refit or not self.is_fitted:
-        self.fit()
-        self.last_fit_step = current_step
-        self.is_fitted = True
+    def get_topic_distribution(self) -> Optional[np.ndarray]:
+        """
+        Retourne la distribution des topics pour le dernier document
             
-        # Calculer et cacher la nouvelle popularité
+        Returns:
+            Distribution des topics [n_topics] ou None si pas de données
+        """
         if self.P_z_given_d is not None and len(self.P_z_given_d) > 0:
-            topic_weights = self.P_z_given_d[-1, :]
-            topic_scores = np.linspace(0.2, 0.9, self.n_topics)
-            self.cached_popularity = float(np.clip(np.dot(topic_weights, topic_scores), 0.0, 1.0))
-        else:
-            # Fallback: utiliser la moyenne des accès récents
-            recent_accesses = self.access_history[-20:]
-            avg_access = np.mean(recent_accesses)
-            return float(np.clip(avg_access / 4.0, 0.0, 1.0))
+            return self.P_z_given_d[-1, :]
+        return None
     
-    return self.cached_popularity
-    
-def get_topic_distribution(self) -> Optional[np.ndarray]:
-    """
-    Retourne la distribution des topics pour le dernier document
-        
-    Returns:
-        Distribution des topics [n_topics] ou None si pas de données
-    """
-    if self.P_z_given_d is not None and len(self.P_z_given_d) > 0:
-        return self.P_z_given_d[-1, :]
-    return None
-    
-def reset(self, seed: Optional[int] = None):
-    """Réinitialise le modèle"""
-    if seed is not None:
-        self.rng = np.random.RandomState(seed)
-        
-    self.P_z_given_d = None
-    self.P_w_given_z = None
-    self.access_history = []
-    self.last_fit_step = 0
-    self.cached_popularity = 0.5
-    self.is_fitted = False
-    if seed is not None:
-        self.rng = np.random.RandomState(seed)
-    self._initialize_parameters()
+    def reset(self, seed: Optional[int] = None):
+        """Réinitialise le modèle"""
+        if seed is not None:
+            self.rng = np.random.RandomState(seed)
+            
+        self.P_z_given_d = None
+        self.P_w_given_z = None
+        self.access_history = []
+        self.last_fit_step = 0
+        self.cached_popularity = 0.5
+        self.is_fitted = False
+        self._initialize_parameters()
