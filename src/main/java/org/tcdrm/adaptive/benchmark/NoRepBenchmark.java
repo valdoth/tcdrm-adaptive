@@ -10,7 +10,7 @@ public class NoRepBenchmark {
     private static final int STEP_REPS = 500;
 
     private static final double BW_REMOTE_GBPS = 1.0;
-    private static final double LAT_REMOTE_MS = 80.0;
+    private static final double LAT_REMOTE_MS = 100.0;  // Aligné avec les autres benchmarks
     private static final double COST_BW_INTER_PROVIDER = 0.10;
 
     private static final double CPU_COST_PER_HOUR = 0.02;

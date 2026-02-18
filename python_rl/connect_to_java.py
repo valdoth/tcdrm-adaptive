@@ -50,7 +50,8 @@ class PythonRLBridge:
                 learning_rate=0.001,
                 discount_factor=0.99
             )
-            checkpoint = torch.load(dqn_model_path, map_location='cpu')
+            # PyTorch 2.6+ nécessite weights_only=False pour charger les modèles avec numpy
+            checkpoint = torch.load(dqn_model_path, map_location='cpu', weights_only=False)
             # Le modèle DQN sauvegarde avec 'policy_net_state_dict'
             self.dqn_agent.policy_net.load_state_dict(checkpoint['policy_net_state_dict'])
             self.dqn_agent.policy_net.eval()

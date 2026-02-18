@@ -19,18 +19,62 @@ import random
 from typing import Tuple, List
 
 
+class DuelingDQNNetwork(nn.Module):
+    """
+    Réseau Dueling DQN pour approximation de Q(s,a; θ).
+    
+    Architecture Dueling TCDRM v2:
+    - Input: 8 dimensions (état continu)
+    - Shared layers: 64 -> 64 neurones
+    - Value stream: 32 -> 1 (V(s))
+    - Advantage stream: 32 -> action_dim (A(s,a))
+    - Output: Q(s,a) = V(s) + (A(s,a) - mean(A(s,:)))
+    
+    Avantages:
+    - Sépare valeur d'état et avantage d'action
+    - Meilleure généralisation
+    - Convergence plus rapide
+    """
+    
+    def __init__(self, state_dim: int = 8, action_dim: int = 3, hidden_dims: list = [64, 64]):
+        super(DuelingDQNNetwork, self).__init__()
+        
+        # Shared feature layers
+        self.feature_layer = nn.Sequential(
+            nn.Linear(state_dim, hidden_dims[0]),
+            nn.ReLU(),
+            nn.Linear(hidden_dims[0], hidden_dims[1]),
+            nn.ReLU()
+        )
+        
+        # Value stream V(s)
+        self.value_stream = nn.Sequential(
+            nn.Linear(hidden_dims[1], 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
+        
+        # Advantage stream A(s,a)
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(hidden_dims[1], 32),
+            nn.ReLU(),
+            nn.Linear(32, action_dim)
+        )
+    
+    def forward(self, x):
+        features = self.feature_layer(x)
+        value = self.value_stream(features)
+        advantage = self.advantage_stream(features)
+        
+        # Q(s,a) = V(s) + (A(s,a) - mean(A(s,:)))
+        # Soustraction de la moyenne pour identifiabilité
+        q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
+        return q_values
+
+
 class DQNNetwork(nn.Module):
     """
-    Réseau de neurones profond pour approximation de Q(s,a; θ).
-    
-    Architecture TCDRM v2:
-    - Input: 8 dimensions (état continu)
-      [tQ_norm, cQ_norm, pop_norm, bud_norm, net_inter_ratio, 
-       net_intercloud_ratio, repl_factor, trend_pop]
-    - Hidden Layer 1: 64 neurones + ReLU
-    - Hidden Layer 2: 64 neurones + ReLU
-    - Hidden Layer 3: 32 neurones + ReLU
-    - Output: 3 dimensions (Q-values pour NOOP, REPLICATE, DELETE)
+    Réseau DQN standard (pour compatibilité)
     """
     
     def __init__(self, state_dim: int = 8, action_dim: int = 3, hidden_dims: list = [64, 64, 32]):
@@ -52,9 +96,91 @@ class DQNNetwork(nn.Module):
         return self.network(x)
 
 
+class PrioritizedReplayBuffer:
+    """
+    Prioritized Experience Replay Buffer.
+    
+    Les transitions avec TD-error élevé sont échantillonnées plus fréquemment.
+    Basé sur: Schaul et al. (2015) "Prioritized Experience Replay"
+    """
+    
+    def __init__(self, capacity: int = 10000, alpha: float = 0.6, beta_start: float = 0.4, beta_frames: int = 100000):
+        """
+        Args:
+            capacity: Taille maximale du buffer
+            alpha: Degré de priorisation (0 = uniforme, 1 = full prioritization)
+            beta_start: Importance sampling initial
+            beta_frames: Nombre de frames pour atteindre beta=1
+        """
+        self.capacity = capacity
+        self.alpha = alpha
+        self.beta_start = beta_start
+        self.beta_frames = beta_frames
+        self.frame = 1
+        
+        self.buffer = []
+        self.priorities = np.zeros(capacity, dtype=np.float32)
+        self.position = 0
+    
+    def push(self, state, action, reward, next_state, done):
+        """Ajouter une transition avec priorité maximale"""
+        max_priority = self.priorities.max() if self.buffer else 1.0
+        
+        if len(self.buffer) < self.capacity:
+            self.buffer.append((state, action, reward, next_state, done))
+        else:
+            self.buffer[self.position] = (state, action, reward, next_state, done)
+        
+        self.priorities[self.position] = max_priority
+        self.position = (self.position + 1) % self.capacity
+    
+    def sample(self, batch_size: int) -> Tuple:
+        """Échantillonner un batch avec priorités"""
+        if len(self.buffer) == self.capacity:
+            priorities = self.priorities
+        else:
+            priorities = self.priorities[:len(self.buffer)]
+        
+        # Probabilités d'échantillonnage
+        probs = priorities ** self.alpha
+        probs /= probs.sum()
+        
+        # Échantillonner indices
+        indices = np.random.choice(len(self.buffer), batch_size, p=probs, replace=False)
+        
+        # Importance sampling weights
+        beta = min(1.0, self.beta_start + self.frame * (1.0 - self.beta_start) / self.beta_frames)
+        weights = (len(self.buffer) * probs[indices]) ** (-beta)
+        weights /= weights.max()
+        
+        self.frame += 1
+        
+        # Extraire transitions
+        batch = [self.buffer[idx] for idx in indices]
+        states, actions, rewards, next_states, dones = zip(*batch)
+        
+        return (
+            np.array(states),
+            np.array(actions),
+            np.array(rewards),
+            np.array(next_states),
+            np.array(dones),
+            indices,
+            weights
+        )
+    
+    def update_priorities(self, indices, priorities):
+        """Mettre à jour les priorités"""
+        for idx, priority in zip(indices, priorities):
+            self.priorities[idx] = priority
+    
+    def __len__(self):
+        return len(self.buffer)
+
+
 class ReplayBuffer:
     """
-    Experience Replay Buffer pour stocker les transitions.
+    Experience Replay Buffer standard (pour compatibilité).
     """
     
     def __init__(self, capacity: int = 10000):
@@ -74,8 +200,14 @@ class ReplayBuffer:
             np.array(actions),
             np.array(rewards),
             np.array(next_states),
-            np.array(dones)
+            np.array(dones),
+            None,  # indices (pour compatibilité avec PER)
+            np.ones(batch_size)  # weights uniformes
         )
+    
+    def update_priorities(self, indices, priorities):
+        """No-op pour compatibilité"""
+        pass
     
     def __len__(self):
         return len(self.buffer)
@@ -97,33 +229,43 @@ class DQNAgent:
         state_dim: int = 8,
         action_dim: int = 3,
         hidden_dims: list = None,
-        learning_rate: float = 0.001,
-        discount_factor: float = 0.95,
+        learning_rate: float = 0.0005,
+        discount_factor: float = 0.99,
         epsilon: float = 1.0,
         epsilon_min: float = 0.01,
-        epsilon_decay_lambda: float = 0.001,
-        buffer_capacity: int = 10000,
+        epsilon_decay_lambda: float = 0.0005,
+        buffer_capacity: int = 50000,
         batch_size: int = 64,
-        target_update_freq: int = 10,
+        target_update_freq: int = 1000,
+        use_double_dqn: bool = True,
+        use_dueling: bool = True,
+        use_prioritized_replay: bool = True,
+        tau: float = 0.005,
+        gradient_clip: float = 1.0,
         device: str = None
     ):
         """
         Args:
             state_dim: Dimension de l'espace d'état (8 pour TCDRM v2)
             action_dim: Dimension de l'espace d'action (3: NOOP, REPLICATE, DELETE)
-            hidden_dims: Liste des dimensions des couches cachées [64, 64, 32]
-            learning_rate: Taux d'apprentissage (Adam)
+            hidden_dims: Liste des dimensions des couches cachées [64, 64]
+            learning_rate: Taux d'apprentissage (Adam) - réduit pour stabilité
             discount_factor: Facteur de discount γ
             epsilon: Epsilon initial pour exploration
             epsilon_min: Epsilon minimum
             epsilon_decay_lambda: Lambda pour décroissance exponentielle
-            buffer_capacity: Capacité du replay buffer
+            buffer_capacity: Capacité du replay buffer (augmenté à 50k)
             batch_size: Taille du batch pour l'entraînement
             target_update_freq: Fréquence de mise à jour du target network
+            use_double_dqn: Utiliser Double DQN
+            use_dueling: Utiliser architecture Dueling
+            use_prioritized_replay: Utiliser Prioritized Experience Replay
+            tau: Paramètre pour soft update du target network
+            gradient_clip: Valeur max pour gradient clipping
             device: Device PyTorch (cpu/cuda)
         """
         if hidden_dims is None:
-            hidden_dims = [64, 64, 32]
+            hidden_dims = [64, 64]
         
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -133,6 +275,10 @@ class DQNAgent:
         self.epsilon_decay_lambda = epsilon_decay_lambda
         self.batch_size = batch_size
         self.target_update_freq = target_update_freq
+        self.use_double_dqn = use_double_dqn
+        self.use_dueling = use_dueling
+        self.tau = tau
+        self.gradient_clip = gradient_clip
         self.training_steps = 0
         
         # Device
@@ -141,18 +287,26 @@ class DQNAgent:
         else:
             self.device = torch.device(device)
         
-        # Networks
-        self.policy_net = DQNNetwork(state_dim, action_dim, hidden_dims).to(self.device)
-        self.target_net = DQNNetwork(state_dim, action_dim, hidden_dims).to(self.device)
+        # Networks (Dueling ou standard)
+        if use_dueling:
+            self.policy_net = DuelingDQNNetwork(state_dim, action_dim, hidden_dims).to(self.device)
+            self.target_net = DuelingDQNNetwork(state_dim, action_dim, hidden_dims).to(self.device)
+        else:
+            self.policy_net = DQNNetwork(state_dim, action_dim, hidden_dims).to(self.device)
+            self.target_net = DQNNetwork(state_dim, action_dim, hidden_dims).to(self.device)
+        
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         
-        # Optimizer
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
-        self.loss_fn = nn.MSELoss()
+        # Optimizer avec weight decay pour régularisation
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.loss_fn = nn.SmoothL1Loss()  # Huber loss pour robustesse
         
-        # Replay buffer
-        self.replay_buffer = ReplayBuffer(buffer_capacity)
+        # Replay buffer (Prioritized ou standard)
+        if use_prioritized_replay:
+            self.replay_buffer = PrioritizedReplayBuffer(buffer_capacity)
+        else:
+            self.replay_buffer = ReplayBuffer(buffer_capacity)
         
         # Statistics
         self.update_count = 0
@@ -213,10 +367,10 @@ class DQNAgent:
     
     def _train_step(self):
         """
-        Effectuer un pas d'entraînement.
+        Effectuer un pas d'entraînement avec Double DQN et PER.
         """
-        # Échantillonner un batch
-        states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.batch_size)
+        # Échantillonner un batch (avec priorités si PER)
+        states, actions, rewards, next_states, dones, indices, weights = self.replay_buffer.sample(self.batch_size)
         
         # Convertir en tensors
         states = torch.FloatTensor(states).to(self.device)
@@ -224,41 +378,75 @@ class DQNAgent:
         rewards = torch.FloatTensor(rewards).to(self.device)
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.FloatTensor(dones).to(self.device)
+        weights = torch.FloatTensor(weights).to(self.device)
         
         # Calculer Q(s, a) actuel
         current_q_values = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         
-        # Calculer Q(s', a') cible avec target network
+        # Calculer Q(s', a') cible
         with torch.no_grad():
-            next_q_values = self.target_net(next_states).max(1)[0]
+            if self.use_double_dqn:
+                # Double DQN: utiliser policy_net pour sélectionner, target_net pour évaluer
+                next_actions = self.policy_net(next_states).argmax(1)
+                next_q_values = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
+            else:
+                # DQN standard
+                next_q_values = self.target_net(next_states).max(1)[0]
+            
             target_q_values = rewards + (1 - dones) * self.discount_factor * next_q_values
         
-        # Calculer la perte
-        loss = self.loss_fn(current_q_values, target_q_values)
+        # Calculer TD-errors pour PER
+        td_errors = torch.abs(current_q_values - target_q_values).detach().cpu().numpy()
         
-        # Backpropagation
+        # Calculer la perte pondérée (importance sampling)
+        loss = (weights * self.loss_fn(current_q_values, target_q_values)).mean()
+        
+        # Backpropagation avec gradient clipping
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), self.gradient_clip)
         self.optimizer.step()
+        
+        # Mettre à jour les priorités dans le buffer
+        if indices is not None:
+            self.replay_buffer.update_priorities(indices, td_errors + 1e-6)
         
         # Statistiques
         self.losses.append(loss.item())
         self.update_count += 1
         self.training_steps += 1
         
-        # Mettre à jour le target network
-        if self.update_count % self.target_update_freq == 0:
-            self.target_net.load_state_dict(self.policy_net.state_dict())
+        # Soft update du target network (plus stable que hard update)
+        if self.tau < 1.0:
+            # Soft update: θ_target = τ*θ_policy + (1-τ)*θ_target
+            for target_param, policy_param in zip(self.target_net.parameters(), self.policy_net.parameters()):
+                target_param.data.copy_(self.tau * policy_param.data + (1.0 - self.tau) * target_param.data)
+        else:
+            # Hard update périodique
+            if self.update_count % self.target_update_freq == 0:
+                self.target_net.load_state_dict(self.policy_net.state_dict())
     
     def decay_epsilon(self):
         """
-        Décroissance exponentielle d'epsilon:
+        Décroissance exponentielle d'epsilon améliorée:
         ε_t = max(ε_min, ε_0 · exp(-λt))
         """
         self.epsilon = max(
             self.epsilon_min,
-            self.epsilon * np.exp(-self.epsilon_decay_lambda * self.training_steps)
+            self.epsilon * np.exp(-self.epsilon_decay_lambda)
         )
+    
+    def get_network_stats(self):
+        """Retourne des statistiques sur les réseaux"""
+        policy_params = sum(p.numel() for p in self.policy_net.parameters())
+        policy_grad_norm = sum(p.grad.norm().item() for p in self.policy_net.parameters() if p.grad is not None)
+        
+        return {
+            'policy_params': policy_params,
+            'policy_grad_norm': policy_grad_norm,
+            'buffer_size': len(self.replay_buffer),
+            'avg_loss': np.mean(self.losses[-100:]) if len(self.losses) > 0 else 0
+        }
     
     def save(self, path: str):
         """Sauvegarder le modèle"""
@@ -270,7 +458,10 @@ class DQNAgent:
             'update_count': self.update_count,
             'training_steps': self.training_steps,
             'episode_rewards': self.episode_rewards,
-            'losses': self.losses
+            'losses': self.losses,
+            'use_double_dqn': self.use_double_dqn,
+            'use_dueling': self.use_dueling,
+            'tau': self.tau
         }, path)
     
     def load(self, path: str):
@@ -284,3 +475,6 @@ class DQNAgent:
         self.training_steps = checkpoint.get('training_steps', 0)
         self.episode_rewards = checkpoint['episode_rewards']
         self.losses = checkpoint['losses']
+        self.use_double_dqn = checkpoint.get('use_double_dqn', True)
+        self.use_dueling = checkpoint.get('use_dueling', True)
+        self.tau = checkpoint.get('tau', 0.005)

@@ -40,10 +40,15 @@ cleanup_initial() {
     rm -f images/*.png 2>/dev/null || true
     rm -f images/*.jpg 2>/dev/null || true
     
-    # Supprimer les anciens modèles entraînés
-    rm -f "$PYTHON_DIR/models/simple_qlearning.pkl" 2>/dev/null || true
-    rm -rf "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null || true
-    rm -f "$PYTHON_DIR/results/dqn/dqn_model.pt" 2>/dev/null || true
+    # Supprimer les anciens modèles entraînés SEULEMENT si on va réentraîner
+    if [ "$SKIP_TRAINING" = false ]; then
+        echo "   Suppression des anciens modèles (réentraînement prévu)..."
+        rm -f "$PYTHON_DIR/models/simple_qlearning.pkl" 2>/dev/null || true
+        rm -rf "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null || true
+        rm -f "$PYTHON_DIR/results/dqn/dqn_model.pt" 2>/dev/null || true
+    else
+        echo "   Conservation des modèles existants (--skip-training)..."
+    fi
     
     # Supprimer les logs temporaires
     rm -f /tmp/java_simulation.log 2>/dev/null || true

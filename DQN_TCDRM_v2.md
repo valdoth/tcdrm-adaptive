@@ -76,39 +76,75 @@ Le DQN utilise ce masque en mettant les Q-values invalides à `-inf`.
 
 Le DQN approxime **Q(s,a; θ)** avec un réseau neuronal feed-forward.
 
-### Architecture implémentée
+### Architecture implémentée : Dueling DQN
+
+Notre implémentation utilise une **architecture Dueling DQN** qui sépare la valeur d'état V(s) et l'avantage d'action A(s,a) :
 
 ```
 Input: [8] (état continu)
    ↓
-Linear(8 → 64) + ReLU
+Shared Layers:
+   Linear(8 → 64) + ReLU
+   Linear(64 → 64) + ReLU
    ↓
-Linear(64 → 64) + ReLU
-   ↓
-Linear(64 → 32) + ReLU
-   ↓
-Linear(32 → 3)
-   ↓
+   ┌──────────────┬──────────────┐
+   ↓              ↓              ↓
+Value Stream   Advantage Stream
+Linear(64→32)  Linear(64→32)
++ ReLU         + ReLU
+Linear(32→1)   Linear(32→3)
+   ↓              ↓
+   V(s)          A(s,a)
+   └──────────────┴──────────────┘
+                  ↓
+      Q(s,a) = V(s) + (A(s,a) - mean_a(A(s,a)))
+                  ↓
 Output: [3] (Q-values pour NOOP, REPLICATE, DELETE)
 ```
+
+**Avantage** : Apprentissage plus efficace - le réseau apprend quels états sont bons indépendamment des actions.
 
 ### Implémentation PyTorch
 
 ```python
-class DQNNetwork(nn.Module):
-    def __init__(self, state_dim=8, action_dim=3, hidden_dims=[64, 64, 32]):
+class DuelingDQNNetwork(nn.Module):
+    def __init__(self, state_dim=8, action_dim=3, hidden_dims=[64, 64]):
         super().__init__()
-        layers = []
-        input_dim = state_dim
-        for hidden_dim in hidden_dims:
-            layers.append(nn.Linear(input_dim, hidden_dim))
-            layers.append(nn.ReLU())
-            input_dim = hidden_dim
-        layers.append(nn.Linear(input_dim, action_dim))
-        self.network = nn.Sequential(*layers)
+        # Shared layers
+        self.shared = nn.Sequential(
+            nn.Linear(state_dim, hidden_dims[0]),
+            nn.ReLU(),
+            nn.Linear(hidden_dims[0], hidden_dims[1]),
+            nn.ReLU()
+        )
+
+        # Value stream: V(s)
+        self.value_stream = nn.Sequential(
+            nn.Linear(hidden_dims[1], 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
+
+        # Advantage stream: A(s,a)
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(hidden_dims[1], 32),
+            nn.ReLU(),
+            nn.Linear(32, action_dim)
+        )
+
+    def forward(self, x):
+        x = self.shared(x)
+        value = self.value_stream(x)
+        advantage = self.advantage_stream(x)
+        # Combine: Q(s,a) = V(s) + (A(s,a) - mean(A))
+        advantage_mean = advantage.mean(dim=1, keepdim=True)
+        q_values = value + (advantage - advantage_mean)
+        return q_values
 ```
 
 **Paramètres totaux** : ~6K paramètres (architecture légère)
+
+**Implémentation** : `dqn_agent.py` lignes 22-72, activé par défaut avec `use_dueling=True`
 
 ---
 
@@ -153,79 +189,132 @@ reward = (R1_SLA_OK * sla_ok - R2_SLA_VIOL * sla_viol -
 
 ## 5. Apprentissage avec DQN
 
-### 5.1. Experience Replay Buffer
+### 5.1. Prioritized Experience Replay (PER)
 
-**Buffer circulaire** stockant les transitions :
+Notre implémentation utilise **Prioritized Experience Replay** pour échantillonner les transitions importantes plus fréquemment :
 
 ```python
-class ReplayBuffer:
-    def __init__(self, capacity=50000):
+class PrioritizedReplayBuffer:
+    def __init__(self, capacity=10000, alpha=0.6, beta=0.4):
         self.buffer = deque(maxlen=capacity)
+        self.priorities = deque(maxlen=capacity)
+        self.alpha = alpha  # Exposant de priorité
+        self.beta = beta    # Correction importance sampling
 
     def push(self, state, action, reward, next_state, done):
+        max_priority = max(self.priorities) if self.priorities else 1.0
         self.buffer.append((state, action, reward, next_state, done))
+        self.priorities.append(max_priority)
 
-    def sample(self, batch_size=128):
-        return random.sample(self.buffer, batch_size)
+    def sample(self, batch_size=64):
+        # Probabilités basées sur priorités
+        priorities = np.array(self.priorities)
+        probs = priorities ** self.alpha
+        probs /= probs.sum()
+
+        # Échantillonner selon priorités
+        indices = np.random.choice(len(self.buffer), batch_size, p=probs)
+
+        # Importance sampling weights
+        weights = (len(self.buffer) * probs[indices]) ** (-self.beta)
+        weights /= weights.max()
+
+        return batch, indices, weights
+
+    def update_priorities(self, indices, td_errors):
+        for idx, error in zip(indices, td_errors):
+            self.priorities[idx] = abs(error) + 1e-6
 ```
+
+**Avantage** : Apprentissage plus rapide en rejouant les transitions importantes plus souvent.
 
 **Paramètres par défaut** :
 
-- Capacité : 50,000 transitions
-- Batch size : 128
+- Capacité : 10,000 transitions
+- Batch size : 64
+- α (priorité) : 0.6
+- β (importance sampling) : 0.4 → 1.0
 
-### 5.2. Target Network
+**Implémentation** : `dqn_agent.py` lignes 99-178, activé par défaut avec `use_prioritized_replay=True`
+
+### 5.2. Target Network avec Soft Update
 
 **Deux réseaux identiques** pour stabiliser l'apprentissage :
 
 1. **Policy Network** (θ) : Mis à jour à chaque step
-2. **Target Network** (θ⁻) : Copie périodique du policy network
+2. **Target Network** (θ⁻) : Mise à jour progressive (soft update)
 
 ```python
 # Initialisation
-self.policy_net = DQNNetwork(8, 3, [64, 64, 32])
-self.target_net = DQNNetwork(8, 3, [64, 64, 32])
+self.policy_net = DuelingDQNNetwork(8, 3, [64, 64])
+self.target_net = DuelingDQNNetwork(8, 3, [64, 64])
 self.target_net.load_state_dict(self.policy_net.state_dict())
 
-# Mise à jour périodique (tous les 20 épisodes par défaut)
-if update_count % target_update_freq == 0:
-    self.target_net.load_state_dict(self.policy_net.state_dict())
+# Soft update à chaque step (τ = 0.005)
+for target_param, policy_param in zip(self.target_net.parameters(),
+                                       self.policy_net.parameters()):
+    target_param.data.copy_(
+        τ * policy_param.data + (1 - τ) * target_param.data
+    )
 ```
 
-### 5.3. Algorithme d'entraînement
+**Avantage** : Stabilité accrue - mise à jour progressive au lieu de copies périodiques brusques.
+
+**Implémentation** : `dqn_agent.py` lignes 419-423, avec `tau=0.005` par défaut
+
+### 5.3. Algorithme d'entraînement avec Double DQN
 
 **Pour chaque transition** :
 
 1. **Stocker** : `replay_buffer.push(s, a, r, s', done)`
 
-2. **Échantillonner** un batch si buffer suffisamment rempli
+2. **Échantillonner** un batch avec priorités si buffer suffisamment rempli
 
 3. **Calculer Q actuel** :
 
-   ```
+   ```python
    Q_current = policy_net(s)[a]
    ```
 
-4. **Calculer Q cible** :
+4. **Calculer Q cible avec Double DQN** :
 
-   ```
-   Q_target = r + γ × max_a' target_net(s') × (1 - done)
-   ```
-
-5. **Loss MSE** :
-
-   ```
-   loss = MSE(Q_current, Q_target)
+   ```python
+   # Double DQN: utiliser policy_net pour sélectionner, target_net pour évaluer
+   next_actions = policy_net(s').argmax(1)  # Sélection
+   Q_target = target_net(s').gather(1, next_actions)  # Évaluation
+   target = r + γ × Q_target × (1 - done)
    ```
 
-6. **Backpropagation** :
+5. **Loss Huber (SmoothL1Loss)** avec importance sampling weights :
+
+   ```python
+   td_errors = abs(Q_current - target)
+   loss = (weights * SmoothL1Loss(Q_current, target)).mean()
+   ```
+
+6. **Backpropagation avec gradient clipping** :
+
    ```python
    optimizer.zero_grad()
    loss.backward()
+   torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=1.0)
    optimizer.step()
    ```
 
-**Optimiseur** : Adam avec learning_rate = 0.0003 (par défaut)
+7. **Mettre à jour priorités** :
+
+   ```python
+   replay_buffer.update_priorities(indices, td_errors)
+   ```
+
+8. **Soft update du target network** :
+   ```python
+   θ⁻ ← τ*θ + (1-τ)*θ⁻
+   ```
+
+**Optimiseur** : Adam avec learning_rate = 0.001 (par défaut)
+
+**Implémentation** : `dqn_agent.py` lignes 368-427
 
 ---
 
@@ -265,31 +354,33 @@ def select_action(state, action_mask, training=True):
 
 ### Configuration par défaut
 
-| Paramètre           | Valeur   | Description                             |
-| ------------------- | -------- | --------------------------------------- |
-| **Episodes**        | 200      | Nombre d'épisodes d'entraînement        |
-| **Queries/episode** | 1000     | Requêtes par épisode                    |
-| **Learning rate**   | 0.0003   | Taux d'apprentissage Adam               |
-| **Discount γ**      | 0.99     | Facteur de discount                     |
-| **Buffer size**     | 50,000   | Capacité replay buffer                  |
-| **Batch size**      | 128      | Taille du batch                         |
-| **Target update**   | 20       | Fréquence mise à jour target (épisodes) |
-| **Device**          | CPU/CUDA | Automatique                             |
+| Paramètre           | Valeur   | Description                      |
+| ------------------- | -------- | -------------------------------- |
+| **Episodes**        | 1500     | Nombre d'épisodes d'entraînement |
+| **Queries/episode** | 1000     | Requêtes par épisode             |
+| **Learning rate**   | 0.001    | Taux d'apprentissage Adam        |
+| **Discount γ**      | 0.99     | Facteur de discount              |
+| **Buffer size**     | 10,000   | Capacité replay buffer (PER)     |
+| **Batch size**      | 64       | Taille du batch                  |
+| **Target update τ** | 0.005    | Coefficient soft update          |
+| **Gradient clip**   | 1.0      | Norme maximale des gradients     |
+| **PER α**           | 0.6      | Exposant de priorité             |
+| **PER β**           | 0.4→1.0  | Correction importance sampling   |
+| **Device**          | CPU/CUDA | Automatique                      |
 
 ### Script d'entraînement
 
 ```bash
 python python_rl/train_dqn_policy.py \
-  --episodes 200 \
+  --episodes 1500 \
   --queries 1000 \
-  --buffer-size 50000 \
-  --batch-size 128 \
-  --lr 0.0003 \
+  --buffer-size 10000 \
+  --batch-size 64 \
+  --lr 0.001 \
   --gamma 0.99 \
   --epsilon-start 1.0 \
   --epsilon-min 0.01 \
-  --epsilon-decay 0.0005 \
-  --target-update 20
+  --epsilon-decay-lambda 0.0005
 ```
 
 ### Métriques suivies
@@ -312,7 +403,11 @@ python python_rl/train_dqn_policy.py \
 - **Généralisation** : Apprend des politiques pour états non vus
 - **Politiques complexes** : Capture des relations non-linéaires
 - **Action masking** : Respecte les contraintes dynamiques
-- **Stabilité** : Target network + replay buffer
+- **Stabilité** : Target network + soft update + PER
+- **Double DQN** : Réduit l'overestimation des valeurs Q
+- **Dueling DQN** : Apprentissage plus efficace (V(s) + A(s,a))
+- **Prioritized Replay** : Apprentissage plus rapide
+- **Gradient clipping** : Évite les explosions de gradients
 
 ### ⚠️ Limitations
 
@@ -329,7 +424,7 @@ python python_rl/train_dqn_policy.py \
 | **Représentation**       | Q-table [243×3]                  | Réseau neuronal ~6K params |
 | **Mémoire**              | ~2 KB                            | ~24 KB (modèle) + buffer   |
 | **Généralisation**       | Aucune                           | Forte                      |
-| **Temps d'entraînement** | ~2-5 min                         | ~10-20 min                 |
+| **Temps d'entraînement** | ~48s (1500 ep)                   | ~30-40 min (1500 ep)       |
 | **Interprétabilité**     | Haute (Q-table visible)          | Faible (boîte noire)       |
 | **Scalabilité**          | Limitée (explosion combinatoire) | Excellente                 |
 | **Convergence**          | Garantie (sous conditions)       | Non garantie               |

@@ -13,8 +13,8 @@ public class TcdrmBenchmark {
 
     private static final double BW_LOCAL_GBPS = 10.0;
     private static final double BW_REMOTE_GBPS = 1.0;
-    private static final double LAT_LOCAL_MS = 5.0;
-    private static final double LAT_REMOTE_MS = 80.0;
+    private static final double LAT_LOCAL_MS = 1.0;  // Aligné avec les autres benchmarks
+    private static final double LAT_REMOTE_MS = 100.0;  // Aligné avec les autres benchmarks
 
     private static final double COST_BW_INTRA_REGION = 0.0;
     private static final double COST_BW_INTER_REGION = 0.01;

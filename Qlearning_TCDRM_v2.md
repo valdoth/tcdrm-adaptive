@@ -171,11 +171,11 @@ reward = latency_reward - repl_penalty + repl_bonus - budget_penalty - thrash_pe
 
 ---
 
-## 4. Algorithme Q-learning
+## 4. Algorithme Q-learning Amélioré
 
-### 4.1. Mise à jour de la Q-table
+### 4.1. Algorithme de base
 
-**Équation de Bellman** :
+**Équation de Bellman standard** :
 
 ```
 Q(s,a) ← Q(s,a) + α [r + γ · max_a' Q(s',a') - Q(s,a)]
@@ -187,7 +187,64 @@ Où :
 - **γ** (discount_factor) : 0.99 (par défaut)
 - **Q-table** : Matrice [243 × 3] initialisée à zéro
 
-### 4.2. Politique d'exploration ε-greedy
+### 4.2. Améliorations implémentées
+
+Notre implémentation utilise des techniques avancées pour améliorer la convergence et la stabilité :
+
+#### 4.2.1. Double Q-Learning
+
+Pour réduire l'**overestimation** des valeurs Q, nous utilisons **deux Q-tables** (Q_A et Q_B) :
+
+```python
+# Alternance aléatoire entre Q_A et Q_B
+if random() < 0.5:
+    # Mettre à jour Q_A en utilisant Q_B pour évaluer
+    best_action = argmax(Q_A[s'])
+    target = r + γ * Q_B[s', best_action]
+    Q_A[s, a] += α * (target - Q_A[s, a])
+else:
+    # Mettre à jour Q_B en utilisant Q_A pour évaluer
+    best_action = argmax(Q_B[s'])
+    target = r + γ * Q_A[s', best_action]
+    Q_B[s, a] += α * (target - Q_B[s, a])
+
+# Q-table moyenne pour compatibilité
+Q[s, a] = (Q_A[s, a] + Q_B[s, a]) / 2
+```
+
+**Avantage** : Réduit le biais d'overestimation en séparant la sélection et l'évaluation des actions.
+
+**Implémentation** : `simple_qlearning_agent.py` lignes 134-165, activé par défaut avec `use_double_q=True`
+
+#### 4.2.2. Learning Rate Adaptatif
+
+Le learning rate α s'adapte en fonction du nombre de visites de chaque paire (s, a) :
+
+```python
+α_t = α_0 / (1 + 0.01 * visit_count[s, a])
+```
+
+**Avantage** : Convergence plus stable - les états fréquemment visités ont des mises à jour plus petites.
+
+**Implémentation** : `simple_qlearning_agent.py` lignes 128-132, activé par défaut avec `adaptive_lr=True`
+
+#### 4.2.3. Exploration Intelligente
+
+Au lieu d'une exploration purement aléatoire, nous favorisons les actions moins visitées :
+
+```python
+if exploration and training_steps > 100:
+    # Probabilités inversement proportionnelles aux visites
+    probs = 1.0 / (visit_counts[s, valid_actions] + 1.0)
+    probs = probs / sum(probs)
+    action = choice(valid_actions, p=probs)
+```
+
+**Avantage** : Exploration plus efficace de l'espace état-action.
+
+**Implémentation** : `simple_qlearning_agent.py` lignes 87-96
+
+### 4.3. Politique d'exploration ε-greedy
 
 **Décroissance multiplicative** :
 
@@ -201,7 +258,7 @@ Paramètres par défaut :
 - **ε_min** : 0.01 (exploration minimale)
 - **decay** : 0.995 (décroissance par épisode)
 
-### 4.3. Sélection d'action
+### 4.4. Sélection d'action
 
 ```python
 if random() < ε:
@@ -269,6 +326,9 @@ python python_rl/train_simple_qlearning.py \
 - **Convergence garantie** : Sous conditions standards
 - **Faible complexité** : 243 états gérables
 - **Pas de GPU requis** : Calculs légers
+- **Double Q-learning** : Réduit l'overestimation des valeurs Q
+- **Learning rate adaptatif** : Convergence plus stable
+- **Exploration intelligente** : Exploration plus efficace
 
 ### Limitations
 

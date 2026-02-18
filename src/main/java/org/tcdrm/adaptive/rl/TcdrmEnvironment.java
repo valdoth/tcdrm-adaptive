@@ -11,7 +11,7 @@ public class TcdrmEnvironment implements Environment<TcdrmState, TcdrmAction> {
     
     // Paramètres de l'environnement
     private static final int MAX_QUERIES = 2000;
-    private static final double INITIAL_BUDGET = 2000.0;  // Augmenté pour permettre 2000 requêtes complètes
+    private static final double INITIAL_BUDGET = 1000.0;  // Aligné avec l'entraînement Python
     private static final double SLA_LATENCY_THRESHOLD = 150.0;  // ms
     private static final int MAX_REPLICAS = 3;
     
