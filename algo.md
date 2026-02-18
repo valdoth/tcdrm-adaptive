@@ -8,15 +8,32 @@
 
 Le Q-learning est une technique de Reinforcement Learning model-free. Il apprend une fonction de valeur action-état Q(s,a) qui donne l'utilité espérée de prendre une action `a` dans un état `s`.
 
+#### Équation de mise à jour Q-Learning
+
+**Formule de Bellman** :
+
+```
+Q(s,a) ← Q(s,a) + α[r + γ·max_a' Q(s',a') - Q(s,a)]
+```
+
+Où :
+
+- **Q(s,a)** : Valeur action-état
+- **α** : Learning rate (0.1)
+- **r** : Récompense immédiate
+- **γ** : Discount factor (0.99)
+- **s'** : État suivant
+- **max_a' Q(s',a')** : Meilleure valeur Q pour l'état suivant
+
 #### Algorithme Q-Learning
 
 ```
-1. (∀s ∈ S)(∀a ∈ A(s)); initialize Q(s, a)
+1. Pour tout s ∈ S et a ∈ A(s) : initialiser Q(s, a)
 2. s := état initial observé
 3. loop
 4.   Choisir a ∈ A(s) selon politique ε-greedy
 5.   Exécuter action a et observer s' et r
-6.   Q[s, a] := Q[s, a] + α(r + γ * max_a' Q[s', a'] - Q[s, a])
+6.   Q[s, a] := Q[s, a] + α(r + γ·max_a' Q[s', a'] - Q[s, a])
 7.   s := s'
 8. end loop
 9. return π(s) = argmax_a Q(s, a)
@@ -135,7 +152,8 @@ Notre fonction de récompense est multi-objectifs et étend la formulation de RE
 
 ```
 R = ALPHA * R_sla + BETA * R_cost + GAMMA * R_budget
-  + DELTA * R_stability + EPSILON * R_timing + ZETA * R_tsla + ETA * R_proactive
+  + DELTA * R_stability + EPSILON * R_timing + ZETA * R_tsla
+  + ETA * R_proactive
 ```
 
 Où :
@@ -191,14 +209,3 @@ Où :
 | Espace d'états       | Discret (243) | Continu (8D) |
 | Généralisation       | Limitée       | Excellente   |
 | Mémoire              | Faible        | Élevée       |
-
-### 2.4 Comparaison avec READ2.md
-
-| Aspect            | READ2.md                   | Notre implémentation            |
-| ----------------- | -------------------------- | ------------------------------- |
-| Algorithmes       | Q-learning + SARSA(λ)      | Q-learning + DQN                |
-| α (Learning Rate) | 0.1                        | 0.1 (Q), 0.001 (DQN)            |
-| Convergence       | Episode ~17                | Plus rapide avec améliorations  |
-| Récompense        | R = β*Cost + (1-β)*Penalty | Multi-objectifs (7 composantes) |
-
-**Conclusion** : Basé sur READ2.md Figure 14 montrant que Q-learning converge plus vite que SARSA(λ), nous avons choisi Q-learning et l'avons amélioré avec Double Q, LR adaptatif et DQN.
