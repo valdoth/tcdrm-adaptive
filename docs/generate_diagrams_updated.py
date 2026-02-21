@@ -24,12 +24,12 @@ def extract_mermaid_diagrams(md_file):
     return diagrams, titles
 
 def generate_diagram_url(mermaid_code):
-    """Génère l'URL Mermaid.ink pour un diagramme"""
-    # Encoder le code Mermaid en base64
+    """Génère l'URL Mermaid.ink pour un diagramme avec encodage pako"""
     import base64
+    import zlib
     import json
     
-    # Créer la configuration Mermaid
+    # Créer l'objet de configuration
     config = {
         "code": mermaid_code,
         "mermaid": {
@@ -37,20 +37,50 @@ def generate_diagram_url(mermaid_code):
         }
     }
     
-    # Encoder en JSON puis en base64
+    # Convertir en JSON
     json_str = json.dumps(config)
-    encoded = base64.urlsafe_b64encode(json_str.encode('utf-8')).decode('utf-8')
     
-    # URL de l'API Mermaid.ink
-    url = f"https://mermaid.ink/img/{encoded}"
+    # Compresser avec pako (zlib en Python)
+    compressed = zlib.compress(json_str.encode('utf-8'), 9)
+    
+    # Encoder en base64 URL-safe
+    encoded = base64.urlsafe_b64encode(compressed).decode('utf-8')
+    
+    # URL de l'API Mermaid.ink avec format pako
+    url = f"https://mermaid.ink/img/pako:{encoded}"
     
     return url
 
 def download_diagram(url, output_path):
     """Télécharge un diagramme depuis Mermaid.ink"""
+    import time
+    
     try:
         print(f"  Téléchargement: {output_path}")
-        urllib.request.urlretrieve(url, output_path)
+        
+        # Ajouter des en-têtes HTTP complets pour simuler un navigateur
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Referer': 'https://mermaid.live/',
+            'Origin': 'https://mermaid.live',
+            'Connection': 'keep-alive',
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site',
+        }
+        
+        req = urllib.request.Request(url, headers=headers)
+        
+        # Petit délai pour éviter le rate limiting
+        time.sleep(0.5)
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            with open(output_path, 'wb') as out_file:
+                out_file.write(response.read())
+        
         print(f"  ✓ Sauvegardé")
         return True
     except Exception as e:
@@ -59,13 +89,13 @@ def download_diagram(url, output_path):
 
 def main():
     print("="*80)
-    print("GÉNÉRATION DES DIAGRAMMES TCDRM-ADAPTIVE MIS À JOUR")
+    print("GÉNÉRATION DES DIAGRAMMES TCDRM-ADAPTIVE 2024")
     print("="*80)
     print()
     
     # Chemins
     script_dir = Path(__file__).parent
-    md_file = script_dir / "workflow_diagrams_updated.md"
+    md_file = script_dir / "workflow_diagrams_2024.md"
     output_dir = script_dir / "diagrams"
     
     # Créer le répertoire de sortie
