@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from envs.tcdrm_env_v2 import TcdrmV2Env
 from agents.dqn_agent import DQNAgent
+from utils.tensorboard_callback import TensorBoardCallback
 
 
 def generate_varied_queries(n_queries: int, seed: int = 42, pattern: str = 'steady'):
@@ -532,6 +533,8 @@ if __name__ == '__main__':
                         help='Fréquence de mise à jour du target network (défaut: 20)')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output-dir', type=str, default=None)
+    parser.add_argument('--tensorboard', action='store_true', help='Enable TensorBoard logging')
+    parser.add_argument('--tensorboard-dir', type=str, default='runs', help='TensorBoard log directory')
     
     args = parser.parse_args()
     
@@ -540,6 +543,14 @@ if __name__ == '__main__':
         args.output_dir = f'results/dqn/run_{timestamp}'
     
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Créer callback TensorBoard si activé
+    tb_callback = None
+    if args.tensorboard:
+        exp_name = f"dqn_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        tb_callback = TensorBoardCallback(log_dir=args.tensorboard_dir, experiment_name=exp_name)
+        print(f"📊 TensorBoard activé: {tb_callback.log_path}")
+        print()
     
     # Entraîner
     agent, metrics = train_dqn_policy(
@@ -559,6 +570,25 @@ if __name__ == '__main__':
     # Sauvegarder
     save_model(agent, metrics, args.output_dir)
     plot_training_metrics(metrics, args.output_dir)
+    
+    # Logger hyperparamètres dans TensorBoard
+    if tb_callback:
+        hparams = {
+            'lr': args.lr,
+            'gamma': args.gamma,
+            'epsilon_start': args.epsilon_start,
+            'epsilon_min': args.epsilon_min,
+            'epsilon_decay': args.epsilon_decay,
+            'batch_size': args.batch_size,
+            'buffer_size': args.buffer_size,
+            'episodes': args.episodes
+        }
+        final_metrics = {
+            'final_reward': metrics['episode_rewards'][-1] if metrics['episode_rewards'] else 0,
+            'avg_reward_last_100': np.mean(metrics['episode_rewards'][-100:]) if len(metrics['episode_rewards']) >= 100 else 0
+        }
+        tb_callback.log_hyperparameters(hparams, final_metrics)
+        tb_callback.close()
     
     print()
     print("="*80)

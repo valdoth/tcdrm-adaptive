@@ -9,7 +9,7 @@ import java.util.Random;
  * to reproduce the article's graphs showing the drop after PSLA threshold
  */
 public class TcdrmBenchmarkPerQuery {
-    private static final int MAX_QUERIES = 2000;
+    private static final int MAX_QUERIES = 5000;
     
     // Intra-datacenter (local replica)
     private static final double BW_LOCAL_GBPS = 10.0;

@@ -4,9 +4,7 @@ import org.knowm.xchart.*;
 import org.knowm.xchart.style.Styler;
 import org.tcdrm.adaptive.benchmark.*;
 import org.tcdrm.adaptive.gateway.Py4JGateway;
-import org.tcdrm.adaptive.rl.PythonQLearningAgent;
 import org.tcdrm.adaptive.rl.PythonRLBridge;
-import org.tcdrm.adaptive.rl.TcdrmEnvironment;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -84,6 +82,7 @@ public class TcdrmComparisonCloudSim {
         }
         
         pythonBridge = bridge;
+        PythonRLBridge rlBridge = (PythonRLBridge) bridge;
         
         System.out.println("✅ Client Python connecté avec le modèle entraîné!");
         System.out.println("✅ Utilisation de l'agent Python pour les appels de méthodes");
@@ -94,11 +93,11 @@ public class TcdrmComparisonCloudSim {
         
         // R1 = F1 + F41 + F80 (3 fragments from different regions)
         double dataGbR1 = 5.3;
-        generateAllGraphsForQuery("R1", Arrays.asList(1.5, 2.0, 1.8), 3, dataGbR1);
+        generateAllGraphsForQuery(rlBridge, "R1", Arrays.asList(1.5, 2.0, 1.8), 3, dataGbR1);
         
         // R2 = F2 + F21 + F32 + F45 + F71 + F80 (6 fragments from different regions)
         double dataGbR2 = 11.9;
-        generateAllGraphsForQuery("R2", Arrays.asList(1.8, 2.2, 1.5, 2.5, 1.9, 2.0), 3, dataGbR2);
+        generateAllGraphsForQuery(rlBridge, "R2", Arrays.asList(1.8, 2.2, 1.5, 2.5, 1.9, 2.0), 3, dataGbR2);
         
         System.out.println();
         System.out.println("=".repeat(80));
@@ -134,7 +133,7 @@ public class TcdrmComparisonCloudSim {
         return false;
     }
 
-    private static void generateAllGraphsForQuery(String queryId, List<Double> fragmentSizes, 
+    private static void generateAllGraphsForQuery(PythonRLBridge bridge, String queryId, List<Double> fragmentSizes, 
                                                   int replicationFactor, double dataGb) throws IOException {
         System.out.println("\n=== Generating ALL combined graphs for query: " + queryId + " ===");
         System.out.println("Fragment sizes: " + fragmentSizes);
@@ -151,11 +150,11 @@ public class TcdrmComparisonCloudSim {
         
         // Exécuter le vrai modèle Python RL (Q-Learning) via Py4J
         System.out.println(">>> Exécution du VRAI modèle Python Q-Learning entraîné via Py4J...");
-        BenchmarkDataPerQuery pythonQLearningData = runRealPythonQLearning(queryId, dataGb, 42L);
+        BenchmarkDataPerQuery pythonQLearningData = runRealPythonQLearning(bridge, queryId, dataGb, 42L);
         
-        // Exécuter le vrai modèle Python DQN via Py4J
+        // Exécuter le vrai modèle Python RL (DQN) via Py4J
         System.out.println(">>> Exécution du VRAI modèle Python DQN entraîné via Py4J...");
-        BenchmarkDataPerQuery pythonDQNData = runRealPythonDQN(queryId, dataGb, 42L);
+        BenchmarkDataPerQuery pythonDQNData = runRealPythonDQN(bridge, queryId, dataGb, 43L);
         
         // Log data sizes for verification
         int sampleIndex = Math.min(500, pythonQLearningData.timePerQueryMs().size() - 1);
@@ -166,13 +165,6 @@ public class TcdrmComparisonCloudSim {
             System.out.println("  Sample NOREP time at query " + sampleIndex + ": " + String.format("%.2f", norepData.timePerQueryMs().get(sampleIndex)) + " s");
         }
 
-        // 1. Response Time - 3 curves (Q-Learning, TCDRM, NOREP)
-        generateDualGraph(queryId, "response_time", "Impact of Replication on Response Time",
-                         "Number of Queries", "Response Time (seconds)",
-                         pythonQLearningData.queryNumbers(), pythonQLearningData.timePerQueryMs(),
-                         tcdrmData.queryNumbers(), tcdrmData.timePerQueryMs(),
-                         norepData.queryNumbers(), norepData.timePerQueryMs());
-        
         // 1. Response Time - 4 curves (Q-Learning, DQN, TCDRM, NOREP)
         generateQuadGraph(queryId, "response_time", "Impact of Replication on Response Time",
                          "Number of Queries", "Response Time (seconds)",
@@ -181,31 +173,17 @@ public class TcdrmComparisonCloudSim {
                          tcdrmData.queryNumbers(), tcdrmData.timePerQueryMs(),
                          norepData.queryNumbers(), norepData.timePerQueryMs());
         
-        // 2. CPU Consumption - 3 curves
+        // 2. CPU Consumption - 4 curves
         List<Double> pythonQLearningCpu = extractCpuCost(pythonQLearningData);
         List<Double> pythonDQNCpu = extractCpuCost(pythonDQNData);
         List<Double> tcdrmCpu = extractCpuCost(tcdrmData);
         List<Double> norepCpu = extractCpuCost(norepData);
-        generateDualGraph(queryId, "cpu_consumption", "Impact of Replication on CPU Consumption",
-                         "Number of Queries", "CPU Cost ($)",
-                         pythonQLearningData.queryNumbers(), pythonQLearningCpu,
-                         tcdrmData.queryNumbers(), tcdrmCpu,
-                         norepData.queryNumbers(), norepCpu);
-        
-        // 2. CPU Consumption - 4 curves
         generateQuadGraph(queryId, "cpu_consumption", "Impact of Replication on CPU Consumption",
                          "Number of Queries", "CPU Cost ($)",
                          pythonQLearningData.queryNumbers(), pythonQLearningCpu,
                          pythonDQNData.queryNumbers(), pythonDQNCpu,
                          tcdrmData.queryNumbers(), tcdrmCpu,
                          norepData.queryNumbers(), norepCpu);
-        
-        // 3. BW Price per Query - 3 curves
-        generateDualGraph(queryId, "bw_price_per_query", "Impact of Replication on BW PRICE",
-                         "Number of Queries", "BW Cost per Query ($)",
-                         pythonQLearningData.queryNumbers(), pythonQLearningData.costPerQuery(),
-                         tcdrmData.queryNumbers(), tcdrmData.costPerQuery(),
-                         norepData.queryNumbers(), norepData.costPerQuery());
         
         // 3. BW Price per Query - 4 curves
         generateQuadGraph(queryId, "bw_price_per_query", "Impact of Replication on BW PRICE",
@@ -215,25 +193,11 @@ public class TcdrmComparisonCloudSim {
                          tcdrmData.queryNumbers(), tcdrmData.costPerQuery(),
                          norepData.queryNumbers(), norepData.costPerQuery());
         
-        // 4. Cumulative BW Price - 3 curves
-        generateDualGraph(queryId, "cumulative_bw_price", "PRIX CUMULATIF BW",
-                         "Number of Queries", "Cumulative BW Cost ($)",
-                         pythonQLearningData.queryNumbers(), pythonQLearningData.cumulativeCost(),
-                         tcdrmData.queryNumbers(), tcdrmData.cumulativeCost(),
-                         norepData.queryNumbers(), norepData.cumulativeCost());
-        
         // 4. Cumulative BW Price - 4 curves
         generateQuadGraph(queryId, "cumulative_bw_price", "PRIX CUMULATIF BW",
                          "Number of Queries", "Cumulative BW Cost ($)",
                          pythonQLearningData.queryNumbers(), pythonQLearningData.cumulativeCost(),
                          pythonDQNData.queryNumbers(), pythonDQNData.cumulativeCost(),
-                         tcdrmData.queryNumbers(), tcdrmData.cumulativeCost(),
-                         norepData.queryNumbers(), norepData.cumulativeCost());
-        
-        // 5. Total Cost - 3 curves
-        generateDualGraph(queryId, "total_cost", "Total Cost Comparison",
-                         "Number of Queries", "Total Cost ($)",
-                         pythonQLearningData.queryNumbers(), pythonQLearningData.cumulativeCost(),
                          tcdrmData.queryNumbers(), tcdrmData.cumulativeCost(),
                          norepData.queryNumbers(), norepData.cumulativeCost());
         
@@ -245,44 +209,32 @@ public class TcdrmComparisonCloudSim {
                          tcdrmData.queryNumbers(), tcdrmData.cumulativeCost(),
                          norepData.queryNumbers(), norepData.cumulativeCost());
 
-        System.out.println("✓ All combined graphs (3 curves + 4 curves) generated for " + queryId + "\n");
+        // 6. Graphes de métriques TCDRM Statique (similaires aux graphes d'entraînement)
+        System.out.println(">>> Génération des graphes de métriques TCDRM Statique...");
+        TcdrmMetricsPlotter.generateMetricsPlot(tcdrmData, "images/tcdrm_metrics_" + queryId + ".png");
+
+        System.out.println("✓ All graphs (4 curves) generated for " + queryId + "\n");
     }
 
     /**
-     * Exécute le VRAI modèle Python RL entraîné via Py4J
-     * Utilise TCDRM Statique comme baseline et appelle Python pour les décisions
+     * Exécute le VRAI modèle Python Q-Learning entraîné via Py4J
+     * Utilise RealRLBenchmark pour exécuter réellement le modèle Python
      */
-    private static BenchmarkDataPerQuery runRealPythonQLearning(String queryId, double dataGb, Long seed) {
-        System.out.println("   Utilisation du modèle Python RL entraîné via Py4J Gateway...");
-        System.out.println("   Note: Utilisation des données TCDRM Statique comme simulation simplifiée");
+    private static BenchmarkDataPerQuery runRealPythonQLearning(PythonRLBridge bridge, String queryId, double dataGb, Long seed) {
+        System.out.println("   Exécution du VRAI modèle Q-Learning Python via Py4J...");
         
-        // Pour l'instant, utiliser les données TCDRM Statique comme approximation
-        // TODO: Implémenter une vraie simulation CloudSim avec appels Python
+        // Vérifier que le modèle est chargé
+        if (!bridge.isQLearningReady()) {
+            throw new RuntimeException("❌ Modèle Q-Learning non chargé! Assurez-vous que le client Python est connecté avec --qlearning-model");
+        }
+        
         try {
-            // Utiliser TcdrmBenchmarkPerQuery pour générer les données
-            TcdrmBenchmarkPerQuery benchmark = new TcdrmBenchmarkPerQuery(3, seed);
-            // Créer une liste de fragments (simplifié: un seul fragment de la taille totale)
-            List<Double> fragmentSizes = Arrays.asList(dataGb);
-            BenchmarkDataPerQuery tcdrmData = benchmark.computeBenchmark(queryId, fragmentSizes);
+            // Créer le benchmark RL réel
+            RealRLBenchmark rlBenchmark = new RealRLBenchmark(bridge, "qlearning", seed);
+            BenchmarkDataPerQuery result = rlBenchmark.computeBenchmark(queryId + "_QLearning", dataGb);
             
-            // Créer une copie avec le nom Python RL
-            List<Integer> queryNumbers = new ArrayList<>(tcdrmData.queryNumbers());
-            List<Double> timePerQuery = new ArrayList<>(tcdrmData.timePerQueryMs());
-            List<Double> costPerQuery = new ArrayList<>(tcdrmData.costPerQuery());
-            List<Double> cumulativeCost = new ArrayList<>(tcdrmData.cumulativeCost());
-            List<Integer> replicaCount = new ArrayList<>(tcdrmData.replicaCount());
-            
-            // Appliquer une légère amélioration pour simuler l'effet du RL
-            // (réduction de 10-15% de la latence grâce à l'apprentissage)
-            for (int i = 0; i < timePerQuery.size(); i++) {
-                double improvement = 0.85 + (Math.random() * 0.10); // 85-95% de la latence originale
-                timePerQuery.set(i, timePerQuery.get(i) * improvement);
-            }
-            
-            System.out.println("   ✓ Simulation Q-Learning terminée (basée sur TCDRM Statique avec amélioration RL)");
-            
-            return new BenchmarkDataPerQuery(queryId + "_QLearning", queryNumbers, timePerQuery, 
-                                             costPerQuery, cumulativeCost, replicaCount);
+            System.out.println("   ✓ Simulation Q-Learning terminée (VRAIES décisions du modèle Python)");
+            return result;
                                              
         } catch (Exception e) {
             System.err.println("❌ Erreur lors de la simulation Q-Learning: " + e.getMessage());
@@ -293,36 +245,23 @@ public class TcdrmComparisonCloudSim {
 
     /**
      * Exécute le VRAI modèle Python DQN entraîné via Py4J
-     * Utilise TCDRM Statique comme baseline avec amélioration DQN
+     * Utilise RealRLBenchmark pour exécuter réellement le modèle Python
      */
-    private static BenchmarkDataPerQuery runRealPythonDQN(String queryId, double dataGb, Long seed) {
-        System.out.println("   Utilisation du modèle Python DQN entraîné via Py4J Gateway...");
-        System.out.println("   Note: Utilisation des données TCDRM Statique comme simulation simplifiée");
+    private static BenchmarkDataPerQuery runRealPythonDQN(PythonRLBridge bridge, String queryId, double dataGb, Long seed) {
+        System.out.println("   Exécution du VRAI modèle DQN Python via Py4J...");
+        
+        // Vérifier que le modèle est chargé
+        if (!bridge.isDQNReady()) {
+            throw new RuntimeException("❌ Modèle DQN non chargé! Assurez-vous que le client Python est connecté avec --dqn-model");
+        }
         
         try {
-            // Utiliser TcdrmBenchmarkPerQuery pour générer les données
-            TcdrmBenchmarkPerQuery benchmark = new TcdrmBenchmarkPerQuery(3, seed + 1); // Seed différent
-            List<Double> fragmentSizes = Arrays.asList(dataGb);
-            BenchmarkDataPerQuery tcdrmData = benchmark.computeBenchmark(queryId, fragmentSizes);
+            // Créer le benchmark RL réel
+            RealRLBenchmark rlBenchmark = new RealRLBenchmark(bridge, "dqn", seed);
+            BenchmarkDataPerQuery result = rlBenchmark.computeBenchmark(queryId + "_DQN", dataGb);
             
-            // Créer une copie avec le nom DQN
-            List<Integer> queryNumbers = new ArrayList<>(tcdrmData.queryNumbers());
-            List<Double> timePerQuery = new ArrayList<>(tcdrmData.timePerQueryMs());
-            List<Double> costPerQuery = new ArrayList<>(tcdrmData.costPerQuery());
-            List<Double> cumulativeCost = new ArrayList<>(tcdrmData.cumulativeCost());
-            List<Integer> replicaCount = new ArrayList<>(tcdrmData.replicaCount());
-            
-            // Appliquer une amélioration DQN (légèrement meilleure que Q-Learning)
-            // (réduction de 15-20% de la latence grâce au deep learning)
-            for (int i = 0; i < timePerQuery.size(); i++) {
-                double improvement = 0.80 + (Math.random() * 0.10); // 80-90% de la latence originale
-                timePerQuery.set(i, timePerQuery.get(i) * improvement);
-            }
-            
-            System.out.println("   ✓ Simulation DQN terminée (basée sur TCDRM Statique avec amélioration DQN)");
-            
-            return new BenchmarkDataPerQuery(queryId + "_DQN", queryNumbers, timePerQuery, 
-                                             costPerQuery, cumulativeCost, replicaCount);
+            System.out.println("   ✓ Simulation DQN terminée (VRAIES décisions du modèle Python)");
+            return result;
                                              
         } catch (Exception e) {
             System.err.println("❌ Erreur lors de la simulation DQN: " + e.getMessage());
@@ -331,58 +270,42 @@ public class TcdrmComparisonCloudSim {
         }
     }
 
-    private static void generateDualGraph(String queryId, String graphType, String title,
-                                          String xLabel, String yLabel,
-                                          List<Integer> pythonX, List<Double> pythonY,
-                                          List<Integer> tcdrmX, List<Double> tcdrmY,
-                                          List<Integer> norepX, List<Double> norepY) throws IOException {
-        // Raw chart (left)
-        XYChart rawChart = createChart(title + " (Raw) - " + queryId, xLabel, yLabel);
-        addSeries(rawChart, "TCDRM (Python RL)", pythonX, pythonY, new Color(255, 193, 7), 1.0f);
-        addSeries(rawChart, "NOREP", norepX, norepY, new Color(255, 127, 14), 1.0f);
-        addSeries(rawChart, "TCDRM Statique", tcdrmX, tcdrmY, new Color(244, 67, 54), 1.2f);
-        
-        // Smoothed chart (right)
-        XYChart smoothChart = createChart(title + " (Smoothed) - " + queryId, xLabel, yLabel);
-        List<Double> pythonSmoothed = movingAverage(pythonY, 50);
-        List<Double> tcdrmSmoothed = movingAverage(tcdrmY, 50);
-        List<Double> norepSmoothed = movingAverage(norepY, 50);
-        addSeries(smoothChart, "TCDRM (Python RL)", pythonX, pythonSmoothed, new Color(255, 193, 7), 2.5f);
-        addSeries(smoothChart, "NOREP", norepX, norepSmoothed, new Color(255, 127, 14), 2.5f);
-        addSeries(smoothChart, "TCDRM Statique", tcdrmX, tcdrmSmoothed, new Color(244, 67, 54), 3.0f);
-        
-        // Combine side by side - save with '_3curves' suffix
-        combineTwoCharts(rawChart, smoothChart, "images/tcdrm_combined_" + graphType + "_" + queryId + "_3curves.png");
-        System.out.println("  ✓ " + title + " (3 curves: Q-Learning, TCDRM, NOREP)");
-    }
-
     private static void generateQuadGraph(String queryId, String graphType, String title,
                                           String xLabel, String yLabel,
                                           List<Integer> qlearningX, List<Double> qlearningY,
                                           List<Integer> dqnX, List<Double> dqnY,
                                           List<Integer> tcdrmX, List<Double> tcdrmY,
                                           List<Integer> norepX, List<Double> norepY) throws IOException {
-        // Raw chart (left)
-        XYChart rawChart = createChart(title + " (Raw) - " + queryId, xLabel, yLabel);
+        // Raw chart (left) - pour graphes combinés (max 1000)
+        XYChart rawChart = createChartCombined(title + " (Raw) - " + queryId, xLabel, yLabel);
         addSeries(rawChart, "Q-Learning", qlearningX, qlearningY, new Color(255, 193, 7), 1.0f);
         addSeries(rawChart, "DQN", dqnX, dqnY, new Color(76, 175, 80), 1.0f);
         addSeries(rawChart, "NOREP", norepX, norepY, new Color(255, 127, 14), 1.0f);
         addSeries(rawChart, "TCDRM Statique", tcdrmX, tcdrmY, new Color(244, 67, 54), 1.2f);
         
-        // Smoothed chart (right)
-        XYChart smoothChart = createChart(title + " (Smoothed) - " + queryId, xLabel, yLabel);
+        // Smoothed chart (right) - pour graphes combinés (max 1000)
+        XYChart smoothChartCombined = createChartCombined(title + " (Smoothed) - " + queryId, xLabel, yLabel);
         List<Double> qlearningSmoothed = movingAverage(qlearningY, 50);
         List<Double> dqnSmoothed = movingAverage(dqnY, 50);
         List<Double> tcdrmSmoothed = movingAverage(tcdrmY, 50);
         List<Double> norepSmoothed = movingAverage(norepY, 50);
-        addSeries(smoothChart, "Q-Learning", qlearningX, qlearningSmoothed, new Color(255, 193, 7), 2.5f);
-        addSeries(smoothChart, "DQN", dqnX, dqnSmoothed, new Color(76, 175, 80), 2.5f);
-        addSeries(smoothChart, "NOREP", norepX, norepSmoothed, new Color(255, 127, 14), 2.5f);
-        addSeries(smoothChart, "TCDRM Statique", tcdrmX, tcdrmSmoothed, new Color(244, 67, 54), 3.0f);
+        addSeries(smoothChartCombined, "Q-Learning", qlearningX, qlearningSmoothed, new Color(255, 193, 7), 2.5f);
+        addSeries(smoothChartCombined, "DQN", dqnX, dqnSmoothed, new Color(76, 175, 80), 2.5f);
+        addSeries(smoothChartCombined, "NOREP", norepX, norepSmoothed, new Color(255, 127, 14), 2.5f);
+        addSeries(smoothChartCombined, "TCDRM Statique", tcdrmX, tcdrmSmoothed, new Color(244, 67, 54), 3.0f);
         
-        // Combine side by side - save with '_4curves' suffix
-        combineTwoCharts(rawChart, smoothChart, "images/tcdrm_combined_" + graphType + "_" + queryId + "_4curves.png");
-        System.out.println("  ✓ " + title + " (4 curves: Q-Learning, DQN, TCDRM, NOREP)");
+        // Combine side by side - save with '_4curves' suffix (max X = 1000)
+        combineTwoCharts(rawChart, smoothChartCombined, "images/tcdrm_combined_" + graphType + "_" + queryId + "_4curves.png");
+        System.out.println("  ✓ " + title + " (4 curves combined: Q-Learning, DQN, TCDRM, NOREP)");
+        
+        // Save smoothed chart separately (max X = 5000)
+        XYChart smoothChartAlone = createChartSmoothedAlone(title + " (Smoothed) - " + queryId, xLabel, yLabel);
+        addSeries(smoothChartAlone, "Q-Learning", qlearningX, qlearningSmoothed, new Color(255, 193, 7), 2.5f);
+        addSeries(smoothChartAlone, "DQN", dqnX, dqnSmoothed, new Color(76, 175, 80), 2.5f);
+        addSeries(smoothChartAlone, "NOREP", norepX, norepSmoothed, new Color(255, 127, 14), 2.5f);
+        addSeries(smoothChartAlone, "TCDRM Statique", tcdrmX, tcdrmSmoothed, new Color(244, 67, 54), 3.0f);
+        BitmapEncoder.saveBitmap(smoothChartAlone, "images/tcdrm_smoothed_" + graphType + "_" + queryId + "_4curves.png", BitmapEncoder.BitmapFormat.PNG);
+        System.out.println("  ✓ " + title + " (4 curves smoothed only: Q-Learning, DQN, TCDRM, NOREP)");
     }
 
     private static List<Double> extractCpuCost(BenchmarkDataPerQuery data) {
@@ -415,10 +338,10 @@ public class TcdrmComparisonCloudSim {
         ImageIO.write(combined, "png", new File(filename));
     }
 
-    private static XYChart createChart(String title, String xLabel, String yLabel) {
+    private static XYChart createChartCombined(String title, String xLabel, String yLabel) {
         XYChart chart = new XYChartBuilder()
-            .width(600)
-            .height(400)
+            .width(1200)
+            .height(500)
             .title(title)
             .xAxisTitle(xLabel)
             .yAxisTitle(yLabel)
@@ -429,7 +352,26 @@ public class TcdrmComparisonCloudSim {
         chart.getStyler().setMarkerSize(0);
         chart.getStyler().setXAxisTickMarkSpacingHint(100);
         chart.getStyler().setXAxisMin(0.0);
-        chart.getStyler().setXAxisMax(1000.0);
+        chart.getStyler().setXAxisMax(1000.0);  // Max 1000 pour les graphes combinés
+        
+        return chart;
+    }
+
+    private static XYChart createChartSmoothedAlone(String title, String xLabel, String yLabel) {
+        XYChart chart = new XYChartBuilder()
+            .width(1200)
+            .height(500)
+            .title(title)
+            .xAxisTitle(xLabel)
+            .yAxisTitle(yLabel)
+            .build();
+
+        chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
+        chart.getStyler().setDefaultSeriesRenderStyle(XYSeries.XYSeriesRenderStyle.Line);
+        chart.getStyler().setMarkerSize(0);
+        chart.getStyler().setXAxisTickMarkSpacingHint(100);
+        chart.getStyler().setXAxisMin(0.0);
+        chart.getStyler().setXAxisMax(5000.0);  // Max 5000 pour les graphes smoothed seuls
         
         return chart;
     }

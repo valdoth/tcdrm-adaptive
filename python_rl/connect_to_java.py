@@ -67,7 +67,7 @@ class PythonRLBridge:
         Sélectionne une action avec Q-Learning.
         
         Args:
-            state_array: Liste Java [latency, budget, replicas, popularity, cost]
+            state_array: Tableau Java double[] [latency, budget, replicas, popularity, cost]
             
         Returns:
             Action (0=NOOP, 1=REPLICATE, 2=DELETE)
@@ -75,8 +75,11 @@ class PythonRLBridge:
         if self.qlearning_agent is None:
             return 0  # NOOP par défaut
         
+        # Convertir double[] Java en liste Python
+        state_list = list(state_array) if hasattr(state_array, '__iter__') else [state_array]
+        
         # Convertir état Java en état discret
-        state = self._java_state_to_discrete(state_array)
+        state = self._java_state_to_discrete(state_list)
         state_idx = self.env.state_to_index(state)
         
         # Sélectionner action (greedy, pas d'exploration)
@@ -89,7 +92,7 @@ class PythonRLBridge:
         Sélectionne une action avec DQN.
         
         Args:
-            state_array: Liste Java [latency, budget, replicas, popularity, cost, ...]
+            state_array: Tableau Java double[] [latency, budget, replicas, popularity, cost, ...]
             
         Returns:
             Action (0=NOOP, 1=REPLICATE, 2=DELETE)
@@ -97,8 +100,15 @@ class PythonRLBridge:
         if self.dqn_agent is None:
             return 0  # NOOP par défaut
         
+        # Convertir double[] Java en liste Python
+        state_list = list(state_array) if hasattr(state_array, '__iter__') else [state_array]
+        
+        # Étendre l'état à 8 dimensions si nécessaire (DQN attend 8 dimensions)
+        while len(state_list) < 8:
+            state_list.append(0.0)
+        
         # Convertir en tensor PyTorch
-        state_tensor = torch.FloatTensor(list(state_array)).unsqueeze(0)
+        state_tensor = torch.FloatTensor(state_list[:8]).unsqueeze(0)
         
         # Sélectionner action (greedy)
         with torch.no_grad():

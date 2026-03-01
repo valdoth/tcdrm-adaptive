@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from envs.tcdrm_qlearning_env import TcdrmQLearningEnv
 from agents.simple_qlearning_agent import SimpleQLearningAgent
+from utils.tensorboard_callback import TensorBoardCallback
 
 
 def generate_varied_queries(n_queries: int, seed: int, pattern: str = 'steady'):
@@ -198,7 +199,8 @@ def train_qlearning(
     agent: SimpleQLearningAgent,
     n_episodes: int = 2000,
     verbose: bool = True,
-    use_realistic_workload: bool = True
+    use_realistic_workload: bool = True,
+    tensorboard_callback: TensorBoardCallback = None
 ):
     """
     Entraîne l'agent Q-Learning avec patterns réalistes.
@@ -242,6 +244,8 @@ def train_qlearning(
     iterator = tqdm(range(n_episodes), desc="Training") if verbose else range(n_episodes)
     
     for episode in iterator:
+        if tensorboard_callback:
+            tensorboard_callback.on_episode_start(episode)
         # Sélectionner pattern
         pattern = np.random.choice(patterns, p=pattern_probs)
         episode_patterns.append(pattern)
@@ -279,6 +283,19 @@ def train_qlearning(
             # Mettre à jour Q-table
             agent.update(state_idx, action, reward, next_state_idx, done)
             
+            # Logger step dans TensorBoard
+            if tensorboard_callback:
+                step_metrics = {
+                    'reward': reward,
+                    'latency': info.get('latency', 0),
+                    'cost': info.get('cost', 0),
+                    'budget': info.get('budget', 0),
+                    'replicas': info.get('replicas', 0),
+                    'action': action,
+                    'sla_violations': info.get('sla_violations', 0)
+                }
+                tensorboard_callback.on_step(agent.training_steps, step_metrics)
+            
             # Accumuler statistiques
             episode_reward += reward
             episode_length += 1
@@ -298,6 +315,21 @@ def train_qlearning(
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
         sla_rates.append(info.get('sla_compliance_rate', 0))
+        
+        # Logger épisode dans TensorBoard
+        if tensorboard_callback:
+            stats = agent.get_stats()
+            episode_metrics = {
+                'total_reward': episode_reward,
+                'avg_latency': info.get('avg_latency', 0),
+                'total_cost': info.get('total_cost', 0),
+                'final_budget': info.get('budget', 0),
+                'avg_replicas': info.get('avg_replicas', 0),
+                'sla_violations': info.get('sla_violations', 0),
+                'epsilon': agent.epsilon,
+                'states_explored': stats['states_explored']
+            }
+            tensorboard_callback.on_episode_end(episode, episode_metrics)
         
         # Affichage périodique
         if verbose and (episode + 1) % 100 == 0:
@@ -391,6 +423,10 @@ def main():
                        help='Output model path')
     parser.add_argument('--eval-episodes', type=int, default=10, help='Evaluation episodes')
     
+    # TensorBoard
+    parser.add_argument('--tensorboard', action='store_true', help='Enable TensorBoard logging')
+    parser.add_argument('--tensorboard-dir', type=str, default='runs', help='TensorBoard log directory')
+    
     args = parser.parse_args()
     
     # Créer environnement
@@ -419,9 +455,18 @@ def main():
         epsilon_decay=args.epsilon_decay
     )
     
+    # Créer callback TensorBoard si activé
+    tb_callback = None
+    if args.tensorboard:
+        from datetime import datetime
+        exp_name = f"qlearning_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        tb_callback = TensorBoardCallback(log_dir=args.tensorboard_dir, experiment_name=exp_name)
+        print(f"📊 TensorBoard activé: {tb_callback.log_path}")
+        print()
+    
     # Entraîner
     print("Entraînement en cours...")
-    train_stats = train_qlearning(env, agent, args.episodes, verbose=True)
+    train_stats = train_qlearning(env, agent, args.episodes, verbose=True, tensorboard_callback=tb_callback)
     
     # Statistiques finales
     print("\n" + "="*80)
@@ -467,6 +512,24 @@ def main():
     agent.save(args.output)
     print(f"✅ Modèle sauvegardé: {args.output}")
     print()
+    
+    # Logger hyperparamètres dans TensorBoard
+    if tb_callback:
+        hparams = {
+            'lr': args.lr,
+            'gamma': args.gamma,
+            'epsilon_start': args.epsilon_start,
+            'epsilon_min': args.epsilon_min,
+            'epsilon_decay': args.epsilon_decay,
+            'episodes': args.episodes,
+            'data_gb': args.data_gb
+        }
+        final_metrics = {
+            'final_reward': eval_stats['mean_reward'],
+            'final_sla': eval_stats['mean_sla']
+        }
+        tb_callback.log_hyperparameters(hparams, final_metrics)
+        tb_callback.close()
 
 
 if __name__ == '__main__':

@@ -9,7 +9,7 @@ import java.util.Random;
  * Always uses remote access (inter-provider)
  */
 public class NoRepBenchmarkPerQuery {
-    private static final int MAX_QUERIES = 2000;
+    private static final int MAX_QUERIES = 5000;
     
     // Inter-provider (always remote)
     private static final double BW_REMOTE_GBPS = 1.0;

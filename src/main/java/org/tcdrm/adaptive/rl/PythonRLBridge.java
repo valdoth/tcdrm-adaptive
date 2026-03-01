@@ -38,4 +38,35 @@ public interface PythonRLBridge {
      * @return Résultat du step [latency, cost, replicas, reward, done]
      */
     List<Double> executeStep(int action);
+    
+    /**
+     * Sélectionne une action avec le modèle Q-Learning
+     * 
+     * @param state État [latency, budget, replicas, popularity, cost]
+     * @return Action (0=NOOP, 1=REPLICATE, 2=DELETE)
+     */
+    int selectActionQLearning(double[] state);
+    
+    /**
+     * Sélectionne une action avec le modèle DQN
+     * 
+     * @param state État [latency, budget, replicas, popularity, cost, ...]
+     * @return Action (0=NOOP, 1=REPLICATE, 2=DELETE)
+     */
+    int selectActionDQN(double[] state);
+    
+    /**
+     * Vérifie si le modèle Q-Learning est chargé
+     */
+    boolean isQLearningReady();
+    
+    /**
+     * Vérifie si le modèle DQN est chargé
+     */
+    boolean isDQNReady();
+    
+    /**
+     * Retourne les informations sur les modèles chargés
+     */
+    String getModelInfo();
 }

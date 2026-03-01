@@ -1,8 +1,8 @@
 #!/bin/bash
 # Workflow complet TCDRM-ADAPTIVE
-# 1. Entraîne les modèles RL (Q-Learning Simple + DQN) avec Python
-# 2. Lance les simulations CloudSim avec Java + Py4J
-# 3. Génère les graphiques comparatifs
+# 1. Entraîne les modèles RL (Q-Learning Simple + DQN) avec Python + TensorBoard
+# 2. Lance les simulations CloudSim avec Java + Py4J (VRAIES décisions RL)
+# 3. Génère les graphiques comparatifs avec RealRLBenchmark
 
 set -e
 
@@ -18,19 +18,22 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="$PROJECT_ROOT/python_rl"
 PYTHON_PID=""
 JAVA_PID=""
+TENSORBOARD_PID=""
 
 # Fonction de nettoyage initial
 cleanup_initial() {
     echo -e "${BLUE}🧹 Nettoyage des processus et ports existants...${NC}"
     
-    # Tuer les processus Java/Python
+    # Tuer les processus Java/Python/TensorBoard
     pkill -f "TcdrmComparisonCloudSim" 2>/dev/null || true
     pkill -f "connect_to_java.py" 2>/dev/null || true
     pkill -f "TcdrmArticle" 2>/dev/null || true
+    pkill -f "tensorboard" 2>/dev/null || true
     
-    # Libérer les ports Py4J
+    # Libérer les ports Py4J et TensorBoard
     lsof -ti:25333 2>/dev/null | xargs kill -9 2>/dev/null || true
     lsof -ti:25334 2>/dev/null | xargs kill -9 2>/dev/null || true
+    lsof -ti:6006 2>/dev/null | xargs kill -9 2>/dev/null || true
     
     sleep 2
     
@@ -75,8 +78,14 @@ cleanup() {
         kill $JAVA_PID 2>/dev/null || true
     fi
     
+    if [ ! -z "$TENSORBOARD_PID" ]; then
+        echo "Arrêt de TensorBoard (PID: $TENSORBOARD_PID)..."
+        kill $TENSORBOARD_PID 2>/dev/null || true
+    fi
+    
     pkill -f "connect_to_java.py" 2>/dev/null || true
     pkill -f "TcdrmComparison" 2>/dev/null || true
+    pkill -f "tensorboard" 2>/dev/null || true
     
     echo -e "${GREEN}✅ Nettoyage terminé${NC}"
 }
@@ -92,10 +101,13 @@ show_help() {
     echo "  --skip-compile        Sauter la compilation Java"
     echo "  --skip-simulation     Sauter la simulation Java (seulement entraîner)"
     echo "  --n-episodes N        Nombre d'épisodes d'entraînement [défaut: 2000]"
+    echo "  --tensorboard         Activer TensorBoard pour monitoring"
+    echo "  --tensorboard-port N  Port TensorBoard [défaut: 6006]"
     echo "  --help                Afficher cette aide"
     echo ""
     echo "Exemples:"
     echo "  $0                              # Workflow complet"
+    echo "  $0 --tensorboard                # Avec monitoring TensorBoard"
     echo "  $0 --skip-training              # Seulement simulation avec modèles existants"
     echo "  $0 --n-episodes 3000            # Entraînement prolongé"
     echo "  $0 --skip-simulation            # Seulement entraînement"
@@ -106,6 +118,8 @@ SKIP_TRAINING=false
 SKIP_COMPILE=false
 SKIP_SIMULATION=false
 N_EPISODES=2000
+ENABLE_TENSORBOARD=false
+TENSORBOARD_PORT=6006
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -125,6 +139,14 @@ while [[ $# -gt 0 ]]; do
             N_EPISODES="$2"
             shift 2
             ;;
+        --tensorboard)
+            ENABLE_TENSORBOARD=true
+            shift
+            ;;
+        --tensorboard-port)
+            TENSORBOARD_PORT="$2"
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -138,8 +160,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "============================================================"
-echo "  WORKFLOW COMPLET TCDRM-ADAPTIVE (OPTIMISÉ)"
-echo "  Python (Entraînement) + Java/CloudSim (Simulation)"
+echo "  WORKFLOW COMPLET TCDRM-ADAPTIVE (OPTIMISÉ + RL RÉEL)"
+echo "  Python (Entraînement) + Java/CloudSim (Vraies Décisions RL)"
 echo "  Configuration: python_rl/config/optimized_config.json"
 echo "============================================================"
 echo ""
@@ -148,9 +170,11 @@ echo "  - Épisodes d'entraînement: $N_EPISODES"
 echo "  - Skip training: $SKIP_TRAINING"
 echo "  - Skip compile: $SKIP_COMPILE"
 echo "  - Skip simulation: $SKIP_SIMULATION"
+echo "  - TensorBoard: $ENABLE_TENSORBOARD (port: $TENSORBOARD_PORT)"
 echo "  - Warm-up progressif: 600 requêtes (k=5)"
 echo "  - MAX_REPLICAS adaptatif: 5-13"
 echo "  - PLSA amélioré: pondération exponentielle"
+echo "  - RealRLBenchmark: Vraies décisions Python via Py4J"
 echo ""
 
 cleanup_initial
@@ -218,33 +242,93 @@ if [ "$SKIP_TRAINING" = false ]; then
     
     cd "$PYTHON_DIR"
     
-    # Q-Learning Simple avec configuration optimisée
+    # Démarrer TensorBoard si activé
+    if [ "$ENABLE_TENSORBOARD" = true ]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo -e "${BLUE}  📊 TENSORBOARD - MONITORING EN TEMPS RÉEL${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo ">>> Démarrage de TensorBoard (port $TENSORBOARD_PORT)..."
+        cd "$PYTHON_DIR"
+        uv run tensorboard --logdir=runs --port=$TENSORBOARD_PORT --bind_all > /tmp/tensorboard.log 2>&1 &
+        TENSORBOARD_PID=$!
+        cd "$PROJECT_ROOT"
+        sleep 3
+        
+        echo -e "${GREEN}✅ TensorBoard démarré (PID: $TENSORBOARD_PID)${NC}"
+        echo ""
+        echo -e "${BLUE}┌─────────────────────────────────────────────────────────┐${NC}"
+        echo -e "${BLUE}│  🌐 DASHBOARD TENSORBOARD ACCESSIBLE:                  │${NC}"
+        echo -e "${BLUE}│                                                         │${NC}"
+        echo -e "${BLUE}│     ${GREEN}http://localhost:$TENSORBOARD_PORT${BLUE}                            │${NC}"
+        echo -e "${BLUE}│                                                         │${NC}"
+        echo -e "${BLUE}│  📊 Métriques en temps réel:                           │${NC}"
+        echo -e "${BLUE}│     • Reward par step et épisode                       │${NC}"
+        echo -e "${BLUE}│     • Latence, Coût, Budget, Réplicas                  │${NC}"
+        echo -e "${BLUE}│     • Epsilon, States Explored (Q-Learning)            │${NC}"
+        echo -e "${BLUE}│     • Loss, Q-values (DQN)                             │${NC}"
+        echo -e "${BLUE}│                                                         │${NC}"
+        echo -e "${BLUE}│  💡 Ouvrez dans votre navigateur pour voir les courbes│${NC}"
+        echo -e "${BLUE}└─────────────────────────────────────────────────────────┘${NC}"
+        echo ""
+        echo -e "${YELLOW}⏳ TensorBoard restera actif pendant tout le workflow${NC}"
+        echo ""
+        sleep 2
+    fi
+    
+    # Q-Learning Simple avec configuration optimisée + TensorBoard
     echo ">>> 1.1 Entraînement Q-Learning Simple ($N_EPISODES épisodes) - OPTIMISÉ..."
     echo "    Hyperparamètres: lr=0.1, gamma=0.95, epsilon_decay=0.995"
     echo "    Reward: latency_scale=10.0, budget_penalty=5.0"
+    if [ "$ENABLE_TENSORBOARD" = true ]; then
+        echo ""
+        echo -e "    ${GREEN}📊 TensorBoard: ACTIVÉ${NC}"
+        echo -e "    ${BLUE}🌐 Voir les métriques: http://localhost:$TENSORBOARD_PORT${NC}"
+        echo ""
+    fi
+    
+    TB_FLAG=""
+    if [ "$ENABLE_TENSORBOARD" = true ]; then
+        TB_FLAG="--tensorboard"
+    fi
+    
+    cd "$PYTHON_DIR"
     uv run python train_simple_qlearning.py \
         --episodes $N_EPISODES \
         --lr 0.1 \
         --gamma 0.95 \
         --epsilon-decay 0.995 \
         --data-gb 5.3 \
-        --output models/simple_qlearning.pkl
+        --output models/simple_qlearning.pkl \
+        $TB_FLAG
+    cd "$PROJECT_ROOT"
     
     QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning.pkl"
     echo -e "${GREEN}✅ Q-Learning Simple entraîné: $QLEARNING_MODEL${NC}"
     echo ""
     
-    # DQN avec configuration optimisée
+    # DQN avec configuration optimisée + TensorBoard
     echo ">>> 1.2 Entraînement DQN ($N_EPISODES épisodes) - OPTIMISÉ..."
     echo "    Hyperparamètres: lr=0.001, gamma=0.99, batch_size=64"
     echo "    Reward: R1_SLA_OK=5.0, R2_SLA_VIOL=10.0, R3_COST_OVER=5.0"
+    if [ "$ENABLE_TENSORBOARD" = true ]; then
+        echo ""
+        echo -e "    ${GREEN}📊 TensorBoard: ACTIVÉ${NC}"
+        echo -e "    ${BLUE}🌐 Voir les métriques: http://localhost:$TENSORBOARD_PORT${NC}"
+        echo ""
+    fi
+    
+    cd "$PYTHON_DIR"
     uv run python train_dqn_policy.py \
         --episodes $N_EPISODES \
         --buffer-size 10000 \
         --batch-size 64 \
         --lr 0.001 \
         --gamma 0.99 \
-        --output-dir results/dqn
+        --output-dir results/dqn \
+        $TB_FLAG
+    cd "$PROJECT_ROOT"
     
     # Trouver le modèle DQN
     DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
@@ -393,7 +477,8 @@ if [ "$SKIP_SIMULATION" = false ]; then
     echo ""
     
     # Attendre que Java termine
-    echo ">>> Simulation CloudSim en cours..."
+    echo ">>> Simulation CloudSim en cours (VRAIES décisions RL via RealRLBenchmark)..."
+    echo ">>> Les modèles Python prennent les décisions à chaque requête"
     echo ">>> Cela peut prendre quelques minutes..."
     echo ""
     
@@ -488,22 +573,51 @@ echo "  2. Configuration:"
 echo "     • Hyperparamètres: python_rl/config/optimized_config.json"
 echo "     • Validation: VALIDATION_5_POINTS.md"
 echo ""
-echo "  3. Graphiques CloudSim:"
-ls -1 images/*.png 2>/dev/null | sed 's/^/     • /' || echo "     (aucun graphique généré)"
+echo "  3. Graphiques CloudSim (VRAIES décisions RL):"
+ls -1 images/tcdrm_combined_*.png 2>/dev/null | sed 's/^/     • /' || echo "     (aucun graphique combiné généré)"
+ls -1 images/tcdrm_smoothed_*.png 2>/dev/null | sed 's/^/     • /' || echo "     (aucun graphique smoothed généré)"
 echo ""
-echo "  4. Optimisations Appliquées:"
+echo "  4. Graphiques de Métriques TCDRM Statique:"
+ls -1 images/tcdrm_metrics_*.png 2>/dev/null | sed 's/^/     • /' || echo "     (aucun graphique de métriques généré)"
+echo ""
+if [ "$ENABLE_TENSORBOARD" = true ]; then
+    echo "  5. TensorBoard (ACTIF):"
+    echo ""
+    echo -e "     ${GREEN}┌─────────────────────────────────────────────────────┐${NC}"
+    echo -e "     ${GREEN}│  📊 TENSORBOARD TOUJOURS ACTIF                     │${NC}"
+    echo -e "     ${GREEN}│                                                     │${NC}"
+    echo -e "     ${GREEN}│  🌐 Dashboard: http://localhost:$TENSORBOARD_PORT                  │${NC}"
+    echo -e "     ${GREEN}│  📁 Logs: python_rl/runs/                          │${NC}"
+    echo -e "     ${GREEN}│                                                     │${NC}"
+    echo -e "     ${GREEN}│  💡 Comparez Q-Learning et DQN dans l'interface    │${NC}"
+    echo -e "     ${GREEN}└─────────────────────────────────────────────────────┘${NC}"
+    echo ""
+else
+    echo "  5. TensorBoard:"
+    echo "     ⏭️  Non activé (utiliser --tensorboard pour le monitoring)"
+fi
+echo ""
+echo "  6. Optimisations Appliquées:"
 echo "     ✅ PLSA amélioré (pondération exponentielle)"
 echo "     ✅ Warm-up progressif (600 requêtes, k=5)"
 echo "     ✅ MAX_REPLICAS adaptatif (5-13)"
 echo "     ✅ Storage cost négligeable (0.0001)"
 echo "     ✅ Fonctions de récompense optimisées"
+echo "     ✅ RealRLBenchmark: Vraies décisions RL (pas de simulation bidon)"
 echo ""
 echo "📈 Voir les graphiques:"
 echo "  open images/*.png"
 echo ""
+if [ "$ENABLE_TENSORBOARD" = true ]; then
+    echo "📊 TensorBoard:"
+    echo "  open http://localhost:$TENSORBOARD_PORT"
+    echo ""
+fi
 echo "📖 Documentation:"
 echo "  - Validation des 5 points: cat VALIDATION_5_POINTS.md"
 echo "  - Tests d'optimisation: python python_rl/test_optimizations.py"
+echo "  - TensorBoard: cat README_TENSORBOARD.md"
+echo "  - Vraies simulations RL: cat README_REAL_RL.md"
 echo ""
 
 echo "============================================================"
