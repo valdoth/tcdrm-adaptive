@@ -78,14 +78,18 @@ cleanup() {
         kill $JAVA_PID 2>/dev/null || true
     fi
     
-    if [ ! -z "$TENSORBOARD_PID" ]; then
+    # Ne PAS arrêter TensorBoard si activé - le laisser tourner pour consultation
+    if [ "$ENABLE_TENSORBOARD" = true ] && [ ! -z "$TENSORBOARD_PID" ]; then
+        echo -e "${YELLOW}⏭️  TensorBoard reste actif (PID: $TENSORBOARD_PID)${NC}"
+        echo -e "${GREEN}   🌐 Dashboard: http://localhost:$TENSORBOARD_PORT${NC}"
+        echo -e "${YELLOW}   Pour l'arrêter: kill $TENSORBOARD_PID${NC}"
+    elif [ ! -z "$TENSORBOARD_PID" ]; then
         echo "Arrêt de TensorBoard (PID: $TENSORBOARD_PID)..."
         kill $TENSORBOARD_PID 2>/dev/null || true
     fi
     
     pkill -f "connect_to_java.py" 2>/dev/null || true
     pkill -f "TcdrmComparison" 2>/dev/null || true
-    pkill -f "tensorboard" 2>/dev/null || true
     
     echo -e "${GREEN}✅ Nettoyage terminé${NC}"
 }
@@ -341,6 +345,33 @@ if [ "$SKIP_TRAINING" = false ]; then
     echo -e "${GREEN}✅ DQN entraîné: $DQN_MODEL${NC}"
     echo ""
     
+    # Générer les graphes de métriques d'entraînement
+    echo ">>> Génération des graphes de métriques d'entraînement..."
+    cd "$PYTHON_DIR"
+    
+    # Graphes Q-Learning
+    if [ "$ENABLE_TENSORBOARD" = true ]; then
+        echo "  • Graphes Q-Learning depuis TensorBoard..."
+        uv run python utils/plot_training_metrics.py \
+            --tensorboard-dir runs \
+            --algorithm qlearning \
+            --output results/qlearning_training_metrics.png 2>/dev/null || \
+            echo "    ⚠️  Impossible de générer les graphes Q-Learning depuis TensorBoard"
+    fi
+    
+    # Graphes DQN
+    if [ "$ENABLE_TENSORBOARD" = true ]; then
+        echo "  • Graphes DQN depuis TensorBoard..."
+        uv run python utils/plot_training_metrics.py \
+            --tensorboard-dir runs \
+            --algorithm dqn \
+            --output results/dqn/dqn_training_metrics.png 2>/dev/null || \
+            echo "    ⚠️  Impossible de générer les graphes DQN depuis TensorBoard"
+    fi
+    
+    echo -e "${GREEN}✅ Graphes de métriques générés${NC}"
+    echo ""
+    
     cd "$PROJECT_ROOT"
 else
     QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning.pkl"
@@ -580,8 +611,19 @@ echo ""
 echo "  4. Graphiques de Métriques TCDRM Statique:"
 ls -1 images/tcdrm_metrics_*.png 2>/dev/null | sed 's/^/     • /' || echo "     (aucun graphique de métriques généré)"
 echo ""
+echo "  5. Graphiques de Métriques d'Entraînement (RL):"
+if [ -f "python_rl/results/qlearning_training_metrics.png" ]; then
+    echo "     • Q-Learning: python_rl/results/qlearning_training_metrics.png"
+fi
+if [ -f "python_rl/results/dqn/dqn_training_metrics.png" ]; then
+    echo "     • DQN: python_rl/results/dqn/dqn_training_metrics.png"
+fi
+if [ ! -f "python_rl/results/qlearning_training_metrics.png" ] && [ ! -f "python_rl/results/dqn/dqn_training_metrics.png" ]; then
+    echo "     (aucun graphique de métriques d'entraînement généré)"
+fi
+echo ""
 if [ "$ENABLE_TENSORBOARD" = true ]; then
-    echo "  5. TensorBoard (ACTIF):"
+    echo "  6. TensorBoard (ACTIF):"
     echo ""
     echo -e "     ${GREEN}┌─────────────────────────────────────────────────────┐${NC}"
     echo -e "     ${GREEN}│  📊 TENSORBOARD TOUJOURS ACTIF                     │${NC}"
@@ -593,11 +635,11 @@ if [ "$ENABLE_TENSORBOARD" = true ]; then
     echo -e "     ${GREEN}└─────────────────────────────────────────────────────┘${NC}"
     echo ""
 else
-    echo "  5. TensorBoard:"
+    echo "  6. TensorBoard:"
     echo "     ⏭️  Non activé (utiliser --tensorboard pour le monitoring)"
 fi
 echo ""
-echo "  6. Optimisations Appliquées:"
+echo "  7. Optimisations Appliquées:"
 echo "     ✅ PLSA amélioré (pondération exponentielle)"
 echo "     ✅ Warm-up progressif (600 requêtes, k=5)"
 echo "     ✅ MAX_REPLICAS adaptatif (5-13)"

@@ -73,7 +73,7 @@ public class TcdrmMetricsPlotter {
     }
     
     private static XYChart createRewardChart(BenchmarkDataPerQuery data) {
-        XYChart chart = createBaseChart("Reward par requête", "Requête", "Reward");
+        XYChart chart = createBaseChart("Reward par épisode", "Épisode", "Reward total");
         
         // Calculer le reward (négatif du coût + pénalité pour latence élevée)
         List<Double> rewards = new ArrayList<>();
@@ -91,13 +91,13 @@ public class TcdrmMetricsPlotter {
     }
     
     private static XYChart createCostChart(BenchmarkDataPerQuery data) {
-        XYChart chart = createBaseChart("Coût par requête", "Requête", "Coût total");
+        XYChart chart = createBaseChart("Coût par épisode", "Épisode", "Coût total");
         addSeries(chart, "TCDRM Statique", data.queryNumbers(), data.cumulativeCost(), Color.BLUE, 1.0f);
         return chart;
     }
     
     private static XYChart createSLAViolationsChart(BenchmarkDataPerQuery data) {
-        XYChart chart = createBaseChart("Violations SLA par requête", "Requête", "Nombre de violations");
+        XYChart chart = createBaseChart("Violations SLA par épisode", "Épisode", "Nombre de violations");
         
         // Compter les violations SLA cumulatives
         List<Integer> violations = new ArrayList<>();
@@ -117,7 +117,7 @@ public class TcdrmMetricsPlotter {
     }
     
     private static XYChart createReplicaChangesChart(BenchmarkDataPerQuery data) {
-        XYChart chart = createBaseChart("Changements de réplicas par requête", "Requête", "Nombre de changements");
+        XYChart chart = createBaseChart("Changements de réplicas par épisode", "Épisode", "Nombre de changements");
         
         // Compter les changements de réplicas
         List<Integer> changes = new ArrayList<>();
@@ -138,7 +138,7 @@ public class TcdrmMetricsPlotter {
     }
     
     private static XYChart createSmoothedRewardChart(BenchmarkDataPerQuery data) {
-        XYChart chart = createBaseChart("Reward lissé (fenêtre=10)", "Requête", "Reward");
+        XYChart chart = createBaseChart("Reward lissé (fenêtre=10)", "Épisode", "Reward");
         
         // Calculer les rewards
         List<Double> rewards = new ArrayList<>();
