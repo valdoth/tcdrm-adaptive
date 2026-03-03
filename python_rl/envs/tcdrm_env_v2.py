@@ -119,14 +119,14 @@ class TcdrmV2Env(gym.Env):
         
         # A2: What-to-Replicate - Sélection TopK des données
         self.TOPK_RELATIONS = 3
-        self.THETA_SCORE = 0.3
-        self.lambda1 = 0.5  # Poids netImpact
+        self.THETA_SCORE = 0.1  # Seuil minimal (réduit pour permettre plus de réplications)
+        self.lambda1 = 0.6  # Poids netImpact (augmenté)
         self.lambda2 = 0.3  # Poids popularité
-        self.lambda3 = 0.2  # Poids storage cost
+        self.lambda3 = 0.1  # Poids storage cost (réduit)
         
         # A3: Anti-Thrashing amélioré
-        self.MIN_REPLICA_AGE = 100
-        self.PSLA_DYN_BASE = 0.33
+        self.MIN_REPLICA_AGE = 50  # Âge minimal (réduit pour plus de flexibilité)
+        self.PSLA_DYN_BASE = 0.25  # Seuil dynamique (réduit pour permettre suppressions)
         self.replica_ages = {}
         self.replica_creation_query = {}
         self.TREND_WINDOW = 50

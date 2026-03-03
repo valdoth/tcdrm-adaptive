@@ -141,16 +141,19 @@ class TcdrmQLearningEnv(gym.Env):
         self.action_history = []
         self.THRASH_WINDOW = 5
         
+        # Tracking du coût de réplication pour la récompense
+        self.last_replication_cost = 0.0
+        
         # A2: What-to-Replicate - Sélection TopK des données
         self.TOPK_RELATIONS = 3  # Nombre max de relations à répliquer
-        self.THETA_SCORE = 0.3  # Seuil minimal d'intérêt pour réplication
-        self.lambda1 = 0.5  # Poids netImpact
+        self.THETA_SCORE = 0.1  # Seuil minimal (réduit pour permettre plus de réplications)
+        self.lambda1 = 0.6  # Poids netImpact (augmenté)
         self.lambda2 = 0.3  # Poids popularité
-        self.lambda3 = 0.2  # Poids storage cost
+        self.lambda3 = 0.1  # Poids storage cost (réduit)
         
         # A3: Anti-Thrashing amélioré
-        self.MIN_REPLICA_AGE = 100  # Âge minimal (en queries) avant suppression
-        self.PSLA_DYN_BASE = 0.33  # Seuil dynamique de popularité de base
+        self.MIN_REPLICA_AGE = 50  # Âge minimal (réduit pour plus de flexibilité)
+        self.PSLA_DYN_BASE = 0.25  # Seuil dynamique (réduit pour permettre suppressions)
         self.replica_ages = {}  # {replica_id: age_in_queries}
         self.replica_creation_query = {}  # {replica_id: query_number}
         self.popularity_history = []  # Historique pour calculer trend
@@ -196,6 +199,7 @@ class TcdrmQLearningEnv(gym.Env):
         self.a2_blocked_count = 0
         self.a2_partial_count = 0
         self.a3_blocked_count = 0
+        self.last_replication_cost = 0.0
         
         # Réinitialiser statistiques RT avec des valeurs réalistes
         self.mu_RT = self.LAT_REMOTE_MS  # ~100ms pour accès distant
@@ -371,6 +375,9 @@ class TcdrmQLearningEnv(gym.Env):
                     self.pending_replica_count += 1
                     self.current_budget -= creation_cost
                     self.total_cost += creation_cost
+                    
+                    # Tracker le coût de réplication pour la récompense
+                    self.last_replication_cost = creation_cost
                     
                     # Initialiser le warm-up et tracking A3 du nouveau réplica
                     replica_id = self.current_replica_count + self.pending_replica_count
