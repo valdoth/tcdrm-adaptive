@@ -51,7 +51,7 @@ class TcdrmQLearningEnv(gym.Env):
     ACTION_REPLICATE = 1
     ACTION_DELETE = 2
     
-    def __init__(self, data_gb: float = 5.3, render_mode: Optional[str] = None):
+    def __init__(self, data_gb: float = 0.45, render_mode: Optional[str] = None):
         super().__init__()
         
         self.data_gb = data_gb
@@ -60,7 +60,7 @@ class TcdrmQLearningEnv(gym.Env):
         # ====================================================================
         # PARAMÈTRES DU SYSTÈME
         # ====================================================================
-        self.MAX_QUERIES = 1000
+        self.MAX_QUERIES = 5000  # Aligné avec les benchmarks Java pour comparaison juste
         self.INITIAL_BUDGET = 1000.0
         # MAX_REPLICAS selon l'article: 5 pour simple queries, 13 pour complex queries
         self.MAX_REPLICAS_SIMPLE = 5
@@ -75,8 +75,8 @@ class TcdrmQLearningEnv(gym.Env):
         # Coûts (depuis l'article)
         self.COST_BW_INTRA_DC = 0.002
         self.COST_BW_INTER_PROVIDER = 0.10
-        # Storage cost réduit pour être négligeable comme dans l'article (Fig. 7)
-        self.STORAGE_COST_PER_GB_PER_HOUR = 0.0001  # Quasi-négligeable
+        # Storage cost (0.02 $/GB/mois -> /720 heures)
+        self.STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0
         self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_PROVIDER
         
         # Paramètres réseau
@@ -103,13 +103,13 @@ class TcdrmQLearningEnv(gym.Env):
         ])
         
         # ====================================================================
-        # POIDS DE LA FONCTION DE RÉCOMPENSE
+        # POIDS DE LA FONCTION DE RÉCOMPENSE (A1 - Optimisés)
         # ====================================================================
-        self.r1 = 10.0  # SLA_OK (augmenté pour encourager respect SLA)
-        self.r2 = 15.0  # SLA_VIOL (augmenté pour pénaliser violations)
+        self.r1 = 15.0  # SLA_OK (augmenté pour encourager respect SLA)
+        self.r2 = 20.0  # SLA_VIOL (augmenté pour pénaliser violations)
         self.r3 = 5.0   # COST_OVER
-        self.r4 = 0.5   # REPL_COST (réduit pour encourager réplication stratégique)
-        self.r5 = 3.0   # THRASH
+        self.r4 = 0.3   # REPL_COST (réduit pour encourager réplication avec A2)
+        self.r5 = 4.0   # THRASH (augmenté pour utiliser A3 efficacement)
         
         # ====================================================================
         # VARIABLES D'ÉTAT
@@ -141,6 +141,26 @@ class TcdrmQLearningEnv(gym.Env):
         self.action_history = []
         self.THRASH_WINDOW = 5
         
+        # A2: What-to-Replicate - Sélection TopK des données
+        self.TOPK_RELATIONS = 3  # Nombre max de relations à répliquer
+        self.THETA_SCORE = 0.3  # Seuil minimal d'intérêt pour réplication
+        self.lambda1 = 0.5  # Poids netImpact
+        self.lambda2 = 0.3  # Poids popularité
+        self.lambda3 = 0.2  # Poids storage cost
+        
+        # A3: Anti-Thrashing amélioré
+        self.MIN_REPLICA_AGE = 100  # Âge minimal (en queries) avant suppression
+        self.PSLA_DYN_BASE = 0.33  # Seuil dynamique de popularité de base
+        self.replica_ages = {}  # {replica_id: age_in_queries}
+        self.replica_creation_query = {}  # {replica_id: query_number}
+        self.popularity_history = []  # Historique pour calculer trend
+        self.TREND_WINDOW = 50  # Fenêtre pour calculer la tendance
+        
+        # Compteurs pour tracer l'utilisation de A2 et A3
+        self.a2_blocked_count = 0  # Nombre de réplications bloquées par A2
+        self.a2_partial_count = 0  # Nombre de réplications partielles par A2
+        self.a3_blocked_count = 0  # Nombre de suppressions bloquées par A3
+        
         # Random number generator
         self.np_random = None
         self._seed = None
@@ -169,15 +189,21 @@ class TcdrmQLearningEnv(gym.Env):
         self.cumulative_bandwidth = 0.0
         self.bandwidth_history = []
         
+        # Réinitialiser A2 et A3
+        self.replica_ages = {}
+        self.replica_creation_query = {}
+        self.popularity_history = []
+        self.a2_blocked_count = 0
+        self.a2_partial_count = 0
+        self.a3_blocked_count = 0
+        
         # Réinitialiser statistiques RT avec des valeurs réalistes
         self.mu_RT = self.LAT_REMOTE_MS  # ~100ms pour accès distant
         self.sigma_RT = 50.0
         
-        # Réinitialiser PLSA
-        if self.plsa_model is None:
-            self.plsa_model = PLSAPopularityModel(n_topics=3, max_iterations=20, seed=seed)
-        else:
-            self.plsa_model.reset(seed=seed)
+        # Créer un nouveau modèle PLSA indépendant pour chaque reset
+        # Chaque modèle (Q-Learning, DQN, TCDRM Static, NOREP) aura son propre PLSA
+        self.plsa_model = PLSAPopularityModel(n_topics=3, max_iterations=20, seed=seed)
         
         observation = self._get_discrete_state()
         info = self._get_info()
@@ -227,6 +253,16 @@ class TcdrmQLearningEnv(gym.Env):
         # Mettre à jour PLSA
         self.plsa_model.add_access(self.access_count)
         
+        # A3: Mettre à jour l'âge des réplicas
+        for replica_id in list(self.replica_ages.keys()):
+            self.replica_ages[replica_id] += 1
+        
+        # A3: Tracker l'historique de popularité pour calculer trend
+        current_pop = self.plsa_model.predict_popularity()
+        self.popularity_history.append(current_pop)
+        if len(self.popularity_history) > self.TREND_WINDOW:
+            self.popularity_history.pop(0)
+        
         # Tracker violations SLA
         if query_latency > self.TSLA_BASE:
             self.sla_violations += 1
@@ -272,27 +308,125 @@ class TcdrmQLearningEnv(gym.Env):
         
         return True
     
+    def _select_what_to_replicate(self) -> float:
+        """
+        A2: Sélection adaptative des données à répliquer (What-to-Replicate).
+        
+        Calcule un score pour chaque "relation" (ici simplifié en portions de données)
+        et retourne la fraction de données à répliquer.
+        
+        Score = λ1*norm(netImpact) + λ2*norm(pop) − λ3*norm(storageCost)
+        
+        Returns:
+            Fraction de données à répliquer [0.0, 1.0]
+        """
+        # Estimer l'impact réseau (plus de latence = plus d'impact)
+        net_impact = self.current_latency / 1000.0  # Normaliser [0, ~10]
+        net_impact_norm = min(1.0, net_impact / 10.0)
+        
+        # Popularité actuelle
+        popularity = self.plsa_model.predict_popularity()
+        pop_norm = popularity  # Déjà [0, 1]
+        
+        # Coût de stockage (proportionnel à la taille)
+        storage_cost = self.data_gb * self.STORAGE_COST_PER_GB_PER_HOUR
+        storage_cost_norm = min(1.0, storage_cost / 0.1)  # Normaliser
+        
+        # Calculer le score
+        score = (self.lambda1 * net_impact_norm + 
+                self.lambda2 * pop_norm - 
+                self.lambda3 * storage_cost_norm)
+        
+        # Si score > seuil, répliquer une fraction proportionnelle au score
+        if score > self.THETA_SCORE:
+            # Répliquer entre 30% et 100% des données selon le score
+            fraction = 0.3 + 0.7 * min(1.0, (score - self.THETA_SCORE) / (1.0 - self.THETA_SCORE))
+            return fraction
+        else:
+            # Score trop faible, ne pas répliquer
+            return 0.0
+    
     def _execute_action(self, action: int) -> bool:
-        """Exécute l'action de réplication."""
+        """Exécute l'action de réplication avec A2 (What-to-Replicate)."""
         if action == self.ACTION_REPLICATE:
             total_replicas = self.current_replica_count + self.pending_replica_count
             if total_replicas < self.MAX_REPLICAS:
-                creation_cost = self.data_gb * self.REPLICATION_COST_PER_GB
+                # A2: Sélectionner quelle fraction des données répliquer
+                replication_fraction = self._select_what_to_replicate()
+                
+                if replication_fraction == 0.0:
+                    # Score trop faible, ne pas répliquer (A2 bloque)
+                    self.a2_blocked_count += 1
+                    return False
+                
+                # A2: Réplication partielle intelligente
+                if replication_fraction < 1.0:
+                    self.a2_partial_count += 1
+                
+                # Coût de réplication (seulement la fraction sélectionnée)
+                data_to_replicate = self.data_gb * replication_fraction
+                creation_cost = data_to_replicate * self.REPLICATION_COST_PER_GB
+                
                 if self.current_budget >= creation_cost:
                     self.pending_replica_count += 1
                     self.current_budget -= creation_cost
-                    # Initialiser le warm-up du nouveau réplica à 0
+                    self.total_cost += creation_cost
+                    
+                    # Initialiser le warm-up et tracking A3 du nouveau réplica
                     replica_id = self.current_replica_count + self.pending_replica_count
                     self.replica_warmup_progress[replica_id] = 0.0
+                    self.replica_creation_query[replica_id] = self.current_query
+                    self.replica_ages[replica_id] = 0
                     return True
             return False
         
         elif action == self.ACTION_DELETE:
             if self.current_replica_count > 0:
+                # A3: Vérifier si le réplica peut être supprimé (anti-thrashing amélioré)
+                replica_to_delete = self.current_replica_count
+                
+                # Vérifier l'âge minimal
+                if replica_to_delete in self.replica_ages:
+                    age = self.replica_ages[replica_to_delete]
+                    if age < self.MIN_REPLICA_AGE:
+                        # Trop jeune, ne pas supprimer (A3 anti-thrashing)
+                        self.a3_blocked_count += 1
+                        return False
+                
+                # Calculer la popularité moyenne et trend
+                if len(self.popularity_history) >= 2:
+                    pop_avg = np.mean(self.popularity_history)
+                    
+                    # Calculer trend (pente linéaire simple)
+                    if len(self.popularity_history) >= 10:
+                        recent_pop = np.mean(self.popularity_history[-10:])
+                        older_pop = np.mean(self.popularity_history[:10])
+                        trend = recent_pop - older_pop
+                    else:
+                        trend = 0.0
+                    
+                    # PSLA_dyn: seuil dynamique basé sur le budget
+                    budget_ratio = self.current_budget / self.INITIAL_BUDGET
+                    # Si budget faible, augmenter le seuil (supprimer plus facilement)
+                    psla_dyn = self.PSLA_DYN_BASE * (1.0 + (1.0 - budget_ratio))
+                    
+                    # Ne supprimer que si popularité faible ET trend négatif/stable
+                    if pop_avg >= psla_dyn or trend > 0.05:
+                        # Popularité encore élevée ou en hausse, ne pas supprimer (A3)
+                        self.a3_blocked_count += 1
+                        return False
+                
+                # Supprimer le réplica
                 self.current_replica_count -= 1
-                # Supprimer le warm-up du réplica supprimé
-                if self.current_replica_count + 1 in self.replica_warmup_progress:
-                    del self.replica_warmup_progress[self.current_replica_count + 1]
+                
+                # Nettoyer les structures de tracking
+                if replica_to_delete in self.replica_warmup_progress:
+                    del self.replica_warmup_progress[replica_to_delete]
+                if replica_to_delete in self.replica_ages:
+                    del self.replica_ages[replica_to_delete]
+                if replica_to_delete in self.replica_creation_query:
+                    del self.replica_creation_query[replica_to_delete]
+                
                 return True
             return False
         
@@ -578,7 +712,10 @@ class TcdrmQLearningEnv(gym.Env):
             'mu_RT': self.mu_RT,
             'sigma_RT': self.sigma_RT,
             'cumulative_bandwidth': self.cumulative_bandwidth,  # Bande passante cumulative (Fig. 6)
-            'avg_replica_warmup': avg_warmup  # Efficacité moyenne des réplicas (Fig. 3)
+            'avg_replica_warmup': avg_warmup,  # Efficacité moyenne des réplicas (Fig. 3)
+            'a2_blocked_count': self.a2_blocked_count,  # A2: Réplications bloquées
+            'a2_partial_count': self.a2_partial_count,  # A2: Réplications partielles
+            'a3_blocked_count': self.a3_blocked_count   # A3: Suppressions bloquées
         }
     
     def render(self):

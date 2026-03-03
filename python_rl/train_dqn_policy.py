@@ -247,7 +247,9 @@ def train_dqn_policy(
     batch_size: int = 64,
     buffer_capacity: int = 10000,
     target_update_freq: int = 10,
-    seed: int = 42
+    seed: int = 42,
+    tensorboard_callback: TensorBoardCallback = None,
+    best_model_path: str = None
 ):
     """Entraîne un agent DQN pour TCDRM v2"""
     
@@ -321,7 +323,11 @@ def train_dqn_policy(
     print("Début de l'entraînement...")
     print()
     
+    global_step = 0  # Compteur global de steps pour TensorBoard
+    
     for episode in range(n_episodes):
+        if tensorboard_callback:
+            tensorboard_callback.on_episode_start(episode)
         # Sélectionner un pattern pour cet épisode
         pattern = np.random.choice(patterns, p=pattern_probs)
         episode_patterns.append(pattern)
@@ -350,6 +356,21 @@ def train_dqn_policy(
             # Mettre à jour agent
             agent.update(state, action, reward, next_state, terminated or truncated)
             
+            # Logger step dans TensorBoard
+            if tensorboard_callback:
+                step_metrics = {
+                    'reward': reward,
+                    'latency': info.get('latency', 0),
+                    'cost': info.get('cost', 0),
+                    'budget': info.get('budget', 0),
+                    'replicas': info.get('replicas', 0),
+                    'action': action,
+                    'sla_violations': info.get('sla_violations', 0)
+                }
+                tensorboard_callback.on_step(global_step, step_metrics)
+            
+            global_step += 1
+            
             # Tracking
             episode_reward += reward
             if info['replicas'] != last_replica_count:
@@ -374,10 +395,39 @@ def train_dqn_policy(
         episode_sla_violations.append(info['sla_violations'])
         episode_replica_changes.append(replica_changes)
         
-        # Meilleur modèle
+        # Meilleur modèle - sauvegarder immédiatement
         if episode_reward > best_reward:
             best_reward = episode_reward
             best_episode = episode
+            # Sauvegarder le meilleur modèle
+            if best_model_path:
+                torch.save({
+                    'policy_net_state_dict': agent.policy_net.state_dict(),
+                    'target_net_state_dict': agent.target_net.state_dict(),
+                    'optimizer_state_dict': agent.optimizer.state_dict(),
+                    'epsilon': agent.epsilon,
+                    'update_count': agent.update_count,
+                    'training_steps': agent.training_steps,
+                    'episode': episode,
+                    'best_reward': best_reward
+                }, best_model_path)
+                print(f"\n🏆 Nouveau meilleur modèle sauvegardé (reward: {episode_reward:.2f})\n")
+        
+        # Logger épisode dans TensorBoard
+        if tensorboard_callback:
+            avg_loss = np.mean(agent.losses[-100:]) if len(agent.losses) > 0 else 0
+            episode_metrics = {
+                'total_reward': episode_reward,
+                'avg_latency': info.get('latency', 0),
+                'total_cost': info['total_cost'],
+                'final_budget': info.get('budget', 0),
+                'avg_replicas': info.get('replicas', 0),
+                'sla_violations': info['sla_violations'],
+                'epsilon': agent.epsilon,
+                'loss': avg_loss,
+                'replica_changes': replica_changes
+            }
+            tensorboard_callback.on_episode_end(episode, episode_metrics)
         
         # Afficher progression
         if (episode + 1) % 10 == 0:
@@ -403,6 +453,8 @@ def train_dqn_policy(
     print("="*80)
     print()
     print(f"Meilleur épisode: {best_episode + 1} (reward={best_reward:.2f})")
+    if best_model_path and os.path.exists(best_model_path):
+        print(f"Meilleur modèle sauvegardé: {best_model_path}")
     print()
     print("Distribution des actions:")
     total_actions = sum(action_counts.values())
@@ -494,12 +546,16 @@ def plot_training_metrics(metrics: Dict, output_dir: str):
 
 
 def save_model(agent: DQNAgent, metrics: Dict, output_dir: str):
-    """Sauvegarde le modèle"""
+    """Sauvegarde le dernier modèle"""
     os.makedirs(output_dir, exist_ok=True)
     
     model_path = os.path.join(output_dir, 'dqn_model.pt')
     agent.save(model_path)
-    print(f"✓ Modèle DQN sauvegardé: {model_path}")
+    print(f"✓ Dernier modèle DQN sauvegardé: {model_path}")
+    
+    best_model_path = os.path.join(output_dir, 'dqn_model_best.pt')
+    if os.path.exists(best_model_path):
+        print(f"✓ Meilleur modèle DQN déjà sauvegardé: {best_model_path}")
     
     # Sauvegarder métriques
     import pickle
@@ -552,7 +608,8 @@ if __name__ == '__main__':
         print(f"📊 TensorBoard activé: {tb_callback.log_path}")
         print()
     
-    # Entraîner
+    # Entraîner avec sauvegarde du meilleur modèle
+    best_model_path = os.path.join(args.output_dir, 'dqn_model_best.pt')
     agent, metrics = train_dqn_policy(
         n_episodes=args.episodes,
         n_queries_per_episode=args.queries,
@@ -564,7 +621,9 @@ if __name__ == '__main__':
         batch_size=args.batch_size,
         buffer_capacity=args.buffer_size,
         target_update_freq=args.target_update,
-        seed=args.seed
+        seed=args.seed,
+        tensorboard_callback=tb_callback,
+        best_model_path=best_model_path
     )
     
     # Sauvegarder

@@ -200,7 +200,8 @@ def train_qlearning(
     n_episodes: int = 2000,
     verbose: bool = True,
     use_realistic_workload: bool = True,
-    tensorboard_callback: TensorBoardCallback = None
+    tensorboard_callback: TensorBoardCallback = None,
+    best_model_path: str = None
 ):
     """
     Entraîne l'agent Q-Learning avec patterns réalistes.
@@ -216,7 +217,12 @@ def train_qlearning(
     episode_lengths = []
     sla_rates = []
     episode_patterns = []
+    episode_replica_changes = []  # Nouveau: tracker les changements de réplicas
     action_counts = {'NOOP': 0, 'REPLICATE': 0, 'DELETE': 0}
+    
+    # Tracking du meilleur modèle
+    best_avg_reward = -float('inf')
+    best_episode = 0
     
     # Distribution des patterns (incluant nouveaux patterns prioritaires)
     if use_realistic_workload:
@@ -258,6 +264,8 @@ def train_qlearning(
         
         episode_reward = 0
         episode_length = 0
+        replica_changes = 0  # Compteur de changements pour cet épisode
+        last_replica_count = 0  # Nombre de réplicas à l'étape précédente
         done = False
         query_idx = 0
         
@@ -300,6 +308,12 @@ def train_qlearning(
             episode_reward += reward
             episode_length += 1
             
+            # Tracker les changements de réplicas
+            current_replica_count = info.get('replicas', 0)
+            if current_replica_count != last_replica_count:
+                replica_changes += 1
+                last_replica_count = current_replica_count
+            
             # Compter les actions
             action_names = ['NOOP', 'REPLICATE', 'DELETE']
             action_counts[action_names[action]] += 1
@@ -314,6 +328,7 @@ def train_qlearning(
         # Sauvegarder statistiques
         episode_rewards.append(episode_reward)
         episode_lengths.append(episode_length)
+        episode_replica_changes.append(replica_changes)  # Sauvegarder les changements
         sla_rates.append(info.get('sla_compliance_rate', 0))
         
         # Logger épisode dans TensorBoard
@@ -327,15 +342,26 @@ def train_qlearning(
                 'avg_replicas': info.get('avg_replicas', 0),
                 'sla_violations': info.get('sla_violations', 0),
                 'epsilon': agent.epsilon,
-                'states_explored': stats['states_explored']
+                'states_explored': stats['states_explored'],
+                'replica_changes': replica_changes  # Ajouter aux métriques TensorBoard
             }
             tensorboard_callback.on_episode_end(episode, episode_metrics)
         
-        # Affichage périodique
+        # Affichage périodique et sauvegarde du meilleur modèle
         if verbose and (episode + 1) % 100 == 0:
             avg_reward = np.mean(episode_rewards[-100:])
             avg_sla = np.mean(sla_rates[-100:])
             stats = agent.get_stats()
+            
+            # Sauvegarder le meilleur modèle si amélioration
+            if avg_reward > best_avg_reward:
+                best_avg_reward = avg_reward
+                best_episode = episode
+                # Sauvegarder immédiatement le meilleur modèle
+                if best_model_path:
+                    agent.save(best_model_path)
+                    if verbose:
+                        print(f"\n🏆 Nouveau meilleur modèle sauvegardé (reward moyen: {avg_reward:.2f})\n")
             
             postfix = {
                 'reward': f'{avg_reward:.1f}',
@@ -352,7 +378,10 @@ def train_qlearning(
         'episode_lengths': episode_lengths,
         'sla_rates': sla_rates,
         'episode_patterns': episode_patterns,
-        'action_counts': action_counts
+        'episode_replica_changes': episode_replica_changes,  # Retourner les changements
+        'action_counts': action_counts,
+        'best_episode': best_episode,
+        'best_avg_reward': best_avg_reward
     }
 
 
@@ -411,12 +440,12 @@ def main():
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     
     # Agent
-    parser.add_argument('--episodes', type=int, default=2000, help='Number of training episodes')
-    parser.add_argument('--lr', type=float, default=0.1, help='Learning rate (alpha)')
+    parser.add_argument('--episodes', type=int, default=3000, help='Number of training episodes (augmenté pour meilleure convergence)')
+    parser.add_argument('--lr', type=float, default=0.15, help='Learning rate (alpha) - augmenté pour apprentissage plus rapide')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
     parser.add_argument('--epsilon-start', type=float, default=1.0, help='Initial epsilon')
     parser.add_argument('--epsilon-min', type=float, default=0.01, help='Minimum epsilon')
-    parser.add_argument('--epsilon-decay', type=float, default=0.995, help='Epsilon decay rate')
+    parser.add_argument('--epsilon-decay', type=float, default=0.998, help='Epsilon decay rate (décroissance plus lente)')
     
     # Sauvegarde
     parser.add_argument('--output', type=str, default='models/simple_qlearning.pkl',
@@ -444,7 +473,7 @@ def main():
     
     env = TcdrmQLearningEnv(data_gb=args.data_gb)
     
-    # Créer agent
+    # Créer agent avec Double Q-Learning activé
     agent = SimpleQLearningAgent(
         n_states=env.get_state_space_size(),
         n_actions=env.get_action_space_size(),
@@ -452,7 +481,8 @@ def main():
         discount_factor=args.gamma,
         epsilon_start=args.epsilon_start,
         epsilon_min=args.epsilon_min,
-        epsilon_decay=args.epsilon_decay
+        epsilon_decay=args.epsilon_decay,
+        use_double_q=True  # Activer Double Q-Learning (A1)
     )
     
     # Créer callback TensorBoard si activé
@@ -464,9 +494,17 @@ def main():
         print(f"📊 TensorBoard activé: {tb_callback.log_path}")
         print()
     
-    # Entraîner
+    # Entraîner avec sauvegarde du meilleur modèle
+    best_model_path = args.output.replace('.pkl', '_best.pkl')
     print("Entraînement en cours...")
-    train_stats = train_qlearning(env, agent, args.episodes, verbose=True, tensorboard_callback=tb_callback)
+    train_stats = train_qlearning(
+        env, agent, args.episodes, 
+        verbose=True, 
+        tensorboard_callback=tb_callback,
+        best_model_path=best_model_path
+    )
+    
+    print(f"\n📊 Meilleur reward moyen: {train_stats['best_avg_reward']:.2f} (épisode {train_stats['best_episode'] + 1})")
     
     # Statistiques finales
     print("\n" + "="*80)
@@ -507,10 +545,11 @@ def main():
     print("="*80)
     print()
     
-    # Sauvegarder
+    # Sauvegarder le dernier modèle
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     agent.save(args.output)
-    print(f"✅ Modèle sauvegardé: {args.output}")
+    print(f"✅ Dernier modèle sauvegardé: {args.output}")
+    print(f"✅ Meilleur modèle déjà sauvegardé: {best_model_path}")
     print()
     
     # Logger hyperparamètres dans TensorBoard

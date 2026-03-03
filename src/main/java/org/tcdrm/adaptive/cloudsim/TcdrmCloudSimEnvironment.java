@@ -49,9 +49,9 @@ public class TcdrmCloudSimEnvironment {
     private static final double COST_BW_INTER_PROVIDER = 0.10;
     private static final double STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0;
     private static final double REPLICATION_COST_PER_GB = COST_BW_INTER_PROVIDER;
-    private static final double SLA_LATENCY_THRESHOLD = 150.0;
-    private static final int MAX_QUERIES = 1000;
-    private static final int MAX_REPLICAS = 3;
+    private static final double SLA_LATENCY_THRESHOLD = 200.0; // Requêtes simples
+    private static final int MAX_QUERIES = 5000;
+    private static final int MAX_REPLICAS = 5; // Requêtes simples
     
     // Network parameters
     private static final double BW_LOCAL_GBPS = 10.0;

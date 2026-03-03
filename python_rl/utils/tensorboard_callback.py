@@ -115,6 +115,9 @@ class TensorBoardCallback:
         if 'sla_violations' in metrics:
             self.writer.add_scalar('Episode/SLA_Violations', metrics['sla_violations'], episode)
         
+        if 'replica_changes' in metrics:
+            self.writer.add_scalar('Episode/Replica_Changes', metrics['replica_changes'], episode)
+        
         # Métriques spécifiques Q-Learning
         if 'epsilon' in metrics:
             self.writer.add_scalar('Training/Epsilon', metrics['epsilon'], episode)

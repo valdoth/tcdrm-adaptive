@@ -16,7 +16,7 @@ public class TcdrmBenchmark {
     private static final double LAT_LOCAL_MS = 1.0;  // Aligné avec les autres benchmarks
     private static final double LAT_REMOTE_MS = 100.0;  // Aligné avec les autres benchmarks
 
-    private static final double COST_BW_INTRA_REGION = 0.0;
+    private static final double COST_BW_INTRA_DC = 0.002;
     private static final double COST_BW_INTER_REGION = 0.01;
     private static final double COST_BW_INTER_PROVIDER = 0.10;
 
@@ -24,19 +24,24 @@ public class TcdrmBenchmark {
     private static final double STORAGE_COST_PER_GB_PER_MONTH = 0.02;
     private static final double PROCESSING_MIN_PER_GB = 0.5;
     
-    private static final int POPULARITY_THRESHOLD = 200;
+    // Seuil de popularité aléatoire pour chaque instance (au lieu de fixe)
+    private static final int MIN_POPULARITY_THRESHOLD = 100;
+    private static final int MAX_POPULARITY_THRESHOLD = 300;
 
     private static final double JITTER_RATIO = 0.05;
     private static final double CPU_JITTER_RATIO = 0.05;
     private static final double LOAD_MAX_FACTOR = 1.6;
 
     private final int replicationFactor;
+    private final int popularityThreshold;  // Seuil aléatoire par instance
     private final Random rnd;
     private int replicasCreated = 0;
 
     public TcdrmBenchmark(int replicationFactor, long seed) {
         this.replicationFactor = replicationFactor;
         this.rnd = new Random(seed);
+        // Générer un seuil de popularité aléatoire entre 100 et 300
+        this.popularityThreshold = MIN_POPULARITY_THRESHOLD + rnd.nextInt(MAX_POPULARITY_THRESHOLD - MIN_POPULARITY_THRESHOLD + 1);
     }
 
     public int getReplicasCreated() {
@@ -59,16 +64,16 @@ public class TcdrmBenchmark {
             double accStorageCost = 0.0;
 
             for (int i = 0; i < reps; i++) {
-                boolean replicaExists = i >= POPULARITY_THRESHOLD;
-                boolean useLocal = replicaExists && ((i - POPULARITY_THRESHOLD) % replicationFactor) == 0;
+                boolean replicaExists = i >= popularityThreshold;
+                boolean useLocal = replicaExists && ((i - popularityThreshold) % replicationFactor) == 0;
                 
-                if (replicaExists && i == POPULARITY_THRESHOLD) {
+                if (replicaExists && i == popularityThreshold) {
                     replicasCreated++;
                 }
 
                 double bwGbps = useLocal ? BW_LOCAL_GBPS / loadFactor : BW_REMOTE_GBPS / loadFactor;
                 double latencyMs = useLocal ? LAT_LOCAL_MS * loadFactor : LAT_REMOTE_MS * loadFactor;
-                double costPerGb = useLocal ? COST_BW_INTER_REGION : COST_BW_INTER_PROVIDER;
+                double costPerGb = useLocal ? COST_BW_INTRA_DC : COST_BW_INTER_PROVIDER;
 
                 double dataGb = fragmentSizesGb.stream().mapToDouble(d -> d).sum();
                 double transferMs = (dataGb * 8_000.0 / bwGbps) + latencyMs;

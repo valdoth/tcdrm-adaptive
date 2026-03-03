@@ -9,10 +9,18 @@ import java.util.List;
 public record BenchmarkDataPerQuery(
     String queryId,
     List<Integer> queryNumbers,        // Query number (1 to N)
-    List<Double> timePerQueryMs,       // Time per individual query
-    List<Double> costPerQuery,         // Cost per individual query
+    List<Double> timePerQueryMs,       // Time per individual query (Response time)
+    List<Double> costPerQuery,         // Cost per individual query (Total cost)
     List<Double> cumulativeCost,       // Cumulative cost over time
-    List<Integer> replicaCount         // Number of replicas at each query
+    List<Integer> replicaCount,        // Number of replicas at each query
+    
+    // Nouveaux champs détaillés pour le dashboard per-query
+    List<Double> bwInterProviderCost,  // BW inter-provider ($/query)
+    List<Double> bwInterRegionCost,    // BW inter-region ($/query) 
+    List<Double> bwTotalCost,          // BW total ($/query)
+    List<Double> cpuCost,              // CPU ($/query)
+    List<Double> ioCost,               // IO ($/query) - on utilise storageCost pour simplifier
+    List<Double> execTimeMs            // Exec time (ms) - temps CPU seul
 ) {
     public double getTimeAtQuery(int queryNum) {
         int idx = queryNumbers.indexOf(queryNum);

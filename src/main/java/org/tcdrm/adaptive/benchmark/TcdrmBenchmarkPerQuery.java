@@ -28,19 +28,25 @@ public class TcdrmBenchmarkPerQuery {
     private static final double STORAGE_COST_PER_GB_PER_MONTH = 0.02;   // Article: 0.02
     private static final double PROCESSING_MIN_PER_GB = 0.5;
     
-    private static final int POPULARITY_THRESHOLD = 200;
     private static final double JITTER_RATIO = 0.05;
     private static final double CPU_JITTER_RATIO = 0.05;
     
     // Warm-up progressif des réplicas (Fig. 3: descente progressive)
     private static final int WARMUP_QUERIES = 600;  // Nombre de requêtes pour atteindre 100% d'efficacité
+    
+    // Seuil de popularité aléatoire pour chaque instance (au lieu de fixe)
+    private static final int MIN_POPULARITY_THRESHOLD = 100;
+    private static final int MAX_POPULARITY_THRESHOLD = 300;
 
     private final int replicationFactor;
+    private final int popularityThreshold;  // Seuil aléatoire par instance
     private final Random rnd;
 
     public TcdrmBenchmarkPerQuery(int replicationFactor, long seed) {
         this.replicationFactor = replicationFactor;
         this.rnd = new Random(seed);
+        // Générer un seuil de popularité aléatoire entre 100 et 300
+        this.popularityThreshold = MIN_POPULARITY_THRESHOLD + rnd.nextInt(MAX_POPULARITY_THRESHOLD - MIN_POPULARITY_THRESHOLD + 1);
     }
     
     /**
@@ -77,6 +83,13 @@ public class TcdrmBenchmarkPerQuery {
         List<Double> cumulativeCost = new ArrayList<>();
         List<Integer> replicaCount = new ArrayList<>();
 
+        List<Double> bwInterProviderCost = new ArrayList<>();
+        List<Double> bwInterRegionCost = new ArrayList<>();
+        List<Double> bwTotalCost = new ArrayList<>();
+        List<Double> cpuCostList = new ArrayList<>();
+        List<Double> ioCostList = new ArrayList<>();
+        List<Double> execTimeList = new ArrayList<>();
+
         double totalCost = 0.0;
         int replicasCreated = 0;
         double dataGb = fragmentSizesGb.stream().mapToDouble(d -> d).sum();
@@ -86,10 +99,10 @@ public class TcdrmBenchmarkPerQuery {
         int replicaCreationQuery = -1;  // Requête où les réplicas ont été créés
         
         for (int q = 0; q < MAX_QUERIES; q++) {
-            boolean replicaExists = q >= POPULARITY_THRESHOLD;
+            boolean replicaExists = q >= popularityThreshold;
             
             // Create replica at threshold with creation cost
-            if (q == POPULARITY_THRESHOLD) {
+            if (q == popularityThreshold) {
                 replicasCreated = replicationFactor;
                 replicaCreationQuery = q;
                 // Coût de transfert initial pour créer les réplicas
@@ -132,7 +145,7 @@ public class TcdrmBenchmarkPerQuery {
                 (dataGb * STORAGE_COST_PER_GB_PER_MONTH * replicasCreated * queryDurationHours / 720.0) : 0.0;
             
             // Ajouter le coût de création au premier calcul après réplication
-            double creationCost = (q == POPULARITY_THRESHOLD) ? replicationCreationCost : 0.0;
+            double creationCost = (q == popularityThreshold) ? replicationCreationCost : 0.0;
             
             double queryCost = transferCost + cpuCost + storageCost + creationCost;
             totalCost += queryCost;
@@ -142,9 +155,22 @@ public class TcdrmBenchmarkPerQuery {
             costPerQuery.add(queryCost);
             cumulativeCost.add(totalCost);
             replicaCount.add(replicasCreated);
+            
+            // Détails pour le dashboard
+            double interProvCost = useLocal ? 0.0 : transferCost;
+            double interRegCost = useLocal ? transferCost : 0.0; // Dans l'article, local c'est intra-DC, on approxime inter-reg pour le graphe
+            
+            bwInterProviderCost.add(interProvCost + creationCost); // Ajouter coût de création
+            bwInterRegionCost.add(interRegCost);
+            bwTotalCost.add(transferCost + creationCost);
+            cpuCostList.add(cpuCost);
+            ioCostList.add(storageCost);
+            execTimeList.add(processingMin * 60_000.0);
         }
 
         return new BenchmarkDataPerQuery(queryId, queryNumbers, timePerQueryMs, 
-                                         costPerQuery, cumulativeCost, replicaCount);
+                                         costPerQuery, cumulativeCost, replicaCount,
+                                         bwInterProviderCost, bwInterRegionCost, bwTotalCost,
+                                         cpuCostList, ioCostList, execTimeList);
     }
 }

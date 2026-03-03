@@ -204,10 +204,10 @@ class PythonRLBridge:
 def main():
     parser = argparse.ArgumentParser(description='Client Python Py4J pour modèles RL')
     parser.add_argument('--qlearning-model', type=str, 
-                       default='models/simple_qlearning.pkl',
-                       help='Chemin vers le modèle Q-Learning')
+                       default='models/simple_qlearning_best.pkl',
+                       help='Chemin vers le modèle Q-Learning (utilise le meilleur par défaut)')
     parser.add_argument('--dqn-model', type=str,
-                       default='results/dqn/dqn_model.pt',
+                       default='results/dqn/dqn_model_best.pt',
                        help='Chemin vers le modèle DQN')
     parser.add_argument('--port', type=int, default=25333,
                        help='Port du Gateway Java')

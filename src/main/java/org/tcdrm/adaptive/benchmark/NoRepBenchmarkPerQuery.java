@@ -38,6 +38,13 @@ public class NoRepBenchmarkPerQuery {
         List<Double> cumulativeCost = new ArrayList<>();
         List<Integer> replicaCount = new ArrayList<>();
 
+        List<Double> bwInterProviderCost = new ArrayList<>();
+        List<Double> bwInterRegionCost = new ArrayList<>();
+        List<Double> bwTotalCost = new ArrayList<>();
+        List<Double> cpuCostList = new ArrayList<>();
+        List<Double> ioCostList = new ArrayList<>();
+        List<Double> execTimeList = new ArrayList<>();
+
         double totalCost = 0.0;
         double dataGb = fragmentSizesGb.stream().mapToDouble(d -> d).sum();
 
@@ -71,9 +78,19 @@ public class NoRepBenchmarkPerQuery {
             costPerQuery.add(queryCost);
             cumulativeCost.add(totalCost);
             replicaCount.add(0);
+            
+            // Détails pour le dashboard
+            bwInterProviderCost.add(transferCost);
+            bwInterRegionCost.add(0.0); // Pas d'inter-région pour NOREP
+            bwTotalCost.add(transferCost);
+            cpuCostList.add(cpuCost);
+            ioCostList.add(0.0); // Pas de coût de stockage
+            execTimeList.add(processingMin * 60_000.0); // Temps CPU en ms
         }
 
         return new BenchmarkDataPerQuery(queryId, queryNumbers, timePerQueryMs, 
-                                         costPerQuery, cumulativeCost, replicaCount);
+                                         costPerQuery, cumulativeCost, replicaCount,
+                                         bwInterProviderCost, bwInterRegionCost, bwTotalCost,
+                                         cpuCostList, ioCostList, execTimeList);
     }
 }

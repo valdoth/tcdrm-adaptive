@@ -38,7 +38,9 @@ public class RealRLBenchmark {
     
     // Budget et contraintes
     private static final double INITIAL_BUDGET = 1000.0;
-    private static final int MAX_REPLICAS = 3;
+    
+    // Maximum replicas (article: 5 pour requêtes simples, 13 pour complexes)
+    private static final int MAX_REPLICAS = 13;
 
     private final PythonRLBridge pythonBridge;
     private final String modelType; // "qlearning" ou "dqn"
@@ -79,6 +81,13 @@ public class RealRLBenchmark {
         List<Double> costPerQuery = new ArrayList<>();
         List<Double> cumulativeCost = new ArrayList<>();
         List<Integer> replicaCountList = new ArrayList<>();
+
+        List<Double> bwInterProviderCost = new ArrayList<>();
+        List<Double> bwInterRegionCost = new ArrayList<>();
+        List<Double> bwTotalCost = new ArrayList<>();
+        List<Double> cpuCostList = new ArrayList<>();
+        List<Double> ioCostList = new ArrayList<>();
+        List<Double> execTimeList = new ArrayList<>();
 
         double totalCost = 0.0;
         double currentBudget = INITIAL_BUDGET;
@@ -185,6 +194,20 @@ public class RealRLBenchmark {
             cumulativeCost.add(totalCost);
             replicaCountList.add(currentReplicaCount);
             
+            // Détails pour le dashboard
+            double interProvCost = useLocal ? 0.0 : transferCost;
+            double interRegCost = useLocal ? transferCost : 0.0;
+            
+            // Si on vient de créer un réplica, ajouter le coût de création au BW
+            double creationCost = (action == 1 && replicaCreationQuery == q) ? dataGb * COST_BW_INTER_PROVIDER : 0.0;
+            
+            bwInterProviderCost.add(interProvCost + creationCost);
+            bwInterRegionCost.add(interRegCost);
+            bwTotalCost.add(transferCost + creationCost);
+            cpuCostList.add(cpuCost);
+            ioCostList.add(storageCost);
+            execTimeList.add(processingMin * 60_000.0);
+            
             // Arrêter si budget épuisé
             if (currentBudget <= 0) {
                 System.out.println("⚠️  Budget épuisé à la requête " + q);
@@ -193,6 +216,8 @@ public class RealRLBenchmark {
         }
 
         return new BenchmarkDataPerQuery(queryId, queryNumbers, timePerQueryMs, 
-                                         costPerQuery, cumulativeCost, replicaCountList);
+                                         costPerQuery, cumulativeCost, replicaCountList,
+                                         bwInterProviderCost, bwInterRegionCost, bwTotalCost,
+                                         cpuCostList, ioCostList, execTimeList);
     }
 }

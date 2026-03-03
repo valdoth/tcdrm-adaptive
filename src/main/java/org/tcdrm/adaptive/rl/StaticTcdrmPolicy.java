@@ -27,7 +27,7 @@ public class StaticTcdrmPolicy {
      * TSLA=150ms, PSLA=200, CSLA=20% (conformément à l'article)
      */
     public StaticTcdrmPolicy() {
-        this(150.0, 200, 0.2, 3);
+        this(200.0, 200, 0.015, 5); // Requêtes simples par défaut
     }
     
     /**

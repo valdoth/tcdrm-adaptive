@@ -165,7 +165,14 @@ public class TcdrmComparisonCloudSim {
             System.out.println("  Sample NOREP time at query " + sampleIndex + ": " + String.format("%.2f", norepData.timePerQueryMs().get(sampleIndex)) + " s");
         }
 
-        // 1. Response Time - 4 curves (Q-Learning, DQN, TCDRM, NOREP)
+        // 1.5 Export des données en JSON pour les dashboards Python
+        System.out.println("\n>>> Export des données pour les dashboards détaillés...");
+        exportDataToJson(norepData, "norep_results.json", 200.0);
+        exportDataToJson(tcdrmData, "tcdrm_static_results.json", 200.0);
+        exportDataToJson(pythonQLearningData, "qlearning_results.json", 200.0);
+        exportDataToJson(pythonDQNData, "dqn_results.json", 200.0);
+
+        // 2. Génération des Graphes Combinés (Q-Learning + DQN + TCDRM + NOREP)
         generateQuadGraph(queryId, "response_time", "Impact of Replication on Response Time",
                          "Number of Queries", "Response Time (seconds)",
                          pythonQLearningData.queryNumbers(), pythonQLearningData.timePerQueryMs(),
@@ -306,6 +313,35 @@ public class TcdrmComparisonCloudSim {
         addSeries(smoothChartAlone, "TCDRM Statique", tcdrmX, tcdrmSmoothed, new Color(244, 67, 54), 3.0f);
         BitmapEncoder.saveBitmap(smoothChartAlone, "images/tcdrm_smoothed_" + graphType + "_" + queryId + "_4curves.png", BitmapEncoder.BitmapFormat.PNG);
         System.out.println("  ✓ " + title + " (4 curves smoothed only: Q-Learning, DQN, TCDRM, NOREP)");
+    }
+
+    private static void exportDataToJson(BenchmarkDataPerQuery data, String filename, double tsla) {
+        try {
+            // Créer le dossier s'il n'existe pas
+            File dir = new File("python_rl/results");
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"query_numbers\": ").append(data.queryNumbers()).append(",\n");
+            json.append("  \"bw_inter_provider_per_query\": ").append(data.bwInterProviderCost()).append(",\n");
+            json.append("  \"bw_inter_region_per_query\": ").append(data.bwInterRegionCost()).append(",\n");
+            json.append("  \"bw_total_per_query\": ").append(data.bwTotalCost()).append(",\n");
+            json.append("  \"cpu_per_query\": ").append(data.cpuCost()).append(",\n");
+            json.append("  \"io_per_query\": ").append(data.ioCost()).append(",\n");
+            json.append("  \"response_time_per_query\": ").append(data.timePerQueryMs()).append(",\n");
+            json.append("  \"exec_time_per_query\": ").append(data.execTimeMs()).append(",\n");
+            json.append("  \"cost_per_query\": ").append(data.costPerQuery()).append(",\n");
+            json.append("  \"tsla\": ").append(tsla).append("\n");
+            json.append("}");
+
+            java.nio.file.Files.writeString(new File(dir, filename).toPath(), json.toString());
+            System.out.println("  ✓ Données exportées vers " + filename);
+        } catch (Exception e) {
+            System.err.println("❌ Erreur lors de l'export JSON: " + e.getMessage());
+        }
     }
 
     private static List<Double> extractCpuCost(BenchmarkDataPerQuery data) {

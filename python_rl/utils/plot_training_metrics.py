@@ -139,8 +139,12 @@ def plot_training_metrics_from_tensorboard(log_dir: str, output_path: str, algor
         if 'Episode/SLA_Violations' in data:
             metrics['episode_sla_violations'] = data['Episode/SLA_Violations']['values']
         
-        # Changements de réplicas (approximation depuis Avg_Replicas)
-        if 'Episode/Avg_Replicas' in data:
+        # Changements de réplicas (depuis Episode/Replica_Changes ou approximation)
+        if 'Episode/Replica_Changes' in data:
+            # Utiliser directement la métrique si disponible (nouveau tracking)
+            metrics['episode_replica_changes'] = data['Episode/Replica_Changes']['values']
+        elif 'Episode/Avg_Replicas' in data:
+            # Sinon, approximation depuis Avg_Replicas (ancien comportement)
             replicas = data['Episode/Avg_Replicas']['values']
             changes = [0]
             for i in range(1, len(replicas)):

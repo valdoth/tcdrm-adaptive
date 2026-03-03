@@ -44,14 +44,14 @@ class TcdrmAdaptiveEnv(gym.Env):
     
     metadata = {'render_modes': ['human', 'rgb_array'], 'render_fps': 4}
     
-    def __init__(self, data_gb: float = 5.3, render_mode: Optional[str] = None):
+    def __init__(self, data_gb: float = 0.45, render_mode: Optional[str] = None):
         super().__init__()
         
         self.data_gb = data_gb
         self.render_mode = render_mode
         
         # Constants
-        self.MAX_QUERIES = 1000
+        self.MAX_QUERIES = 5000  # Aligné avec les benchmarks Java pour comparaison juste
         self.INITIAL_BUDGET = 1000.0
         # MAX_REPLICAS selon l'article: 5 pour simple queries, 13 pour complex queries
         # On utilise une valeur adaptative basée sur la complexité
@@ -64,15 +64,15 @@ class TcdrmAdaptiveEnv(gym.Env):
         # TSLA Dynamique (appris par l'agent RL)
         self.TSLA_MIN = 100.0  # Seuil minimum de latence (secondes)
         self.TSLA_MAX = 250.0  # Seuil maximum de latence (secondes)
-        self.TSLA_INITIAL = 150.0  # Seuil initial
+        self.TSLA_INITIAL = 200.0  # Seuil initial (requêtes simples)
         self.TSLA_STEP = 10.0  # Pas d'ajustement
         self.current_tsla = self.TSLA_INITIAL  # TSLA dynamique
         
         # Costs (from article)
         self.COST_BW_INTRA_DC = 0.002
         self.COST_BW_INTER_PROVIDER = 0.10
-        # Storage cost réduit pour être négligeable comme dans l'article (Fig. 7)
-        self.STORAGE_COST_PER_GB_PER_HOUR = 0.0001  # Quasi-négligeable
+        # Storage cost (0.02 $/GB/mois -> /720 heures)
+        self.STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0
         self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_PROVIDER
         
         # Network parameters
@@ -153,11 +153,9 @@ class TcdrmAdaptiveEnv(gym.Env):
         self.cumulative_bandwidth = 0.0
         self.bandwidth_history = []
         
-        # Réinitialiser le modèle PLSA avec le même seed pour reproductibilité
-        if self.plsa_model is None:
-            self.plsa_model = PLSAPopularityModel(n_topics=3, max_iterations=20, seed=seed)
-        else:
-            self.plsa_model.reset(seed=seed)
+        # Créer un nouveau modèle PLSA indépendant pour chaque reset
+        # Chaque modèle (Q-Learning, DQN, TCDRM Static, NOREP) aura son propre PLSA
+        self.plsa_model = PLSAPopularityModel(n_topics=3, max_iterations=20, seed=seed)
         
         observation = self._get_observation()
         info = self._get_info()

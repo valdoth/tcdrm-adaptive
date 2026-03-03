@@ -47,8 +47,10 @@ cleanup_initial() {
     if [ "$SKIP_TRAINING" = false ]; then
         echo "   Suppression des anciens modèles (réentraînement prévu)..."
         rm -f "$PYTHON_DIR/models/simple_qlearning.pkl" 2>/dev/null || true
+        rm -f "$PYTHON_DIR/models/simple_qlearning_best.pkl" 2>/dev/null || true
         rm -rf "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null || true
         rm -f "$PYTHON_DIR/results/dqn/dqn_model.pt" 2>/dev/null || true
+        rm -f "$PYTHON_DIR/results/dqn/dqn_model_best.pt" 2>/dev/null || true
     else
         echo "   Conservation des modèles existants (--skip-training)..."
     fi
@@ -308,7 +310,8 @@ if [ "$SKIP_TRAINING" = false ]; then
         $TB_FLAG
     cd "$PROJECT_ROOT"
     
-    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning.pkl"
+    # Utiliser le MEILLEUR modèle Q-Learning
+    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning_best.pkl"
     echo -e "${GREEN}✅ Q-Learning Simple entraîné: $QLEARNING_MODEL${NC}"
     echo ""
     
@@ -334,12 +337,12 @@ if [ "$SKIP_TRAINING" = false ]; then
         $TB_FLAG
     cd "$PROJECT_ROOT"
     
-    # Trouver le modèle DQN
+    # Trouver le MEILLEUR modèle DQN
     DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
     if [ -z "$DQN_RUN" ]; then
-        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model.pt"
+        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model_best.pt"
     else
-        DQN_MODEL="$DQN_RUN/dqn_model.pt"
+        DQN_MODEL="$DQN_RUN/dqn_model_best.pt"
     fi
     
     echo -e "${GREEN}✅ DQN entraîné: $DQN_MODEL${NC}"
@@ -372,14 +375,36 @@ if [ "$SKIP_TRAINING" = false ]; then
     echo -e "${GREEN}✅ Graphes de métriques générés${NC}"
     echo ""
     
+    # Export automatique des graphes TensorBoard (derniers runs uniquement)
+    if [ "$ENABLE_TENSORBOARD" = true ]; then
+        echo ">>> Export des graphes TensorBoard (derniers runs)..."
+        uv run python utils/export_tensorboard_graphs.py \
+            --tensorboard-dir runs \
+            --output-dir tensorboard_exports \
+            --max-runs 1 2>/dev/null || \
+            echo "    ⚠️  Impossible d'exporter les graphes TensorBoard"
+        echo -e "${GREEN}✅ Graphes TensorBoard exportés dans: python_rl/tensorboard_exports/${NC}"
+        echo ""
+    fi
+    
+    # Générer les dashboards per-query pour tous les modèles
+    echo ">>> Génération des dashboards per-query..."
+    uv run python utils/generate_per_query_dashboard.py \
+        --results-dir results \
+        --output-dir dashboards 2>/dev/null || \
+        echo "    ⚠️  Impossible de générer les dashboards per-query"
+    echo -e "${GREEN}✅ Dashboards per-query générés dans: python_rl/dashboards/${NC}"
+    echo ""
+    
     cd "$PROJECT_ROOT"
 else
-    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning.pkl"
+    # Utiliser les MEILLEURS modèles existants
+    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning_best.pkl"
     DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
     if [ -z "$DQN_RUN" ]; then
-        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model.pt"
+        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model_best.pt"
     else
-        DQN_MODEL="$DQN_RUN/dqn_model.pt"
+        DQN_MODEL="$DQN_RUN/dqn_model_best.pt"
     fi
     
     echo "⏭️  Entraînement ignoré (--skip-training)"
@@ -623,7 +648,16 @@ if [ ! -f "python_rl/results/qlearning_training_metrics.png" ] && [ ! -f "python
 fi
 echo ""
 if [ "$ENABLE_TENSORBOARD" = true ]; then
-    echo "  6. TensorBoard (ACTIF):"
+    echo "  6. Exports TensorBoard (derniers runs):"
+    if [ -d "python_rl/tensorboard_exports" ]; then
+        ls -1 python_rl/tensorboard_exports/*.png 2>/dev/null | sed 's/^/     • /' || echo "     (aucun export généré)"
+    else
+        echo "     (aucun export généré)"
+    fi
+    echo ""
+fi
+if [ "$ENABLE_TENSORBOARD" = true ]; then
+    echo "  7. TensorBoard (ACTIF):"
     echo ""
     echo -e "     ${GREEN}┌─────────────────────────────────────────────────────┐${NC}"
     echo -e "     ${GREEN}│  📊 TENSORBOARD TOUJOURS ACTIF                     │${NC}"
@@ -635,11 +669,11 @@ if [ "$ENABLE_TENSORBOARD" = true ]; then
     echo -e "     ${GREEN}└─────────────────────────────────────────────────────┘${NC}"
     echo ""
 else
-    echo "  6. TensorBoard:"
+    echo "  7. TensorBoard:"
     echo "     ⏭️  Non activé (utiliser --tensorboard pour le monitoring)"
 fi
 echo ""
-echo "  7. Optimisations Appliquées:"
+echo "  8. Optimisations Appliquées:"
 echo "     ✅ PLSA amélioré (pondération exponentielle)"
 echo "     ✅ Warm-up progressif (600 requêtes, k=5)"
 echo "     ✅ MAX_REPLICAS adaptatif (5-13)"
