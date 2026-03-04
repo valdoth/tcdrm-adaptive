@@ -77,7 +77,7 @@ public class TcdrmMetricsPlotter {
         
         // Calculer le reward (négatif du coût + pénalité pour latence élevée)
         List<Double> rewards = new ArrayList<>();
-        double SLA_THRESHOLD = 150.0; // ms
+        double SLA_THRESHOLD = 200.0; // ms (Article Tableau 1)
         for (int i = 0; i < data.queryNumbers().size(); i++) {
             double latency = data.timePerQueryMs().get(i) * 1000; // s to ms
             double cost = data.costPerQuery().get(i);

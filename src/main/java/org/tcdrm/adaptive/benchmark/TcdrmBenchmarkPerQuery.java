@@ -21,8 +21,8 @@ public class TcdrmBenchmarkPerQuery {
 
     // Coûts selon le tableau de l'article (moyenne des providers)
     private static final double COST_BW_INTRA_DC = 0.002;        // Moyenne: (0.0015+0.002+0.004)/3
-    private static final double COST_BW_INTER_REGION = 0.008;    // Article: 0.008
-    private static final double COST_BW_INTER_PROVIDER = 0.10;   // Article: 0.10
+    private static final double COST_BW_INTER_REGION = 0.008;    // Article Tableau 1
+    private static final double COST_BW_INTER_PROVIDER = 0.01;   // Article Tableau 1
 
     private static final double CPU_COST_PER_HOUR = 0.02;        // Article: 0.020
     private static final double STORAGE_COST_PER_GB_PER_MONTH = 0.02;   // Article: 0.02

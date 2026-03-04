@@ -44,7 +44,7 @@ class TcdrmV2Env(gym.Env):
     
     metadata = {'render_modes': ['human'], 'render_fps': 4}
     
-    def __init__(self, data_gb: float = 5.3, render_mode: Optional[str] = None):
+    def __init__(self, data_gb: float = 0.45, render_mode: Optional[str] = None):
         super().__init__()
         
         self.data_gb = data_gb
@@ -58,15 +58,15 @@ class TcdrmV2Env(gym.Env):
         self.MAX_REPLICAS_COMPLEX = 13
         self.COMPLEXITY_THRESHOLD = 10.0
         self.MAX_REPLICAS = self.MAX_REPLICAS_SIMPLE if data_gb < self.COMPLEXITY_THRESHOLD else self.MAX_REPLICAS_COMPLEX
-        self.RT_MAX = 250.0  # Temps de réponse maximum (secondes)
+        self.RT_MAX = 0.200  # Temps de réponse maximum (secondes) - Article: 200ms pour simple queries
         
-        # Coûts
-        self.COST_BW_INTRA_DC = 0.002
-        self.COST_BW_INTER_REGION = 0.05
-        self.COST_BW_INTER_CLOUD = 0.10
-        # Storage cost réduit pour être négligeable comme dans l'article (Fig. 7)
-        self.STORAGE_COST_PER_GB_PER_HOUR = 0.0001  # Quasi-négligeable
-        self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_CLOUD
+        # Coûts (selon Tableau 1 de l'article TCDRM V1)
+        self.COST_BW_INTRA_DC = 0.002          # $/GB - Moyenne intra-datacenter
+        self.COST_BW_INTER_REGION = 0.008      # $/GB - Inter-région (même fournisseur)
+        self.COST_BW_INTER_CLOUD = 0.01        # $/GB - Inter-fournisseur (Tableau 1)
+        # Storage cost selon article TCDRM V1: $0.02/GB/mois
+        self.STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0  # ~0.0000277 $/GB/heure
+        self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_CLOUD  # Coût de création réplica
         self.CPU_COST_PER_HOUR = 0.02
         
         # Paramètres réseau
@@ -97,6 +97,7 @@ class TcdrmV2Env(gym.Env):
         self.current_latency = 0.0
         self.current_replica_count = 0
         self.current_query = 0
+        self.access_count = 0  # Compteur d'accès pour P_SLA
         self.sla_violations = 0
         self.total_cost = 0.0
         self.total_inter_region_traffic = 0.0
@@ -130,6 +131,7 @@ class TcdrmV2Env(gym.Env):
         self.current_latency = self.LAT_REMOTE_MS / 1000.0  # En secondes
         self.current_replica_count = 0
         self.current_query = 0
+        self.access_count = 0  # Compteur d'accès pour P_SLA
         self.sla_violations = 0
         self.total_cost = 0.0
         self.total_inter_region_traffic = 0.0
@@ -170,10 +172,11 @@ class TcdrmV2Env(gym.Env):
         self.current_budget -= query_cost
         self.current_latency = query_latency
         self.current_query += 1
+        self.access_count += 1  # Incrémenter le compteur d'accès
         self.total_cost += query_cost
         
         # Mettre à jour PLSA
-        self.plsa_model.add_access(self.current_query)
+        self.plsa_model.add_access(self.access_count)
         current_popularity = self.plsa_model.predict_popularity()
         self.popularity_history.append(current_popularity)
         
@@ -335,45 +338,109 @@ class TcdrmV2Env(gym.Env):
                          previous_replica_count: int, previous_budget: float,
                          query_cost: float, query_latency: float) -> float:
         """
-        Fonction de récompense TCDRM v2:
-        R = +r1·SLA_OK - r2·SLA_VIOL - r3·COST_OVER - r4·REPL_COST - r5·THRASH
+        Fonction de récompense DENSE et GRADUELLE pour DQN.
+        Alignée avec les objectifs de l'article TCDRM V1:
+        1. Respect du budget (Priorité #1)
+        2. Respect du SLA temps (Priorité #2)
+        3. Réduction des coûts cumulatifs (Priorité #3)
+        4. Réduction de la bande passante inter-cloud (Priorité #4)
         """
         
-        # Normalisation
-        tQ_norm = query_latency / self.RT_MAX
-        cQ_norm = query_cost / (self.INITIAL_BUDGET / self.MAX_QUERIES)
+        # ====================================================================
+        # 1. RESPECT DU BUDGET (Priorité #1 - Article)
+        # ====================================================================
+        budget_ratio = self.current_budget / self.INITIAL_BUDGET
         
-        # 1. SLA_OK: Récompense si latence acceptable
-        sla_ok = max(0.0, 1.0 - tQ_norm)
+        if budget_ratio > 0.5:
+            budget_reward = 10.0  # Budget confortable
+        elif budget_ratio > 0.3:
+            budget_reward = 5.0   # Budget acceptable
+        elif budget_ratio > 0.1:
+            budget_reward = -10.0  # Budget critique
+        else:
+            budget_reward = -50.0  # Budget épuisé (TRÈS MAUVAIS)
         
-        # 2. SLA_VIOL: Pénalité si violation SLA
-        sla_viol = max(0.0, tQ_norm - 1.0)
+        # ====================================================================
+        # 2. RESPECT DU SLA TEMPS (Priorité #2 - Article)
+        # ====================================================================
+        latency_ms = query_latency * 1000  # Convertir en ms
+        tsla_ms = self.RT_MAX * 1000  # 200 ms selon article
         
-        # 3. COST_OVER: Pénalité si coût excessif
-        cost_over = max(0.0, cQ_norm - 1.0)
+        if latency_ms <= tsla_ms * 0.5:  # < 100ms (excellent)
+            latency_reward = 20.0
+        elif latency_ms <= tsla_ms:  # < 200ms (OK)
+            latency_reward = 10.0
+        elif latency_ms <= tsla_ms * 1.5:  # < 300ms (limite)
+            latency_reward = -10.0
+        else:  # > 300ms (violation)
+            latency_reward = -30.0
         
-        # 4. REPL_COST: Coût de réplication
-        repl_cost = 0.0
-        if action == 1 and action_executed:
-            repl_cost = (self.data_gb * self.REPLICATION_COST_PER_GB) / self.INITIAL_BUDGET
+        # ====================================================================
+        # 3. ÉCONOMIES DE BANDE PASSANTE (Priorité #3 - Article Fig. 6)
+        # ====================================================================
+        bandwidth_reward = 0.0
+        if self.current_replica_count > 0 and self.total_traffic > 0:
+            inter_cloud_ratio = self.total_inter_cloud_traffic / self.total_traffic
+            
+            if inter_cloud_ratio < 0.2:  # < 20% inter-cloud (excellent)
+                bandwidth_reward = 15.0
+            elif inter_cloud_ratio < 0.5:  # < 50% inter-cloud (bon)
+                bandwidth_reward = 10.0
+            elif inter_cloud_ratio < 0.8:  # < 80% inter-cloud (acceptable)
+                bandwidth_reward = 5.0
         
-        # 5. THRASH: Pénalité pour actions contradictoires
-        thrash = 0.0
+        # ====================================================================
+        # 4. COÛT DE RÉPLICATION (Investissement long terme)
+        # ====================================================================
+        replication_penalty = 0.0
+        if action == 1 and action_executed:  # REPLICATE
+            repl_cost = self.data_gb * self.REPLICATION_COST_PER_GB
+            avg_budget_per_query = self.INITIAL_BUDGET / self.MAX_QUERIES
+            replication_penalty = -(repl_cost / avg_budget_per_query) * 10.0
+            
+            # Réduire la pénalité si c'est un bon investissement (P_SLA atteint)
+            if self.access_count >= 200:  # P_SLA selon article
+                replication_penalty *= 0.5
+        
+        # ====================================================================
+        # 5. ANTI-THRASHING (Stabilité)
+        # ====================================================================
+        thrashing_penalty = 0.0
         if len(self.action_history) >= 2:
             if (self.action_history[-1] == 1 and action == 2) or \
                (self.action_history[-1] == 2 and action == 1):
-                thrash = 1.0
+                thrashing_penalty = -20.0
         
-        # Calcul de la récompense totale
-        reward = (
-            self.R1_SLA_OK * sla_ok -
-            self.R2_SLA_VIOL * sla_viol -
-            self.R3_COST_OVER * cost_over -
-            self.R4_REPL_COST * repl_cost -
-            self.R5_THRASH * thrash
+        # ====================================================================
+        # 6. BONUS EFFICACITÉ LONG TERME (Article: réduction coûts cumulatifs)
+        # ====================================================================
+        efficiency_bonus = 0.0
+        if self.current_query > 200:  # Après P_SLA
+            avg_cost = self.total_cost / self.current_query
+            csla = 0.015  # C_SLA selon article (simple queries)
+            
+            if avg_cost < csla * 0.5:  # < 50% du C_SLA (excellent)
+                efficiency_bonus = 15.0
+            elif avg_cost < csla:  # < C_SLA (bon)
+                efficiency_bonus = 10.0
+            elif avg_cost < csla * 1.5:  # < 150% du C_SLA (acceptable)
+                efficiency_bonus = 0.0
+            else:  # > 150% du C_SLA (mauvais)
+                efficiency_bonus = -10.0
+        
+        # ====================================================================
+        # RÉCOMPENSE TOTALE
+        # ====================================================================
+        total_reward = (
+            budget_reward +
+            latency_reward +
+            bandwidth_reward +
+            replication_penalty +
+            thrashing_penalty +
+            efficiency_bonus
         )
         
-        return reward
+        return total_reward
     
     def _get_observation(self) -> np.ndarray:
         """

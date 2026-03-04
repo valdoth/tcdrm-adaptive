@@ -17,8 +17,8 @@ public class TcdrmBenchmark {
     private static final double LAT_REMOTE_MS = 100.0;  // Aligné avec les autres benchmarks
 
     private static final double COST_BW_INTRA_REGION = 0.0;
-    private static final double COST_BW_INTER_REGION = 0.01;
-    private static final double COST_BW_INTER_PROVIDER = 0.10;
+    private static final double COST_BW_INTER_REGION = 0.008;  // Article Tableau 1
+    private static final double COST_BW_INTER_PROVIDER = 0.01;  // Article Tableau 1
 
     private static final double CPU_COST_PER_HOUR = 0.02;
     private static final double STORAGE_COST_PER_GB_PER_MONTH = 0.02;

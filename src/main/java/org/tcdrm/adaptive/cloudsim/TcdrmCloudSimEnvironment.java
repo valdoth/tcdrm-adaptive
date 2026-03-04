@@ -44,14 +44,14 @@ public class TcdrmCloudSimEnvironment {
     private int accessCount;
     private int currentQuery;
     
-    // Costs (from TCDRM paper)
+    // Costs (from TCDRM paper Tableau 1)
     private static final double COST_BW_INTRA_DC = 0.002;
-    private static final double COST_BW_INTER_PROVIDER = 0.10;
+    private static final double COST_BW_INTER_PROVIDER = 0.01;  // Article Tableau 1
     private static final double STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0;
     private static final double REPLICATION_COST_PER_GB = COST_BW_INTER_PROVIDER;
-    private static final double SLA_LATENCY_THRESHOLD = 150.0;
+    private static final double SLA_LATENCY_THRESHOLD = 200.0;  // Article Tableau 1 (simple queries)
     private static final int MAX_QUERIES = 1000;
-    private static final int MAX_REPLICAS = 3;
+    private static final int MAX_REPLICAS = 5;  // Article Tableau 1 (simple queries)
     
     // Network parameters
     private static final double BW_LOCAL_GBPS = 10.0;

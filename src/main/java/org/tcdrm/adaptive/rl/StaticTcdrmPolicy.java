@@ -6,8 +6,8 @@ package org.tcdrm.adaptive.rl;
  * Correspond exactement aux seuils définis dans l'article (Section 3.2)
  * 
  * Seuils:
- * - TSLA (Threshold SLA): Seuil de latence = 150ms
- * - PSLA (Popularity SLA): Seuil de popularité = 200 accès
+ * - TSLA (Threshold SLA): Seuil de latence = 200ms (Article Tableau 1)
+ * - PSLA (Popularity SLA): Seuil de popularité = 200 accès (Article Tableau 1)
  * - CSLA (Cost SLA): Seuil de budget = 20%
  */
 public class StaticTcdrmPolicy {
@@ -24,10 +24,10 @@ public class StaticTcdrmPolicy {
     
     /**
      * Constructeur avec seuils par défaut
-     * TSLA=150ms, PSLA=200, CSLA=20% (conformément à l'article)
+     * TSLA=200ms, PSLA=200, CSLA=20% (conformément à l'article Tableau 1)
      */
     public StaticTcdrmPolicy() {
-        this(150.0, 200, 0.2, 3);
+        this(200.0, 200, 0.2, 5);
     }
     
     /**
@@ -47,7 +47,7 @@ public class StaticTcdrmPolicy {
      * 
      * Règles de décision:
      * 1. Si budget < 20% ET réplicas > 0 → DELETE (prioritaire)
-     * 2. Si popularité ≥ 200 ET latence > 150ms ET réplicas < max → CREATE
+     * 2. Si popularité ≥ 200 ET latence > 200ms ET réplicas < max → CREATE
      * 3. Si popularité < 200 ET réplicas > 0 → DELETE
      * 4. Sinon → DO_NOTHING
      */

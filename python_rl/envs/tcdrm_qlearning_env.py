@@ -51,7 +51,7 @@ class TcdrmQLearningEnv(gym.Env):
     ACTION_REPLICATE = 1
     ACTION_DELETE = 2
     
-    def __init__(self, data_gb: float = 5.3, render_mode: Optional[str] = None):
+    def __init__(self, data_gb: float = 0.45, render_mode: Optional[str] = None):
         super().__init__()
         
         self.data_gb = data_gb
@@ -68,16 +68,17 @@ class TcdrmQLearningEnv(gym.Env):
         self.COMPLEXITY_THRESHOLD = 10.0
         self.MAX_REPLICAS = self.MAX_REPLICAS_SIMPLE if data_gb < self.COMPLEXITY_THRESHOLD else self.MAX_REPLICAS_COMPLEX
         
-        # SLA Parameters (pour discrétisation RT)
-        self.TSLA_BASE = 1000.0  # Temps de réponse SLA de base (ms) - 1 seconde (réaliste)
-        self.CSLA = 1.0  # Coût SLA par requête (normalisé)
+        # SLA Parameters (selon article TCDRM V1 - Simple Queries)
+        self.TSLA_BASE = 200.0  # Temps de réponse SLA de base (ms) - Article: 200ms pour simple queries
+        self.CSLA = 0.015  # Coût SLA par requête ($) - Article: 0.015$ pour simple queries
         
-        # Coûts (depuis l'article)
-        self.COST_BW_INTRA_DC = 0.002
-        self.COST_BW_INTER_PROVIDER = 0.10
-        # Storage cost réduit pour être négligeable comme dans l'article (Fig. 7)
-        self.STORAGE_COST_PER_GB_PER_HOUR = 0.0001  # Quasi-négligeable
-        self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_PROVIDER
+        # Coûts (selon Tableau 1 de l'article TCDRM V1)
+        self.COST_BW_INTRA_DC = 0.002          # $/GB - Moyenne intra-datacenter
+        self.COST_BW_INTER_REGION = 0.008      # $/GB - Inter-région (même fournisseur)
+        self.COST_BW_INTER_PROVIDER = 0.01     # $/GB - Inter-fournisseur (Tableau 1)
+        # Storage cost selon article TCDRM V1: $0.02/GB/mois
+        self.STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0  # ~0.0000277 $/GB/heure
+        self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_PROVIDER  # Coût de création réplica
         
         # Paramètres réseau
         self.BW_LOCAL_GBPS = 10.0

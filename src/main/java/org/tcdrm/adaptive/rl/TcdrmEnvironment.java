@@ -15,9 +15,9 @@ public class TcdrmEnvironment implements Environment<TcdrmState, TcdrmAction> {
     private static final double SLA_LATENCY_THRESHOLD = 150.0;  // ms
     private static final int MAX_REPLICAS = 3;
     
-    // Coûts (conformes à l'article)
+    // Coûts (conformes à l'article Tableau 1)
     private static final double COST_BW_INTRA_DC = 0.002;
-    private static final double COST_BW_INTER_PROVIDER = 0.10;
+    private static final double COST_BW_INTER_PROVIDER = 0.01;  // Article Tableau 1
     private static final double STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0;
     private static final double REPLICATION_COST_PER_GB = COST_BW_INTER_PROVIDER;
     
