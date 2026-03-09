@@ -1,77 +1,29 @@
 package org.tcdrm.adaptive.rl;
 
-import java.util.List;
-
 /**
- * Interface pour le pont Python RL
- * Permet à Python d'exposer les méthodes nécessaires via Py4J
+ * Interface for the Python RL bridge via Py4J.
+ * 
+ * Actions: 0=NOOP, 1=REPLICATE, 2=DELETE
+ * State: [latency, budget, replicas, normalizedPopularity, cost,
+ *         tSlaViolation, cSlaViolation, queryProgress]
  */
 public interface PythonRLBridge {
     
-    /**
-     * Réinitialise un épisode dans l'environnement Python
-     * 
-     * @param dataGb Taille des données en GB
-     * @param seed Seed pour la reproductibilité
-     */
-    void resetEpisode(double dataGb, int seed);
-    
-    /**
-     * Obtient l'état actuel de l'environnement
-     * 
-     * @return État actuel sous forme de liste de doubles
-     */
-    List<Double> getCurrentState();
-    
-    /**
-     * Sélectionne une action basée sur l'état actuel
-     * 
-     * @param state État actuel
-     * @return Action sélectionnée (0=CREATE, 1=DELETE, 2=DO_NOTHING)
-     */
-    int selectAction(List<Double> state);
-    
-    /**
-     * Exécute un step dans l'environnement
-     * 
-     * @param action Action à exécuter
-     * @return Résultat du step [latency, cost, replicas, reward, done]
-     */
-    List<Double> executeStep(int action);
-    
-    /**
-     * Sélectionne une action avec le modèle Q-Learning
-     * 
-     * @param state État [latency, budget, replicas, popularity, cost]
-     * @return Action (0=NOOP, 1=REPLICATE, 2=DELETE)
-     */
+    /** Select action using Q-Learning with TCDRM-ADAPTIVE strategy. */
     int selectActionQLearning(double[] state);
     
-    /**
-     * Sélectionne une action avec le modèle DQN
-     * 
-     * @param state État [latency, budget, replicas, popularity, cost, ...]
-     * @return Action (0=NOOP, 1=REPLICATE, 2=DELETE)
-     */
+    /** Select action using DQN with TCDRM-ADAPTIVE strategy. */
     int selectActionDQN(double[] state);
     
-    /**
-     * Vérifie si le modèle Q-Learning est chargé
-     */
+    /** Check if Q-Learning model is loaded. */
     boolean isQLearningReady();
     
-    /**
-     * Vérifie si le modèle DQN est chargé
-     */
+    /** Check if DQN model is loaded. */
     boolean isDQNReady();
     
-    /**
-     * Retourne les informations sur les modèles chargés
-     */
+    /** Return info about loaded models. */
     String getModelInfo();
     
-    /**
-     * Reset internal counters between benchmark runs (e.g., simple → complex)
-     */
+    /** Reset internal counters between benchmark runs (e.g., simple → complex). */
     void resetCounters();
 }

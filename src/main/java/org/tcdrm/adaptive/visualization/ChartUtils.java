@@ -44,12 +44,14 @@ public final class ChartUtils {
     
     public static CategoryChart createStackedBarChart(String title, String yLabel) {
         CategoryChart chart = new CategoryChartBuilder()
-            .width(500).height(400)
+            .width(500).height(450)
             .title(title).yAxisTitle(yLabel)
             .build();
-        chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
+        chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         chart.getStyler().setStacked(true);
         chart.getStyler().setAvailableSpaceFill(0.5);
+        chart.getStyler().setPlotContentSize(0.85);
+        chart.getStyler().setChartPadding(15);
         return chart;
     }
     

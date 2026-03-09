@@ -1,8 +1,8 @@
 # TCDRM-ADAPTIVE: Module Python RL
 
-**Entraînement des Modèles RL (Q-Learning + Dueling DQN) pour la réplication adaptative dans le cloud**
+**Double Q-Learning + Double DQN for adaptive cloud replication.**
 
-Référence: Article TCDRM V1 — Tableau 1 pour tous les paramètres.
+Reference: TCDRM V1 Paper — Table 1 for all parameters.
 
 ---
 
@@ -15,106 +15,96 @@ uv sync
 
 ---
 
-## Workflow Complet (Recommandé)
+## Running Benchmarks
 
 ```bash
-# Depuis la racine du projet
-./run_complete_workflow.sh
+# Terminal 1: Start Java (compiles + launches Py4J gateway)
+mvn compile -q && mvn exec:java -Dexec.mainClass="org.tcdrm.adaptive.TcdrmMain"
+
+# Terminal 2: Start Python RL client
+cd python_rl && uv run python connect_to_java.py
 ```
 
-Ce script enchaîne: validation → entraînement Python → compilation Java → simulation CloudSim → graphiques.
+Graphs are generated in `images/`.
 
 ---
 
-## Modèles RL
+## Training RL Models
 
-### Q-Learning Simple (Tabular)
+### Q-Learning (Tabular, Double Q-Learning)
 
 ```bash
-cd python_rl
 uv run python train_simple_qlearning.py --episodes 2000
 ```
 
-- **243 états discrets** (3^5 : RT, COST, POP, BUD, NET)
-- **3 actions** : NOOP, REPLICATE, DELETE
-- Double Q-Learning + epsilon-greedy adaptatif
+- **243 discrete states** (3^5: RT, COST, POP, BUD, NET)
+- **3 actions**: NOOP, REPLICATE, DELETE
+- Double Q-Learning + adaptive epsilon-greedy
 
-### Dueling DQN
+### Dueling DQN (Double DQN)
 
 ```bash
-cd python_rl
 uv run python train_dqn_policy.py --episodes 1000
 ```
 
-- **8 dimensions continues** (RT, cost, popularity, budget, traffic ratios, replication, trend)
-- **Architecture Dueling** : 64-64 shared + 32-neuron value/advantage streams
+- **8 continuous dimensions** (RT, cost, popularity, budget, traffic ratios, replication, trend)
+- **Dueling architecture**: 64-64 shared + 32-neuron value/advantage streams
 - Prioritized Experience Replay + soft target update
 
 ---
 
-## Structure des Fichiers
+## Project Structure
 
 ```
 python_rl/
-├── config/
-│   ├── constants.py                   # TcdrmConstants (source unique de vérité)
-│   └── optimized_config.json          # Hyperparamètres optimisés
+├── connect_to_java.py                 # Entry point (Py4J client)
+├── bridge/
+│   ├── adaptive_strategy.py           # TCDRM-ADAPTIVE algorithms (A1, A3)
+│   ├── rl_bridge.py                   # Model loading + Py4J interface
+│   └── client.py                      # CLI client + Java connection
 ├── agents/
-│   ├── simple_qlearning_agent.py      # Agent Q-Learning (Double Q, epsilon adaptatif)
-│   ├── simple_qlearning_wrapper.py    # Wrapper Py4J pour Java bridge
-│   └── dqn_agent.py                   # Agent Dueling DQN + PER
+│   ├── simple_qlearning_agent.py      # Double Q-Learning agent
+│   └── dqn_agent.py                   # Double DQN + Dueling + PER
 ├── envs/
-│   ├── __init__.py                    # Enregistrement Gymnasium
-│   ├── tcdrm_qlearning_env.py         # Env discret pour Q-Learning
-│   └── tcdrm_env_v2.py                # Env continu pour DQN
+│   ├── tcdrm_qlearning_env.py         # Discrete env for Q-Learning
+│   └── tcdrm_env_v2.py                # Continuous env for DQN
+├── config/
+│   └── constants.py                   # Centralized constants (mirrors Java)
 ├── utils/
-│   ├── plsa_fast.py                   # PLSA optimisé avec cache
-│   ├── workload_generator.py          # Générateur de charges réalistes (11 patterns)
-│   └── tensorboard_callback.py        # Callback TensorBoard
-├── train_simple_qlearning.py          # Script d'entraînement Q-Learning
-├── train_dqn_policy.py                # Script d'entraînement DQN
-├── connect_to_java.py                 # Bridge Py4J pour simulations Java
-├── optimize_hyperparameters.py        # Optimisation des hyperparamètres
-└── models/                            # Modèles entraînés (.pkl, .pt)
+│   ├── plsa_fast.py                   # PLSA popularity model
+│   ├── workload_generator.py          # Realistic workload patterns
+│   └── tensorboard_callback.py        # Training callback
+├── train_simple_qlearning.py          # Q-Learning training script
+├── train_dqn_policy.py                # DQN training script
+├── models/                            # Trained models (.pkl)
+└── results/                           # Training results (.pt, .json)
 ```
 
 ---
 
-## Constantes Centralisées
+## Centralized Constants
 
-Toutes les constantes sont définies dans `config/constants.py` (`TcdrmConstants`), miroir de
-`src/main/java/org/tcdrm/adaptive/core/TcdrmConstants.java` côté Java.
+All constants in `config/constants.py` mirror `TcdrmConstants.java` on the Java side.
 
-| Paramètre              | Valeur | Source            |
-| ---------------------- | ------ | ----------------- |
-| TSLA                   | 200 ms | Article Tableau 1 |
-| CSLA                   | $0.015 | Article Tableau 1 |
-| MAX_REPLICAS (simple)  | 5      | Article Tableau 1 |
-| MAX_REPLICAS (complex) | 13     | Article Tableau 1 |
-| COST_BW_INTRA_DC       | $0.002 | Article Tableau 1 |
-| COST_BW_INTER_PROVIDER | $0.01  | Article Tableau 1 |
-| Warm-up                | 600 q  | Sigmoid k=5       |
-
----
-
-## Simulations Java (CloudSim + Py4J)
-
-Les simulations réalistes se font en Java via CloudSim. Les modèles Python sont
-appelés en temps réel via Py4J (`RealRLBenchmark`).
-
-```bash
-# Depuis la racine du projet
-mvn clean package
-./run_complete_workflow.sh
-```
-
-**Benchmarks comparés** :
-
-- **NOREP** — Pas de réplication (baseline)
-- **TCDRM Statique** — Réplication à seuil fixe (P_SLA = 200)
-- **Q-Learning RL** — Décisions Python via Py4J
-- **DQN RL** — Décisions Python via Py4J
+| Parameter              | Value  | Source        |
+| ---------------------- | ------ | ------------- |
+| T_SLA (simple)         | 200 ms | Paper Table 1 |
+| T_SLA (complex)        | 400 ms | Paper Table 1 |
+| C_SLA (simple)         | $0.015 | Paper Table 1 |
+| C_SLA (complex)        | $0.040 | Paper Table 1 |
+| P_SLA                  | 200    | Paper Table 1 |
+| MAX_REPLICAS (simple)  | 6      | Paper Table 1 |
+| MAX_REPLICAS (complex) | 12     | Paper Table 1 |
+| Jitter (network)       | 10%    | Realistic sim |
+| Jitter (CPU)           | 8%     | Realistic sim |
 
 ---
 
-**Python pour l'entraînement, Java pour la validation.**
+## TCDRM-ADAPTIVE Features
+
+- **Adaptive thresholds**: Q-Learning starts at 80% of P_SLA, DQN at 60%
+- **Anti-thrashing (Algorithm A3)**: Prevents rapid create-delete cycles
+- **Budget-aware deletion**: Removes replicas when budget low + popularity drops
+- **SLA-driven replication**: Uses T_SLA and C_SLA violation signals
+
+**Benchmarks compared**: NOREP, TCDRM Static, Q-Learning RL, DQN RL

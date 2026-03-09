@@ -47,7 +47,7 @@ public record BenchmarkDataPerQuery(
         return idx >= 0 ? cumulativeCost.get(idx) : 0.0;
     }
     
-    // Alias pour compatibilité avec AllModelsMetricsPlotter
+    /** Alias used by SingleModelMetricsPlotter. */
     public List<Integer> replicaCounts() {
         return replicaCount;
     }
