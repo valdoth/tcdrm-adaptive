@@ -202,10 +202,10 @@ echo ""
 echo ">>> Test rapide des optimisations (PLSA, Warm-up, Environnements)..."
 cd "$PYTHON_DIR"
 uv run python -c "
-import sys
-sys.path.insert(0, '..')
-from python_rl.utils.plsa import PLSAPopularityModel
-from python_rl.envs.tcdrm_env import TcdrmAdaptiveEnv
+from utils.plsa_fast import PLSAPopularityModel
+from envs.tcdrm_env_v2 import TcdrmV2Env
+from envs.tcdrm_qlearning_env import TcdrmQLearningEnv
+from config.constants import TcdrmConstants as C
 
 # Test PLSA
 plsa = PLSAPopularityModel(n_topics=3, seed=42)
@@ -214,10 +214,18 @@ for i in range(100):
 pop = plsa.predict_popularity()
 print(f'✅ PLSA: Popularité prédite = {pop:.3f}')
 
-# Test Environnement
-env = TcdrmAdaptiveEnv(data_gb=5.3)
+# Test Environnement DQN
+env = TcdrmV2Env(data_gb=5.3)
 obs, info = env.reset(seed=42)
-print(f'✅ Environnement: MAX_REPLICAS = {env.MAX_REPLICAS}, WARMUP_QUERIES = {env.WARMUP_QUERIES}')
+print(f'✅ DQN Env: MAX_REPLICAS={env.MAX_REPLICAS}, RT_MAX={env.RT_MAX}s')
+
+# Test Environnement Q-Learning
+env_q = TcdrmQLearningEnv(data_gb=5.3)
+obs_q, info_q = env_q.reset(seed=42)
+print(f'✅ Q-Learning Env: MAX_REPLICAS={env_q.MAX_REPLICAS}, TSLA={env_q.TSLA_BASE}ms')
+
+# Test Constants
+print(f'✅ Constants: TSLA={C.TSLA_MS}ms, COST_BW={C.COST_BW_INTER_PROVIDER}, WARMUP={C.WARMUP_QUERIES}')
 print(f'✅ Tous les tests passent!')
 "
 
@@ -615,7 +623,7 @@ if [ "$ENABLE_TENSORBOARD" = true ]; then
 fi
 echo "📖 Documentation:"
 echo "  - Validation des 5 points: cat VALIDATION_5_POINTS.md"
-echo "  - Tests d'optimisation: python python_rl/test_optimizations.py"
+echo "  - Valider les constantes: uv run python -c 'from config.constants import TcdrmConstants as C; print(C.TSLA_MS)'"
 echo "  - TensorBoard: cat README_TENSORBOARD.md"
 echo "  - Vraies simulations RL: cat README_REAL_RL.md"
 echo ""

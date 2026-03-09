@@ -1,79 +1,65 @@
 package org.tcdrm.adaptive.benchmark;
 
+import org.tcdrm.adaptive.core.TcdrmConstants;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
 /**
- * NoRep Benchmark that tracks metrics per individual query
- * Always uses remote access (inter-provider)
+ * NoRepLc Benchmark (Paper: "No-Replication-Less cost").
+ * 
+ * Pas de réplication. Chaque requête récupère toutes les relations
+ * depuis des providers distants (inter-provider).
+ * Sélectionne le provider le moins cher pour chaque relation.
+ * 
+ * Résultats attendus (Paper Fig 3-7):
+ * - Simple: ~200ms constant, cumul BW ~$18 à 1000 queries
+ * - Complex: ~420ms constant, cumul BW ~$38 à 1000 queries
  */
 public class NoRepBenchmarkPerQuery {
-    private static final int MAX_QUERIES = 5000;
-    
-    // Inter-provider (always remote)
-    private static final double BW_REMOTE_GBPS = 1.0;
-    private static final double LAT_REMOTE_MS = 100.0;
-    private static final double COST_BW_INTER_PROVIDER = 0.10;   // Article: 0.10
-
-    private static final double CPU_COST_PER_HOUR = 0.02;        // Article: 0.020
-    private static final double PROCESSING_MIN_PER_GB = 0.5;
-    
-    private static final double JITTER_RATIO = 0.05;
-    private static final double CPU_JITTER_RATIO = 0.05;
-    
-    // Variabilité de la latence inter-provider (congestion réseau)
-    private static final double LATENCY_VARIATION_RATIO = 0.15;
 
     private final Random rnd;
+    private final boolean complex;
 
-    public NoRepBenchmarkPerQuery(long seed) {
+    public NoRepBenchmarkPerQuery(long seed, boolean complex) {
         this.rnd = new Random(seed);
+        this.complex = complex;
     }
 
-    public BenchmarkDataPerQuery computeBenchmark(String queryId, List<Double> fragmentSizesGb) {
+    public BenchmarkDataPerQuery computeBenchmark(String queryId) {
+        int nRelations = complex ? TcdrmConstants.RELATIONS_COMPLEX : TcdrmConstants.RELATIONS_SIMPLE;
+
         List<Integer> queryNumbers = new ArrayList<>();
         List<Double> timePerQueryMs = new ArrayList<>();
         List<Double> costPerQuery = new ArrayList<>();
         List<Double> cumulativeCost = new ArrayList<>();
         List<Integer> replicaCount = new ArrayList<>();
 
-        double totalCost = 0.0;
-        double dataGb = fragmentSizesGb.stream().mapToDouble(d -> d).sum();
+        double cumulBwCost = 0.0;
+        double sumBwInterProviderGb = 0.0;
+        double sumBwInterRegionGb = 0.0;
+        double sumBwCost = 0.0;
+        double sumCpuCost = 0.0;
 
-        for (int q = 0; q < MAX_QUERIES; q++) {
-            // Network parameters (always remote with variability)
-            double bwGbps = BW_REMOTE_GBPS;
-            // Latence variable pour simuler la congestion réseau inter-provider
-            double latencyMs = LAT_REMOTE_MS * (1.0 + LATENCY_VARIATION_RATIO * (rnd.nextDouble() * 2 - 1));
-            double costPerGb = COST_BW_INTER_PROVIDER;
+        for (int q = 0; q < TcdrmConstants.MAX_QUERIES; q++) {
+            QuerySimulator.QueryResult result = QuerySimulator.simulateNoRepQuery(nRelations, rnd);
 
-            // Transfer time with jitter
-            double transferMs = (dataGb * 8_000.0 / bwGbps) + latencyMs;
-            transferMs *= (1.0 + JITTER_RATIO * (rnd.nextDouble() * 2 - 1));
-            
-            // Processing time with jitter
-            double processingMin = dataGb * PROCESSING_MIN_PER_GB;
-            processingMin *= (1.0 + CPU_JITTER_RATIO * (rnd.nextDouble() * 2 - 1));
-            
-            // Total time for this query
-            double queryTimeMs = transferMs + processingMin * 60_000.0;
-            
-            // Costs for this query
-            double transferCost = dataGb * COST_BW_INTER_PROVIDER;
-            double cpuCost = (processingMin / 60.0) * CPU_COST_PER_HOUR;
-            
-            double queryCost = transferCost + cpuCost;
-            totalCost += queryCost;
+            cumulBwCost += result.bwCost();
+            sumBwInterProviderGb += result.bwInterProviderGb();
+            sumBwInterRegionGb += result.bwInterRegionGb();
+            sumBwCost += result.bwCost();
+            sumCpuCost += result.cpuCost();
 
             queryNumbers.add(q);
-            timePerQueryMs.add(queryTimeMs / 1000.0); // Convert to seconds
-            costPerQuery.add(queryCost);
-            cumulativeCost.add(totalCost);
+            timePerQueryMs.add(result.queryTimeMs());
+            costPerQuery.add(result.bwCost());
+            cumulativeCost.add(cumulBwCost);
             replicaCount.add(0);
         }
 
-        return new BenchmarkDataPerQuery(queryId, queryNumbers, timePerQueryMs, 
-                                         costPerQuery, cumulativeCost, replicaCount);
+        return new BenchmarkDataPerQuery(queryId, queryNumbers, timePerQueryMs,
+                costPerQuery, cumulativeCost, replicaCount,
+                sumBwInterProviderGb, sumBwInterRegionGb, sumBwCost, sumCpuCost, 0.0);
     }
 }

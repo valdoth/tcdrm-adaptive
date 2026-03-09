@@ -22,10 +22,8 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 from typing import Optional, Tuple, Dict, Any
-import sys
-import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from config.constants import TcdrmConstants as C
 from utils.plsa_fast import PLSAPopularityModel
 
 
@@ -46,10 +44,10 @@ class TcdrmQLearningEnv(gym.Env):
     BUD_BINS = 3  # B0, B1, B2
     NET_BINS = 3  # N0, N1, N2
     
-    # Actions
-    ACTION_NOOP = 0
-    ACTION_REPLICATE = 1
-    ACTION_DELETE = 2
+    # Actions (from centralized constants)
+    ACTION_NOOP = C.ACTION_NOOP
+    ACTION_REPLICATE = C.ACTION_REPLICATE
+    ACTION_DELETE = C.ACTION_DELETE
     
     def __init__(self, data_gb: float = 0.45, render_mode: Optional[str] = None):
         super().__init__()
@@ -58,33 +56,28 @@ class TcdrmQLearningEnv(gym.Env):
         self.render_mode = render_mode
         
         # ====================================================================
-        # PARAMÈTRES DU SYSTÈME
+        # PARAMÈTRES DU SYSTÈME (from config.constants - Article TCDRM V1)
         # ====================================================================
-        self.MAX_QUERIES = 1000
-        self.INITIAL_BUDGET = 1000.0
-        # MAX_REPLICAS selon l'article: 5 pour simple queries, 13 pour complex queries
-        self.MAX_REPLICAS_SIMPLE = 5
-        self.MAX_REPLICAS_COMPLEX = 13
-        self.COMPLEXITY_THRESHOLD = 10.0
-        self.MAX_REPLICAS = self.MAX_REPLICAS_SIMPLE if data_gb < self.COMPLEXITY_THRESHOLD else self.MAX_REPLICAS_COMPLEX
+        self.MAX_QUERIES = C.MAX_QUERIES
+        self.INITIAL_BUDGET = C.INITIAL_BUDGET
+        self.MAX_REPLICAS = C.max_replicas_for_data(data_gb)
         
-        # SLA Parameters (selon article TCDRM V1 - Simple Queries)
-        self.TSLA_BASE = 200.0  # Temps de réponse SLA de base (ms) - Article: 200ms pour simple queries
-        self.CSLA = 0.015  # Coût SLA par requête ($) - Article: 0.015$ pour simple queries
+        # SLA Parameters
+        self.TSLA_BASE = C.TSLA_MS
+        self.CSLA = C.CSLA
         
-        # Coûts (selon Tableau 1 de l'article TCDRM V1)
-        self.COST_BW_INTRA_DC = 0.002          # $/GB - Moyenne intra-datacenter
-        self.COST_BW_INTER_REGION = 0.008      # $/GB - Inter-région (même fournisseur)
-        self.COST_BW_INTER_PROVIDER = 0.01     # $/GB - Inter-fournisseur (Tableau 1)
-        # Storage cost selon article TCDRM V1: $0.02/GB/mois
-        self.STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0  # ~0.0000277 $/GB/heure
-        self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_PROVIDER  # Coût de création réplica
+        # Coûts (Tableau 1)
+        self.COST_BW_INTRA_DC = C.COST_BW_INTRA_DC
+        self.COST_BW_INTER_REGION = C.COST_BW_INTER_REGION
+        self.COST_BW_INTER_PROVIDER = C.COST_BW_INTER_PROVIDER
+        self.STORAGE_COST_PER_GB_PER_HOUR = C.STORAGE_COST_PER_GB_PER_HOUR
+        self.REPLICATION_COST_PER_GB = C.COST_BW_INTER_PROVIDER
         
         # Paramètres réseau
-        self.BW_LOCAL_GBPS = 10.0
-        self.BW_REMOTE_GBPS = 1.0
-        self.LAT_LOCAL_MS = 1.0
-        self.LAT_REMOTE_MS = 100.0
+        self.BW_LOCAL_GBPS = C.BW_LOCAL_GBPS
+        self.BW_REMOTE_GBPS = C.BW_REMOTE_GBPS
+        self.LAT_LOCAL_MS = C.LAT_LOCAL_MS
+        self.LAT_REMOTE_MS = C.LAT_REMOTE_MS
         
         # ====================================================================
         # ESPACE D'ACTIONS: {NOOP, REPLICATE, DELETE}

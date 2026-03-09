@@ -1,6 +1,6 @@
 package org.tcdrm.adaptive.gateway;
 
-import org.tcdrm.adaptive.rl.PythonQLearningAgent;
+import org.tcdrm.adaptive.rl.PythonRLBridge;
 import py4j.CallbackClient;
 import py4j.GatewayServer;
 
@@ -8,14 +8,12 @@ import java.net.InetAddress;
 
 /**
  * Gateway Py4J pour connecter Java et Python
- * Architecture basée sur rl-cloudsimplus-greenscheduling
  * Java démarre le GatewayServer avec CallbackClient, Python se connecte
  */
 public class Py4JGateway {
     
     private GatewayServer gatewayServer;
-    private PythonQLearningAgent pythonAgent;
-    private Object pythonBridgeInstance;  // Instance du pont Python
+    private PythonRLBridge pythonBridge;  // Instance du pont Python
     private boolean isRunning = false;
     
     /**
@@ -29,10 +27,7 @@ public class Py4JGateway {
         }
         
         try {
-            // Créer l'entry point (sera accessible depuis Python)
-            pythonAgent = new PythonQLearningAgent();
-            
-            // Configurer le GatewayServer exactement comme rl-cloudsimplus-greenscheduling
+            // Configurer le GatewayServer
             InetAddress address = InetAddress.getByName("0.0.0.0");
             InetAddress callbackAddress = InetAddress.getByName("127.0.0.1");  // localhost pour callback
             
@@ -89,39 +84,18 @@ public class Py4JGateway {
     }
     
     /**
-     * Retourne l'agent Python connecté
+     * Enregistre le pont Python (appelé depuis Python)
      */
-    public PythonQLearningAgent getPythonAgent() {
-        return pythonAgent;
-    }
-    
-    /**
-     * Enregistre l'instance du pont Python (appelé depuis Python)
-     */
-    public void setPythonBridgeInstance(Object bridge) {
-        this.pythonBridgeInstance = bridge;
+    public void registerPythonBridge(Object bridge) {
+        this.pythonBridge = (PythonRLBridge) bridge;
         System.out.println("✅ Instance du pont Python enregistrée");
     }
     
     /**
-     * Enregistre le pont Python (alias pour setPythonBridgeInstance)
+     * Retourne le pont Python
      */
-    public void registerPythonBridge(Object bridge) {
-        setPythonBridgeInstance(bridge);
-    }
-    
-    /**
-     * Retourne l'instance du pont Python
-     */
-    public Object getPythonBridgeInstance() {
-        return pythonBridgeInstance;
-    }
-    
-    /**
-     * Retourne le pont Python (alias pour getPythonBridgeInstance)
-     */
-    public Object getPythonBridge() {
-        return pythonBridgeInstance;
+    public PythonRLBridge getPythonBridge() {
+        return pythonBridge;
     }
     
     /**
@@ -132,29 +106,23 @@ public class Py4JGateway {
     }
     
     /**
-     * Attend que Python enregistre son modèle
+     * Attend que Python enregistre son pont
      * @param timeoutSeconds Timeout en secondes
-     * @return true si le modèle est enregistré, false sinon
+     * @return true si le pont est enregistré, false sinon
      */
-    public boolean waitForPythonModel(int timeoutSeconds) {
-        System.out.println("⏳ Attente de l'enregistrement du modèle Python...");
-        
-        int elapsed = 0;
-        int checkIntervalMs = 100; // Vérifier toutes les 100ms pour permettre au GatewayServer de traiter les requêtes
-        int checksPerSecond = 1000 / checkIntervalMs;
-        int totalChecks = timeoutSeconds * checksPerSecond;
+    public boolean waitForPythonBridge(int timeoutSeconds) {
+        int checkIntervalMs = 100;
+        int totalChecks = timeoutSeconds * (1000 / checkIntervalMs);
         
         for (int i = 0; i < totalChecks; i++) {
-            if (pythonAgent != null && pythonAgent.isModelLoaded()) {
-                System.out.println("✅ Modèle Python enregistré: " + pythonAgent.getModelInfo());
+            if (pythonBridge != null) {
                 return true;
             }
             
             try {
                 Thread.sleep(checkIntervalMs);
-                elapsed = i / checksPerSecond;
-                if (i % (5 * checksPerSecond) == 0 && i > 0) {
-                    System.out.println("   ... attente (" + elapsed + "s/" + timeoutSeconds + "s)");
+                if (i % 100 == 0 && i > 0) {
+                    System.out.println("   ... toujours en attente (" + (i / 10) + "s/" + timeoutSeconds + "s)");
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -162,7 +130,7 @@ public class Py4JGateway {
             }
         }
         
-        System.err.println("❌ Timeout: Le modèle Python n'a pas été enregistré après " + timeoutSeconds + "s");
+        System.err.println("❌ Timeout: Le pont Python n'a pas été enregistré après " + timeoutSeconds + "s");
         return false;
     }
 }

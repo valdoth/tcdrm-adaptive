@@ -21,219 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from envs.tcdrm_env_v2 import TcdrmV2Env
 from agents.dqn_agent import DQNAgent
 from utils.tensorboard_callback import TensorBoardCallback
-
-
-def generate_varied_queries(n_queries: int, seed: int = 42, pattern: str = 'steady'):
-    """
-    Génère des requêtes avec tailles variées selon différents patterns.
-    
-    Patterns disponibles:
-    - 'steady': Charge constante (40% petites, 40% moyennes, 20% grandes)
-    - 'burst': Pic soudain au milieu (50% grosses requêtes pendant le pic)
-    - 'cold_to_hot': Transition progressive froid→chaud
-    - 'hot_to_cold': Refroidissement chaud→froid
-    - 'daily_cycle': Cycle jour/nuit (sinusoïde)
-    - 'weekend': Baisse week-end (5j hauts, 2j bas)
-    - 'budget_critical': Budget décroissant avec petites requêtes à la fin
-    
-    NOUVEAUX PATTERNS (Priorités cloud réels):
-    - 'read_intensive': 90% lectures (petites), 10% écritures (grosses)
-    - 'write_intensive': 30% lectures, 70% écritures (grosses)
-    - 'geo_distributed': Requêtes depuis différentes régions (EU/US/ASIA)
-    - 'black_friday': Événement saisonnier avec pic extrême
-    """
-    rng = np.random.RandomState(seed)
-    query_sizes = []
-    
-    if pattern == 'steady':
-        # Distribution normale
-        for _ in range(n_queries):
-            rand = rng.random()
-            if rand < 0.4:
-                size = rng.uniform(1.0, 5.0)
-            elif rand < 0.8:
-                size = rng.uniform(5.0, 10.0)
-            else:
-                size = rng.uniform(10.0, 20.0)
-            query_sizes.append(size)
-    
-    elif pattern == 'burst':
-        # Pic soudain au milieu
-        burst_start = n_queries // 3
-        burst_end = 2 * n_queries // 3
-        for i in range(n_queries):
-            if burst_start <= i < burst_end:
-                # Pendant le pic: 50% grosses requêtes
-                rand = rng.random()
-                if rand < 0.2:
-                    size = rng.uniform(1.0, 5.0)
-                elif rand < 0.5:
-                    size = rng.uniform(5.0, 10.0)
-                else:
-                    size = rng.uniform(10.0, 20.0)
-            else:
-                # Hors pic: distribution normale
-                rand = rng.random()
-                if rand < 0.6:
-                    size = rng.uniform(1.0, 5.0)
-                elif rand < 0.9:
-                    size = rng.uniform(5.0, 10.0)
-                else:
-                    size = rng.uniform(10.0, 20.0)
-            query_sizes.append(size)
-    
-    elif pattern == 'cold_to_hot':
-        # Transition progressive: petites → grosses requêtes
-        for i in range(n_queries):
-            progress = i / n_queries
-            if rng.random() < progress:
-                size = rng.uniform(8.0, 20.0)  # Requêtes chaudes
-            else:
-                size = rng.uniform(1.0, 6.0)   # Requêtes froides
-            query_sizes.append(size)
-    
-    elif pattern == 'hot_to_cold':
-        # Refroidissement: grosses → petites requêtes
-        for i in range(n_queries):
-            progress = i / n_queries
-            if rng.random() < (1.0 - progress):
-                size = rng.uniform(8.0, 20.0)
-            else:
-                size = rng.uniform(1.0, 6.0)
-            query_sizes.append(size)
-    
-    elif pattern == 'daily_cycle':
-        # Cycle jour/nuit (sinusoïde)
-        for i in range(n_queries):
-            phase = (i / n_queries) * 2 * np.pi
-            intensity = 0.5 + 0.5 * np.sin(phase)
-            rand = rng.random()
-            if rand < intensity:
-                size = rng.uniform(5.0, 20.0)  # Haute intensité
-            else:
-                size = rng.uniform(1.0, 8.0)   # Basse intensité
-            query_sizes.append(size)
-    
-    elif pattern == 'weekend':
-        # Baisse week-end
-        week_length = max(1, n_queries // 7)
-        for i in range(n_queries):
-            day_of_week = (i // week_length) % 7
-            is_weekend = day_of_week >= 5
-            if is_weekend:
-                rand = rng.random()
-                if rand < 0.7:
-                    size = rng.uniform(1.0, 5.0)
-                else:
-                    size = rng.uniform(5.0, 12.0)
-            else:
-                rand = rng.random()
-                if rand < 0.4:
-                    size = rng.uniform(1.0, 5.0)
-                elif rand < 0.8:
-                    size = rng.uniform(5.0, 10.0)
-                else:
-                    size = rng.uniform(10.0, 20.0)
-            query_sizes.append(size)
-    
-    elif pattern == 'budget_critical':
-        # Budget décroissant: forcer petites requêtes à la fin
-        for i in range(n_queries):
-            progress = i / n_queries
-            budget_level = 1.0 - progress
-            if budget_level < 0.1:  # Budget critique (<10%)
-                size = rng.uniform(1.0, 3.0)
-            else:
-                rand = rng.random()
-                if rand < 0.4:
-                    size = rng.uniform(1.0, 5.0)
-                elif rand < 0.8:
-                    size = rng.uniform(5.0, 10.0)
-                else:
-                    size = rng.uniform(10.0, 20.0)
-            query_sizes.append(size)
-    
-    elif pattern == 'read_intensive':
-        # 90% lectures (petites), 10% écritures (grosses)
-        # Simule e-commerce, CDN, applications read-heavy
-        for _ in range(n_queries):
-            is_read = rng.random() < 0.9
-            if is_read:
-                # Lectures: généralement petites (catalogue, prix, etc.)
-                size = rng.uniform(0.1, 5.0)
-            else:
-                # Écritures: plus grosses (commandes, uploads)
-                size = rng.uniform(5.0, 20.0)
-            query_sizes.append(size)
-    
-    elif pattern == 'write_intensive':
-        # 30% lectures, 70% écritures (grosses)
-        # Simule data ingestion, IoT, logging
-        for _ in range(n_queries):
-            is_read = rng.random() < 0.3
-            if is_read:
-                # Lectures: petites requêtes de monitoring
-                size = rng.uniform(0.5, 5.0)
-            else:
-                # Écritures: grosses données (logs, metrics, events)
-                size = rng.uniform(10.0, 50.0)
-            query_sizes.append(size)
-    
-    elif pattern == 'geo_distributed':
-        # Requêtes depuis différentes régions géographiques
-        # 40% EU, 35% US, 25% ASIA
-        regions = ['EU', 'US', 'ASIA']
-        region_probs = [0.40, 0.35, 0.25]
-        
-        for _ in range(n_queries):
-            region = rng.choice(regions, p=region_probs)
-            
-            # Taille varie selon la région (patterns régionaux)
-            if region == 'EU':
-                # Europe: requêtes moyennes (e-commerce, services)
-                size = rng.uniform(2.0, 10.0)
-            elif region == 'US':
-                # USA: requêtes plus grosses (streaming, analytics)
-                size = rng.uniform(5.0, 15.0)
-            else:  # ASIA
-                # Asie: requêtes plus petites (mobile-first)
-                size = rng.uniform(0.5, 8.0)
-            
-            query_sizes.append(size)
-    
-    elif pattern == 'black_friday':
-        # Événement saisonnier: Black Friday
-        # Baseline → Montée → Pic extrême → Descente → Retour
-        for i in range(n_queries):
-            progress = i / n_queries
-            
-            if progress < 0.3:  # Baseline (30%)
-                multiplier = 1.0
-            elif progress < 0.4:  # Montée progressive (10%)
-                # Montée de 1.0 à 6.0
-                multiplier = 1.0 + (progress - 0.3) * 50
-            elif progress < 0.5:  # Pic extrême (10%)
-                # Pic à 10x le trafic normal
-                multiplier = 10.0
-            elif progress < 0.6:  # Descente rapide (10%)
-                # Descente de 10.0 à 2.0
-                multiplier = 10.0 - (progress - 0.5) * 80
-            else:  # Retour baseline (40%)
-                multiplier = 1.0
-            
-            # Taille de base
-            base_size = rng.uniform(1.0, 5.0)
-            size = base_size * multiplier
-            
-            # Limiter à des valeurs raisonnables
-            size = min(size, 100.0)
-            query_sizes.append(size)
-    
-    else:
-        # Par défaut: steady
-        return generate_varied_queries(n_queries, seed, 'steady')
-    
-    return query_sizes
+from utils.workload_generator import generate_varied_queries, ALL_PATTERNS, DEFAULT_PATTERN_PROBS
 
 
 def train_dqn_policy(
@@ -261,7 +49,7 @@ def train_dqn_policy(
     print(f"  Workload: Patterns réalistes (steady, burst, cold_to_hot, etc.)")
     print(f"  État: 8 dimensions continues")
     print(f"  Actions: 3 (NOOP, REPLICATE, DELETE)")
-    print(f"  Architecture: 64-64-32")
+    print(f"  Architecture: Dueling DQN 64-64 (+ 32-neuron value/advantage streams)")
     print(f"  Learning rate: {learning_rate}")
     print(f"  Discount factor: {discount_factor}")
     print(f"  Epsilon: {epsilon_start} → {epsilon_end} (λ={epsilon_decay_lambda})")
@@ -271,24 +59,9 @@ def train_dqn_policy(
     print(f"  Device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
     print()
     
-    # Distribution des patterns sur les épisodes (incluant nouveaux patterns prioritaires)
-    patterns = [
-        'steady', 'burst', 'cold_to_hot', 'hot_to_cold', 'daily_cycle', 'weekend', 'budget_critical',
-        'read_intensive', 'write_intensive', 'geo_distributed', 'black_friday'
-    ]
-    pattern_probs = [
-        0.15,  # steady (réduit)
-        0.15,  # burst
-        0.10,  # cold_to_hot
-        0.10,  # hot_to_cold
-        0.08,  # daily_cycle
-        0.05,  # weekend
-        0.05,  # budget_critical
-        0.12,  # read_intensive (NOUVEAU - Priorité 1)
-        0.08,  # write_intensive (NOUVEAU - Priorité 1)
-        0.10,  # geo_distributed (NOUVEAU - Priorité 2)
-        0.02   # black_friday (NOUVEAU - Priorité 3)
-    ]  # Somme = 1.0
+    # Distribution des patterns (from shared workload_generator)
+    patterns = ALL_PATTERNS
+    pattern_probs = DEFAULT_PATTERN_PROBS
     
     # Créer environnement TCDRM v2
     env = TcdrmV2Env(data_gb=5.3)  # Taille initiale, sera mise à jour
@@ -297,7 +70,7 @@ def train_dqn_policy(
     agent = DQNAgent(
         state_dim=8,
         action_dim=3,
-        hidden_dims=[64, 64, 32],
+        hidden_dims=[64, 64],
         learning_rate=learning_rate,
         discount_factor=discount_factor,
         epsilon=epsilon_start,

@@ -1,21 +1,12 @@
 # TCDRM-ADAPTIVE: Module Python RL
 
-**Entraînement des Modèles RL (Q-Learning Simple + DQN) et Génération des Graphiques**
+**Entraînement des Modèles RL (Q-Learning + Dueling DQN) pour la réplication adaptative dans le cloud**
+
+Référence: Article TCDRM V1 — Tableau 1 pour tous les paramètres.
 
 ---
 
-## 🎯 Vue d'Ensemble
-
-Ce module Python entraîne deux modèles de Reinforcement Learning pour la gestion adaptative de réplication de données dans le cloud :
-
-1. **Q-Learning Simple** - Implémentation tabulaire propre et robuste (243 états)
-2. **DQN** - Deep Q-Network pour apprentissage avec états continus
-
-**Workflow complet** : Entraînement → Génération de graphiques comparatifs
-
----
-
-## 📦 Installation
+## Installation
 
 ```bash
 cd python_rl
@@ -24,262 +15,106 @@ uv sync
 
 ---
 
-## 🚀 Utilisation Rapide
-
-### Workflow Complet (Recommandé)
+## Workflow Complet (Recommandé)
 
 ```bash
 # Depuis la racine du projet
-./run_workflow.sh
-
-# Avec options
-./run_workflow.sh --n-episodes 2000              # Entraînement prolongé
-./run_workflow.sh --skip-qlearning               # Seulement DQN
-./run_workflow.sh --skip-dqn                     # Seulement Q-Learning
+./run_complete_workflow.sh
 ```
 
-**Résultat** :
-
-- Modèles entraînés dans `models/`
-- Graphiques générés dans `images/`
+Ce script enchaîne: validation → entraînement Python → compilation Java → simulation CloudSim → graphiques.
 
 ---
 
-## 🧠 Modèles RL
+## Modèles RL
 
-### 1. Q-Learning Simple
-
-**Implémentation propre inspirée de Sutton & Barto**
+### Q-Learning Simple (Tabular)
 
 ```bash
 cd python_rl
-uv run python train_simple_qlearning.py \
-  --episodes 2000 \
-  --lr 0.1 \
-  --gamma 0.99 \
-  --data-gb 5.3
+uv run python train_simple_qlearning.py --episodes 2000
 ```
 
-**Caractéristiques** :
+- **243 états discrets** (3^5 : RT, COST, POP, BUD, NET)
+- **3 actions** : NOOP, REPLICATE, DELETE
+- Double Q-Learning + epsilon-greedy adaptatif
 
-- 243 états discrets (3^5)
-- 3 actions : NOOP, REPLICATE, DELETE
-- Epsilon-greedy avec décroissance
-- Reward basé sur réduction de latence
-
-**Résultats attendus** :
-
-- Reward : ~8600
-- SLA compliance : ~83%
-- Latence : ~1100ms (vs 5400ms NOREP)
-
-### 2. DQN (Deep Q-Network)
+### Dueling DQN
 
 ```bash
 cd python_rl
-uv run python train_dqn_policy.py \
-  --episodes 1000 \
-  --buffer-size 50000 \
-  --batch-size 128
+uv run python train_dqn_policy.py --episodes 1000
 ```
 
-**Architecture** :
-
-- États continus (8 dimensions)
-- Réseau : 64-64-32
-- Experience replay + target network
+- **8 dimensions continues** (RT, cost, popularity, budget, traffic ratios, replication, trend)
+- **Architecture Dueling** : 64-64 shared + 32-neuron value/advantage streams
+- Prioritized Experience Replay + soft target update
 
 ---
 
-## � Génération des Graphiques
-
-### Graphiques 3 Courbes
-
-**Q-Learning Simple + TCDRM Statique + NOREP**
-
-```bash
-cd python_rl
-uv run python generate_3curves_graphs.py \
-  --qlearning-model models/simple_qlearning.pkl \
-  --output-dir ../images
-```
-
-### Graphiques 4 Courbes
-
-**Q-Learning Simple + DQN + TCDRM Statique + NOREP**
-
-```bash
-cd python_rl
-uv run python generate_4curves_graphs.py \
-  --qlearning-model models/simple_qlearning.pkl \
-  --dqn-model results/dqn/dqn_model.pt \
-  --output-dir ../images
-```
-
-**Graphiques générés** :
-
-- `tcdrm_combined_response_time_R1_*.png` - Latence (5.3 GB)
-- `tcdrm_combined_response_time_R2_*.png` - Latence (11.9 GB)
-- `tcdrm_combined_cumulative_bw_price_*.png` - Coût cumulatif
-- `tcdrm_combined_total_cost_*.png` - Coût total
-
----
-
-## 📁 Structure des Fichiers
+## Structure des Fichiers
 
 ```
 python_rl/
+├── config/
+│   ├── constants.py                   # TcdrmConstants (source unique de vérité)
+│   └── optimized_config.json          # Hyperparamètres optimisés
 ├── agents/
-│   ├── simple_qlearning_agent.py      # Agent Q-Learning (nouveau)
-│   ├── simple_qlearning_wrapper.py    # Wrapper pour graphiques
-│   └── dqn_agent.py                    # Agent DQN
+│   ├── simple_qlearning_agent.py      # Agent Q-Learning (Double Q, epsilon adaptatif)
+│   ├── simple_qlearning_wrapper.py    # Wrapper Py4J pour Java bridge
+│   └── dqn_agent.py                   # Agent Dueling DQN + PER
 ├── envs/
-│   └── tcdrm_qlearning_env.py          # Environnement TCDRM
-├── train_simple_qlearning.py           # Entraînement Q-Learning
-├── train_dqn_policy.py                 # Entraînement DQN
-├── generate_3curves_graphs.py          # Graphiques 3 courbes
-├── generate_4curves_graphs.py          # Graphiques 4 courbes
-├── generate_graphs_unified.py          # Fonction unifiée
-└── models/
-    ├── simple_qlearning.pkl            # Modèle Q-Learning entraîné
-    └── results/dqn/dqn_model.pt        # Modèle DQN entraîné
-```
-
----
-
-## 🎯 Résultats Attendus
-
-### Q-Learning Simple
-
-| Métrique             | Valeur  |
-| -------------------- | ------- |
-| Reward moyen         | ~8600   |
-| SLA compliance       | ~83%    |
-| Latence moyenne (R1) | ~1100ms |
-| Latence NOREP (R1)   | ~5400ms |
-| Amélioration         | **80%** |
-
-### Comparaison des Algorithmes
-
-**R1 (5.3 GB)** :
-
-- NOREP : 5400ms constant
-- Q-Learning : 1100ms (réplique rapidement)
-- TCDRM Statique : 1500ms (après requête 200)
-- DQN : 1000-1200ms (meilleur)
-
-**R2 (11.9 GB)** :
-
-- NOREP : 12000ms constant
-- Q-Learning : 2500ms
-- TCDRM Statique : 3000ms
-- DQN : 2000-2500ms
-
----
-
-## 🔬 Simulations Java (CloudSim)
-
-**⚠️ Important**: Les simulations réalistes se font en **Java avec CloudSim**.
-
-Pour exécuter les simulations Java:
-
-```bash
-cd /Users/valdo/Desktop/cloud/avancement/tcdrm-adaptive
-
-# Compiler le projet Java
-mvn clean package
-
-# Exécuter la comparaison complète
-java -cp target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar \
-  org.tcdrm.adaptive.examples.TcdrmComparisonCloudSim
-```
-
-**Comparaisons effectuées en Java**:
-
-1. ✅ Q-Learning Java (entraîné en Java)
-2. ✅ Q-Learning Python (entraîné avec Gymnasium)
-3. ✅ TCDRM Statique (seuils fixes)
-
-**Graphes générés**: `results/cloudsim_comparison/`
-
----
-
-## 📁 Structure
-
-```
-python_rl/
-├── agents/
-│   ├── __init__.py
-│   └── tabular_qlearning.py          # Agent Q-Learning
-├── envs/
-│   ├── __init__.py
-│   └── tcdrm_env.py                   # Environnement Gymnasium
+│   ├── __init__.py                    # Enregistrement Gymnasium
+│   ├── tcdrm_qlearning_env.py         # Env discret pour Q-Learning
+│   └── tcdrm_env_v2.py                # Env continu pour DQN
 ├── utils/
-│   ├── logger.py                      # Logging
-│   ├── metrics.py                     # Métriques
-│   └── visualization.py               # Visualisations
-├── configs/
-│   └── qlearning_config.yaml          # Configuration
-├── train.py                           # ⭐ Entraînement
-├── evaluate_model.py                  # Évaluation
-├── run_experiments.sh                 # Script d'entraînement
-└── pyproject.toml                     # Dépendances
+│   ├── plsa_fast.py                   # PLSA optimisé avec cache
+│   ├── workload_generator.py          # Générateur de charges réalistes (11 patterns)
+│   └── tensorboard_callback.py        # Callback TensorBoard
+├── train_simple_qlearning.py          # Script d'entraînement Q-Learning
+├── train_dqn_policy.py                # Script d'entraînement DQN
+├── connect_to_java.py                 # Bridge Py4J pour simulations Java
+├── optimize_hyperparameters.py        # Optimisation des hyperparamètres
+└── models/                            # Modèles entraînés (.pkl, .pt)
 ```
 
 ---
 
-## 🎓 Workflow Complet
+## Constantes Centralisées
 
-### 1. Entraîner en Python (Rapide)
+Toutes les constantes sont définies dans `config/constants.py` (`TcdrmConstants`), miroir de
+`src/main/java/org/tcdrm/adaptive/core/TcdrmConstants.java` côté Java.
+
+| Paramètre              | Valeur | Source            |
+| ---------------------- | ------ | ----------------- |
+| TSLA                   | 200 ms | Article Tableau 1 |
+| CSLA                   | $0.015 | Article Tableau 1 |
+| MAX_REPLICAS (simple)  | 5      | Article Tableau 1 |
+| MAX_REPLICAS (complex) | 13     | Article Tableau 1 |
+| COST_BW_INTRA_DC       | $0.002 | Article Tableau 1 |
+| COST_BW_INTER_PROVIDER | $0.01  | Article Tableau 1 |
+| Warm-up                | 600 q  | Sigmoid k=5       |
+
+---
+
+## Simulations Java (CloudSim + Py4J)
+
+Les simulations réalistes se font en Java via CloudSim. Les modèles Python sont
+appelés en temps réel via Py4J (`RealRLBenchmark`).
 
 ```bash
-cd python_rl
-./run_experiments.sh train-all
-```
-
-### 2. Simuler et Comparer en Java (Réaliste)
-
-```bash
-cd ..
+# Depuis la racine du projet
 mvn clean package
-java -cp target/tcdrm-adaptive-1.0.0-SNAPSHOT-with-dependencies.jar \
-  org.tcdrm.adaptive.examples.TcdrmComparisonCloudSim
+./run_complete_workflow.sh
 ```
 
-### 3. Analyser les Résultats
+**Benchmarks comparés** :
 
-```bash
-# Voir les graphes
-open results/cloudsim_comparison/*.png
-```
-
----
-
-## 📊 Avantages de cette Architecture
-
-| Aspect        | Python Gymnasium | Java CloudSim                |
-| ------------- | ---------------- | ---------------------------- |
-| **Usage**     | Entraînement     | Simulation + Comparaison     |
-| **Vitesse**   | ⚡ Rapide        | 🐢 Plus lent                 |
-| **Réalisme**  | Simplifié        | ✅ Réaliste                  |
-| **Métriques** | Basiques         | ✅ Détaillées (CPU, RAM, BW) |
-| **CloudSim**  | Non              | ✅ Oui                       |
-
-**Meilleur des deux mondes**:
-
-- ✅ Entraînement rapide en Python
-- ✅ Validation réaliste en Java
+- **NOREP** — Pas de réplication (baseline)
+- **TCDRM Statique** — Réplication à seuil fixe (P_SLA = 200)
+- **Q-Learning RL** — Décisions Python via Py4J
+- **DQN RL** — Décisions Python via Py4J
 
 ---
 
-## 🔗 Documentation Java
-
-Pour plus de détails sur les simulations CloudSim, voir:
-
-- `src/main/java/org/tcdrm/adaptive/examples/TcdrmComparisonCloudSim.java`
-- `src/main/java/org/tcdrm/adaptive/rl/StaticTcdrmPolicy.java`
-- `src/main/java/org/tcdrm/adaptive/rl/PythonQLearningPolicy.java`
-
----
-
-**Python pour l'entraînement, Java pour la validation! 🎯**
+**Python pour l'entraînement, Java pour la validation.**

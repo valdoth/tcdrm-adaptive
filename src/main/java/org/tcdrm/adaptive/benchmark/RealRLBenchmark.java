@@ -1,6 +1,8 @@
 package org.tcdrm.adaptive.benchmark;
 
+import org.tcdrm.adaptive.core.TcdrmConstants;
 import org.tcdrm.adaptive.rl.PythonRLBridge;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -14,66 +16,37 @@ import java.util.Random;
  * 2. Appelle le modèle Python à chaque requête pour décider
  * 3. Applique les décisions de réplication dynamiquement
  * 4. Simule le warm-up progressif des réplicas
+ * 
+ * Dynamic P_SLA (Paper Section 3.2, Equation 1):
+ * - Popularity pd_i = #Requests / (T_current - T_first + 1)
+ * - Replication triggered when pd_i > P_SLA AND (tQ > T_SLA OR cQ > C_SLA)
+ * - RL models receive dynamic popularity + SLA violation signals in state
  */
 public class RealRLBenchmark {
-    private static final int MAX_QUERIES = 5000;
-    
-    // Paramètres réseau
-    private static final double BW_LOCAL_GBPS = 10.0;
-    private static final double LAT_LOCAL_MS = 1.0;
-    private static final double BW_REMOTE_GBPS = 1.0;
-    private static final double LAT_REMOTE_MS = 100.0;
-
-    // Coûts (Article Tableau 1)
-    private static final double COST_BW_INTRA_DC = 0.002;
-    private static final double COST_BW_INTER_PROVIDER = 0.01;  // Article Tableau 1
-    private static final double CPU_COST_PER_HOUR = 0.02;
-    private static final double STORAGE_COST_PER_GB_PER_MONTH = 0.02;
-    private static final double PROCESSING_MIN_PER_GB = 0.5;
-    
-    // Warm-up
-    private static final int WARMUP_QUERIES = 600;
-    private static final double JITTER_RATIO = 0.05;
-    private static final double CPU_JITTER_RATIO = 0.05;
-    
-    // Budget et contraintes
-    private static final double INITIAL_BUDGET = 1000.0;
-    private static final int MAX_REPLICAS = 5;  // Article Tableau 1 (simple queries)
 
     private final PythonRLBridge pythonBridge;
     private final String modelType; // "qlearning" ou "dqn"
     private final Random rnd;
+    private final boolean complex;
 
-    public RealRLBenchmark(PythonRLBridge pythonBridge, String modelType, long seed) {
+    public RealRLBenchmark(PythonRLBridge pythonBridge, String modelType, long seed, boolean complex) {
         this.pythonBridge = pythonBridge;
         this.modelType = modelType;
         this.rnd = new Random(seed);
-    }
-    
-    /**
-     * Calcule l'efficacité du warm-up avec fonction sigmoid
-     */
-    private double calculateWarmupEfficiency(int queriesSinceCreation) {
-        if (queriesSinceCreation >= WARMUP_QUERIES) {
-            return 1.0;
-        }
-        double x = (double) queriesSinceCreation / WARMUP_QUERIES;
-        return 1.0 / (1.0 + Math.exp(-5.0 * (x - 0.5)));
-    }
-    
-    /**
-     * Sélection du réplica basée sur la proximité et le warm-up
-     */
-    private boolean selectBestReplica(int totalReplicas, double warmupEfficiency) {
-        double baseProbability = (double) totalReplicas / (totalReplicas + 2);
-        double localProbability = baseProbability * warmupEfficiency;
-        return rnd.nextDouble() < localProbability;
+        this.complex = complex;
     }
 
     /**
-     * Exécute le benchmark avec le modèle RL Python
+     * Exécute le benchmark avec le modèle RL Python.
+     * 
+     * Le modèle RL décide dynamiquement quand répliquer/supprimer des relations.
+     * La simulation utilise le même modèle multi-relation que TCDRM et NoRepLc.
      */
-    public BenchmarkDataPerQuery computeBenchmark(String queryId, double dataGb) {
+    public BenchmarkDataPerQuery computeBenchmark(String queryId) {
+        int nRelations = complex ? TcdrmConstants.RELATIONS_COMPLEX : TcdrmConstants.RELATIONS_SIMPLE;
+        int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
+        double relationSize = TcdrmConstants.AVG_RELATION_SIZE_GB;
+
         List<Integer> queryNumbers = new ArrayList<>();
         List<Double> timePerQueryMs = new ArrayList<>();
         List<Double> costPerQuery = new ArrayList<>();
@@ -81,27 +54,61 @@ public class RealRLBenchmark {
         List<Integer> replicaCountList = new ArrayList<>();
 
         double totalCost = 0.0;
-        double currentBudget = INITIAL_BUDGET;
+        double currentBudget = TcdrmConstants.INITIAL_BUDGET;
         int currentReplicaCount = 0;
         int replicaCreationQuery = -1;
         double totalLatency = 0.0;
+        double sumBwInterProviderGb = 0.0;
+        double sumBwInterRegionGb = 0.0;
+        double sumBwCost = 0.0;
+        double sumCpuCost = 0.0;
+        double sumReplicaCost = 0.0;
         
-        for (int q = 0; q < MAX_QUERIES; q++) {
-            // === 1. OBTENIR L'ÉTAT ACTUEL ===
-            double avgLatency = (q > 0) ? totalLatency / q : LAT_REMOTE_MS;
-            double popularity = (double) q / MAX_QUERIES; // Normaliser entre 0 et 1
+        int actionReplicateCount = 0;
+        int actionNoopCount = 0;
+        
+        for (int q = 0; q < TcdrmConstants.MAX_QUERIES; q++) {
+            // === 1. CALCULER LA POPULARITÉ DYNAMIQUE ===
+            // For RL models, we use cumulative query count as popularity metric
+            // This matches the paper's intent: data becomes "popular" after many accesses
+            // dynamicPopularity grows from 0 to MAX_QUERIES as queries accumulate
+            double dynamicPopularity = (double)(q + 1);  // Cumulative access count
             
-            // État pour Python: [latency, budget, replicas, popularity, total_cost]
+            // === 2. OBTENIR L'ÉTAT ACTUEL ===
+            double avgLatency = (q > 0) ? totalLatency / q : TcdrmConstants.LAT_INTER_PROVIDER_MS;
+            double lastQueryLatency = (q > 0 && !timePerQueryMs.isEmpty()) 
+                ? timePerQueryMs.get(timePerQueryMs.size() - 1) 
+                : TcdrmConstants.LAT_INTER_PROVIDER_MS;
+            double lastQueryCost = (q > 0 && !costPerQuery.isEmpty()) 
+                ? costPerQuery.get(costPerQuery.size() - 1) 
+                : 0.0;
+            
+            // SLA thresholds from paper (img-002)
+            double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
+            double cSla = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
+            
+            // SLA violation signals (Paper Algorithm 1: tQ > T_SLA OR cQ > C_SLA)
+            double tSlaViolation = (lastQueryLatency > tSla) ? 1.0 : 0.0;
+            double cSlaViolation = (lastQueryCost > cSla) ? 1.0 : 0.0;
+            
+            // Extended state for RL models:
+            // [0] avgLatency, [1] budget, [2] replicas, [3] dynamicPopularity (normalized),
+            // [4] totalCost, [5] tSlaViolation, [6] cSlaViolation, [7] queryProgress
             double[] state = new double[]{
-                avgLatency,
-                currentBudget,
-                currentReplicaCount,
-                popularity,
-                totalCost
+                avgLatency,                                          // [0] Average latency so far
+                currentBudget,                                       // [1] Remaining budget
+                currentReplicaCount,                                 // [2] Current replica count
+                dynamicPopularity / TcdrmConstants.POPULARITY_THRESHOLD, // [3] Normalized popularity (1.0 = at threshold)
+                totalCost,                                           // [4] Total cost so far
+                tSlaViolation,                                       // [5] T_SLA violated (1.0 if latency > T_SLA)
+                cSlaViolation,                                       // [6] C_SLA violated (1.0 if cost > C_SLA)
+                (double) q / TcdrmConstants.MAX_QUERIES              // [7] Query progress [0, 1]
             };
             
-            // === 2. DEMANDER DÉCISION AU MODÈLE PYTHON ===
-            int action = 0; // NOOP par défaut
+            // === 3. DEMANDER DÉCISION AU MODÈLE PYTHON ===
+            // RL models can now decide based on dynamic popularity + SLA violations
+            // No fixed P_SLA gate - let the model learn when to replicate
+            int action = 0;
             try {
                 if ("qlearning".equalsIgnoreCase(modelType)) {
                     action = pythonBridge.selectActionQLearning(state);
@@ -110,14 +117,17 @@ public class RealRLBenchmark {
                 }
             } catch (Exception e) {
                 System.err.println("⚠️  Erreur appel Python (query " + q + "): " + e.getMessage());
-                action = 0; // NOOP en cas d'erreur
+                action = 0;
             }
             
+            // Track action distribution
+            if (action == 1) actionReplicateCount++;
+            else if (action == 0) actionNoopCount++;
+            
             // === 3. EXÉCUTER L'ACTION ===
-            // Actions: 0=NOOP, 1=REPLICATE, 2=DELETE
-            if (action == 1 && currentReplicaCount < MAX_REPLICAS) {
-                // REPLICATE
-                double creationCost = dataGb * COST_BW_INTER_PROVIDER;
+            double creationCost = 0.0;
+            if (action == 1 && currentReplicaCount < maxReplicas) {
+                creationCost = TcdrmConstants.replicationCost(relationSize);
                 if (currentBudget >= creationCost) {
                     currentReplicaCount++;
                     currentBudget -= creationCost;
@@ -127,72 +137,50 @@ public class RealRLBenchmark {
                     }
                 }
             } else if (action == 2 && currentReplicaCount > 0) {
-                // DELETE
                 currentReplicaCount--;
                 if (currentReplicaCount == 0) {
                     replicaCreationQuery = -1;
                 }
             }
-            // action == 0 : NOOP, ne rien faire
             
             // === 4. SIMULER LA REQUÊTE ===
-            boolean replicaExists = currentReplicaCount > 0;
-            
-            // Calculer l'efficacité du warm-up
-            double warmupEfficiency = 0.0;
-            if (replicaExists && replicaCreationQuery >= 0) {
-                int queriesSinceCreation = q - replicaCreationQuery;
-                warmupEfficiency = calculateWarmupEfficiency(queriesSinceCreation);
+            double warmupEff = 0.0;
+            if (currentReplicaCount > 0 && replicaCreationQuery >= 0) {
+                warmupEff = TcdrmConstants.warmupEfficiency(q - replicaCreationQuery);
             }
             
-            // Sélection du réplica
-            boolean useLocal = replicaExists && selectBestReplica(currentReplicaCount, warmupEfficiency);
+            QuerySimulator.QueryResult result = QuerySimulator.simulateTcdrmQuery(
+                    nRelations, currentReplicaCount, warmupEff, rnd);
             
-            // Paramètres réseau
-            double bwGbps = useLocal ? BW_LOCAL_GBPS : BW_REMOTE_GBPS;
-            double latencyMs = useLocal ? LAT_LOCAL_MS : LAT_REMOTE_MS;
-            double costPerGb = useLocal ? COST_BW_INTRA_DC : COST_BW_INTER_PROVIDER;
+            totalLatency += result.queryTimeMs();
+            totalCost += result.bwCost();
+            currentBudget -= result.totalCost();
+            sumBwInterProviderGb += result.bwInterProviderGb();
+            sumBwInterRegionGb += result.bwInterRegionGb();
+            sumBwCost += result.bwCost();
+            sumCpuCost += result.cpuCost();
+            // Replica cost = creation cost + ongoing maintenance (storage + write I/O)
+            double maintenanceCost = currentReplicaCount * TcdrmConstants.REPLICA_MAINTENANCE_COST_PER_QUERY;
+            sumReplicaCost += creationCost + maintenanceCost;
 
-            // Temps de transfert avec jitter
-            double transferMs = (dataGb * 8_000.0 / bwGbps) + latencyMs;
-            transferMs *= (1.0 + JITTER_RATIO * (rnd.nextDouble() * 2 - 1));
-            
-            // Temps de traitement avec jitter
-            double processingMin = dataGb * PROCESSING_MIN_PER_GB;
-            processingMin *= (1.0 + CPU_JITTER_RATIO * (rnd.nextDouble() * 2 - 1));
-            
-            // Temps total pour cette requête
-            double queryTimeMs = transferMs + processingMin * 60_000.0;
-            totalLatency += latencyMs;
-            
-            // === 5. CALCULER LES COÛTS ===
-            double transferCost = dataGb * costPerGb;
-            double cpuCost = (processingMin / 60.0) * CPU_COST_PER_HOUR;
-            
-            // Coût de stockage par heure
-            double queryDurationHours = queryTimeMs / 3600000.0;
-            double storageCost = replicaExists ? 
-                (dataGb * STORAGE_COST_PER_GB_PER_MONTH * currentReplicaCount * queryDurationHours / 720.0) : 0.0;
-            
-            double queryCost = transferCost + cpuCost + storageCost;
-            totalCost += queryCost;
-            currentBudget -= queryCost;
-
-            // === 6. ENREGISTRER LES MÉTRIQUES ===
+            // === 5. ENREGISTRER LES MÉTRIQUES ===
             queryNumbers.add(q);
-            timePerQueryMs.add(queryTimeMs / 1000.0); // Convertir en secondes
-            costPerQuery.add(queryCost);
+            timePerQueryMs.add(result.queryTimeMs());
+            costPerQuery.add(result.bwCost());
             cumulativeCost.add(totalCost);
             replicaCountList.add(currentReplicaCount);
             
-            // Arrêter si budget épuisé
             if (currentBudget <= 0) {
                 System.out.println("⚠️  Budget épuisé à la requête " + q);
                 break;
             }
         }
 
+        System.out.printf("    %s: actions NOOP=%d, REPLICATE=%d, finalReplicas=%d, replicaStart=q%d%n",
+                queryId, actionNoopCount, actionReplicateCount, currentReplicaCount, replicaCreationQuery);
+        
         return new BenchmarkDataPerQuery(queryId, queryNumbers, timePerQueryMs, 
-                                         costPerQuery, cumulativeCost, replicaCountList);
+                costPerQuery, cumulativeCost, replicaCountList,
+                sumBwInterProviderGb, sumBwInterRegionGb, sumBwCost, sumCpuCost, sumReplicaCost);
     }
 }

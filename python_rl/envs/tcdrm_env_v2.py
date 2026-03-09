@@ -12,10 +12,8 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 from typing import Optional, Tuple, Dict, Any
-import sys
-import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from config.constants import TcdrmConstants as C
 from utils.plsa_fast import PLSAPopularityModel
 
 
@@ -50,30 +48,27 @@ class TcdrmV2Env(gym.Env):
         self.data_gb = data_gb
         self.render_mode = render_mode
         
-        # Constantes
-        self.MAX_QUERIES = 1000
-        self.INITIAL_BUDGET = 1000.0
-        # MAX_REPLICAS selon l'article: 5 pour simple queries, 13 pour complex queries
-        self.MAX_REPLICAS_SIMPLE = 5
-        self.MAX_REPLICAS_COMPLEX = 13
-        self.COMPLEXITY_THRESHOLD = 10.0
-        self.MAX_REPLICAS = self.MAX_REPLICAS_SIMPLE if data_gb < self.COMPLEXITY_THRESHOLD else self.MAX_REPLICAS_COMPLEX
-        self.RT_MAX = 0.200  # Temps de réponse maximum (secondes) - Article: 200ms pour simple queries
+        # ====================================================================
+        # PARAMÈTRES DU SYSTÈME (from config.constants - Article TCDRM V1)
+        # ====================================================================
+        self.MAX_QUERIES = C.MAX_QUERIES
+        self.INITIAL_BUDGET = C.INITIAL_BUDGET
+        self.MAX_REPLICAS = C.max_replicas_for_data(data_gb)
+        self.RT_MAX = C.TSLA_S  # Seuil SLA en secondes (0.200s = 200ms)
         
-        # Coûts (selon Tableau 1 de l'article TCDRM V1)
-        self.COST_BW_INTRA_DC = 0.002          # $/GB - Moyenne intra-datacenter
-        self.COST_BW_INTER_REGION = 0.008      # $/GB - Inter-région (même fournisseur)
-        self.COST_BW_INTER_CLOUD = 0.01        # $/GB - Inter-fournisseur (Tableau 1)
-        # Storage cost selon article TCDRM V1: $0.02/GB/mois
-        self.STORAGE_COST_PER_GB_PER_HOUR = 0.02 / 720.0  # ~0.0000277 $/GB/heure
-        self.REPLICATION_COST_PER_GB = self.COST_BW_INTER_CLOUD  # Coût de création réplica
-        self.CPU_COST_PER_HOUR = 0.02
+        # Coûts (Tableau 1)
+        self.COST_BW_INTRA_DC = C.COST_BW_INTRA_DC
+        self.COST_BW_INTER_REGION = C.COST_BW_INTER_REGION
+        self.COST_BW_INTER_CLOUD = C.COST_BW_INTER_PROVIDER
+        self.STORAGE_COST_PER_GB_PER_HOUR = C.STORAGE_COST_PER_GB_PER_HOUR
+        self.REPLICATION_COST_PER_GB = C.COST_BW_INTER_PROVIDER
+        self.CPU_COST_PER_HOUR = C.CPU_COST_PER_HOUR
         
         # Paramètres réseau
-        self.BW_LOCAL_GBPS = 10.0
-        self.BW_REMOTE_GBPS = 1.0
-        self.LAT_LOCAL_MS = 1.0
-        self.LAT_REMOTE_MS = 100.0
+        self.BW_LOCAL_GBPS = C.BW_LOCAL_GBPS
+        self.BW_REMOTE_GBPS = C.BW_REMOTE_GBPS
+        self.LAT_LOCAL_MS = C.LAT_LOCAL_MS
+        self.LAT_REMOTE_MS = C.LAT_REMOTE_MS
         
         # Poids de la fonction de récompense
         self.R1_SLA_OK = 10.0

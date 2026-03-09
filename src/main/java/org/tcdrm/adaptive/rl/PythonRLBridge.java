@@ -69,4 +69,9 @@ public interface PythonRLBridge {
      * Retourne les informations sur les modèles chargés
      */
     String getModelInfo();
+    
+    /**
+     * Reset internal counters between benchmark runs (e.g., simple → complex)
+     */
+    void resetCounters();
 }

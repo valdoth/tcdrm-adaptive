@@ -88,7 +88,7 @@ public class SingleModelMetricsPlotter {
     private static List<Double> calculateRewards(BenchmarkDataPerQuery data) {
         List<Double> rewards = new ArrayList<>();
         for (int i = 0; i < data.queryNumbers().size(); i++) {
-            double latency = data.timePerQueryMs().get(i) * 1000; // s to ms
+            double latency = data.timePerQueryMs().get(i); // already in ms
             double cost = data.costPerQuery().get(i);
             double slaViolation = latency > SLA_THRESHOLD ? -10.0 : 0.0;
             double reward = -cost * 100 + slaViolation; // Échelle similaire à RL
