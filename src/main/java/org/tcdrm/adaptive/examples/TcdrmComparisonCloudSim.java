@@ -209,9 +209,32 @@ public class TcdrmComparisonCloudSim {
                          tcdrmData.queryNumbers(), tcdrmData.cumulativeCost(),
                          norepData.queryNumbers(), norepData.cumulativeCost());
 
-        // 6. Graphes de métriques TCDRM Statique (similaires aux graphes d'entraînement)
-        System.out.println(">>> Génération des graphes de métriques TCDRM Statique...");
-        TcdrmMetricsPlotter.generateMetricsPlot(tcdrmData, "images/tcdrm_metrics_" + queryId + ".png");
+        // 6. Graphes de métriques individuels pour chaque modèle
+        System.out.println(">>> Génération des graphes de métriques individuels...");
+        
+        // NOREP
+        SingleModelMetricsPlotter.generateMetricsPlot(
+            norepData, "NOREP", new Color(100, 149, 237),
+            "images/tcdrm_metrics_norep_" + queryId + ".png"
+        );
+        
+        // TCDRM Static
+        SingleModelMetricsPlotter.generateMetricsPlot(
+            tcdrmData, "TCDRM Statique", new Color(220, 20, 60),
+            "images/tcdrm_metrics_tcdrm_" + queryId + ".png"
+        );
+        
+        // Q-Learning
+        SingleModelMetricsPlotter.generateMetricsPlot(
+            pythonQLearningData, "Q-Learning", new Color(255, 165, 0),
+            "images/tcdrm_metrics_qlearning_" + queryId + ".png"
+        );
+        
+        // DQN
+        SingleModelMetricsPlotter.generateMetricsPlot(
+            pythonDQNData, "DQN", new Color(34, 139, 34),
+            "images/tcdrm_metrics_dqn_" + queryId + ".png"
+        );
 
         System.out.println("✓ All graphs (4 curves) generated for " + queryId + "\n");
     }

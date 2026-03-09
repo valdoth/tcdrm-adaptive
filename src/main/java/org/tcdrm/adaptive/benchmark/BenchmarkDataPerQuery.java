@@ -28,4 +28,24 @@ public record BenchmarkDataPerQuery(
         int idx = queryNumbers.indexOf(queryNum);
         return idx >= 0 ? cumulativeCost.get(idx) : 0.0;
     }
+    
+    // Alias pour compatibilité avec AllModelsMetricsPlotter
+    public List<Integer> replicaCounts() {
+        return replicaCount;
+    }
+    
+    // Calculer les violations SLA cumulatives (TSLA = 200ms selon article)
+    public List<Double> cumulativeSLAViolations() {
+        List<Double> violations = new java.util.ArrayList<>();
+        double cumulative = 0.0;
+        double SLA_THRESHOLD = 0.200; // 200ms en secondes
+        
+        for (double timeMs : timePerQueryMs) {
+            if (timeMs > SLA_THRESHOLD) {
+                cumulative += 1.0;
+            }
+            violations.add(cumulative);
+        }
+        return violations;
+    }
 }
