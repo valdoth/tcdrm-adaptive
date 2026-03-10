@@ -48,14 +48,15 @@ class PythonRLBridge:
             self.dqn_agent.policy_net.eval()
             print("✅ DQN loaded")
         
-        # TCDRM-ADAPTIVE strategies
+        # TCDRM-ADAPTIVE strategies with progressive replication
+        # replicate_interval controls how many queries between each replica creation
         self._ql_strategy = AdaptiveStrategy(
             initial_threshold=0.8, min_threshold=0.5,
-            sla_violation_trigger=10, replicate_interval=50
+            sla_violation_trigger=10, replicate_interval=100  # 1 replica every 100 queries
         )
         self._dqn_strategy = AdaptiveStrategy(
             initial_threshold=0.6, min_threshold=0.4,
-            sla_violation_trigger=5, replicate_interval=15
+            sla_violation_trigger=5, replicate_interval=80  # 1 replica every 80 queries
         )
         
         print("✅ Python bridge initialized (TCDRM-ADAPTIVE)")

@@ -113,8 +113,15 @@ class AdaptiveStrategy:
                     self.state.adaptive_threshold - self.threshold_decay
                 )
         
-        popularity_ready = (normalized_popularity >= self.state.adaptive_threshold)
-        budget_ratio = budget / 1000.0
+        budget_ratio = budget / 1000.0  # Assuming initial budget = 1000
+        
+        # P_SLA DYNAMIQUE basé sur le budget (Option 2 du papier)
+        # P_SLA(t) = P_base × (budget_restant / budget_initial)
+        # Plus de budget → seuil plus bas → réplication plus facile
+        # Moins de budget → seuil plus haut → économie
+        dynamic_threshold = self.state.adaptive_threshold * max(0.3, min(1.0, budget_ratio))
+        
+        popularity_ready = (normalized_popularity >= dynamic_threshold)
         
         # Anti-thrashing check
         self.state.action_history.append(0)

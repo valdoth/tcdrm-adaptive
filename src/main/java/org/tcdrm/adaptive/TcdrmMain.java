@@ -157,6 +157,9 @@ public class TcdrmMain {
             SingleModelMetricsPlotter.generateMetricsPlot(
                 (BenchmarkDataPerQuery) entry[0], (String) entry[1], (Color) entry[2],
                 "images/tcdrm_metrics_" + entry[3] + ".png");
+            PopularityMetricsPlotter.generatePopularityCharts(
+                (BenchmarkDataPerQuery) entry[0], (String) entry[1], (Color) entry[2],
+                "images/tcdrm_popularity_" + entry[3] + ".png");
         }
     }
     
