@@ -58,7 +58,7 @@ public final class TcdrmConstants {
     /** Max replicas for complex queries (Fig 2: blue line stabilizes at 12) */
     public static final int MAX_REPLICAS_COMPLEX = 12;
 
-    // ==================================================================
+    // ==================================================================∏
     // Bandwidth Costs (Paper Table 1 — img-001.png, averages)
     // ==================================================================
     /** $/GB — Intra-datacenter (avg of Google/AWS/Azure) */
