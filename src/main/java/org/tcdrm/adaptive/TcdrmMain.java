@@ -4,18 +4,15 @@ import org.tcdrm.adaptive.benchmark.*;
 import org.tcdrm.adaptive.core.TcdrmConstants;
 import org.tcdrm.adaptive.gateway.Py4JGateway;
 import org.tcdrm.adaptive.rl.PythonRLBridge;
-import org.tcdrm.adaptive.runner.BenchmarkRunner;
-import org.tcdrm.adaptive.visualization.*;
 
-import java.awt.Color;
 import java.io.File;
 import java.io.IOException;
-import java.util.List;
 
 /**
  * TCDRM-ADAPTIVE Main Entry Point.
  * 
- * Generates all paper figures (Phase 1) and RL extension figures (Phase 2).
+ * Utilise CloudSimPlus pour la simulation multi-cloud.
+ * Génère les graphiques du paper (Phase 1) et les extensions RL (Phase 2).
  */
 public class TcdrmMain {
     
@@ -25,17 +22,116 @@ public class TcdrmMain {
         printHeader();
         new File("images").mkdirs();
 
-        // Phase 1: Paper reproduction
-        BenchmarkResults paper = runPaperBenchmarks();
-        generatePaperFigures(paper);
-        System.out.println("\n✅ Phase 1 complete: All 6 paper figures generated");
+        // Phase 1: Paper reproduction (TCDRM vs NoRepLc)
+        System.out.println("\n━━━ PHASE 1: Paper Figures (TCDRM vs NoRepLc) ━━━");
+        
+        BenchmarkData norepSimple = BenchmarkRunner.runNoRep(42L, false, "NoRepLc_Simple");
+        BenchmarkData tcdrmSimple = BenchmarkRunner.runTcdrm(42L, false, "TCDRM_Simple");
+        BenchmarkData norepComplex = BenchmarkRunner.runNoRep(42L, true, "NoRepLc_Complex");
+        BenchmarkData tcdrmComplex = BenchmarkRunner.runTcdrm(42L, true, "TCDRM_Complex");
+        
+        norepSimple.printSummary();
+        tcdrmSimple.printSummary();
+        norepComplex.printSummary();
+        tcdrmComplex.printSummary();
+        
+        // Générer les graphiques du paper (Figs 2-7)
+        System.out.println("\n  Generating paper figures...");
+        ChartGenerator.generateReplicaFactor(tcdrmSimple, tcdrmComplex, "images/fig2_replica_factor.png");
+        ChartGenerator.generateResponseTime(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex, 
+            "images/fig3_response_time.png");
+        ChartGenerator.generateBwConsumption(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex,
+            "images/fig4_bw_consumption.png");
+        ChartGenerator.generateAvgBwPrice(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex,
+            "images/fig5_avg_bw_price.png");
+        ChartGenerator.generateCumulativeBwPrice(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex,
+            "images/fig6_cumulative_cost.png");
+        ChartGenerator.generateTotalCost(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex,
+            "images/fig7_total_cost.png");
+        
+        // Métriques détaillées par modèle (NoRep, TCDRM)
+        System.out.println("\n  Generating model metrics...");
+        ChartGenerator.generateModelMetrics(norepSimple, "images/metrics_norep_simple.png", false);
+        ChartGenerator.generateModelMetrics(tcdrmSimple, "images/metrics_tcdrm_simple.png", false);
+        
+        // Analyse de la popularité (NoRep, TCDRM)
+        System.out.println("\n  Generating popularity analysis...");
+        ChartGenerator.generatePopularityAnalysis(norepSimple, "images/popularity_norep_simple.png", false);
+        ChartGenerator.generatePopularityAnalysis(tcdrmSimple, "images/popularity_tcdrm_simple.png", false);
+        
+        System.out.println("\n✅ Phase 1 complete: Paper figures generated (Figs 2-7 + Metrics + Popularity)");
 
         // Phase 2: RL extensions
-        BenchmarkResults rl = runRLBenchmarks(paper);
-        if (rl != null) {
-            generateRLFigures(paper, rl);
-            generateIndividualMetrics(paper, rl);
-            System.out.println("\n✅ Phase 2 complete: All RL extension graphs generated");
+        System.out.println("\n━━━ PHASE 2: RL Extensions (Q-Learning + DQN) ━━━");
+        
+        gateway = new Py4JGateway();
+        gateway.start();
+        
+        PythonRLBridge bridge = waitForPythonConnection();
+        if (bridge != null) {
+            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 42L);
+            BenchmarkData dqnSimple = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Simple", false, 43L);
+            bridge.resetCounters();
+            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 42L);
+            BenchmarkData dqnComplex = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Complex", true, 43L);
+            
+            qlSimple.printSummary();
+            dqnSimple.printSummary();
+            qlComplex.printSummary();
+            dqnComplex.printSummary();
+            
+            // Générer les graphiques avec 4 modèles (format PDF: Simple + Complex côte à côte)
+            System.out.println("\n  Generating 4-model comparison figures (PDF format)...");
+            
+            // Fig 1: Replica Factor (4 models)
+            ChartGenerator.generateReplicaFactor4Models(
+                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                "images/fig1_replica_factor_4models.png");
+            
+            // Fig 2: Response Time (4 models)
+            ChartGenerator.generateResponseTime4Models(
+                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                "images/fig2_response_time_4models.png");
+            
+            // Fig 3: BW Consumption (4 models)
+            ChartGenerator.generateBwConsumption4Models(
+                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                "images/fig3_bw_consumption_4models.png");
+            
+            // Fig 4: Avg BW Price (4 models)
+            ChartGenerator.generateAvgBwPrice4Models(
+                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                "images/fig4_avg_bw_price_4models.png");
+            
+            // Fig 5: Cumulative BW Price (4 models)
+            ChartGenerator.generateCumulativeBwPrice4Models(
+                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                "images/fig5_cumulative_bw_price_4models.png");
+            
+            // Fig 6: Total Cost (4 models)
+            ChartGenerator.generateTotalCost4Models(
+                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                "images/fig6_total_cost_4models.png");
+            
+            // Métriques détaillées RL (Q-Learning, DQN)
+            System.out.println("\n  Generating RL model metrics...");
+            ChartGenerator.generateModelMetrics(qlSimple, "images/metrics_qlearning_simple.png", false);
+            ChartGenerator.generateModelMetrics(dqnSimple, "images/metrics_dqn_simple.png", false);
+            
+            // Analyse de la popularité RL
+            System.out.println("\n  Generating RL popularity analysis...");
+            ChartGenerator.generatePopularityAnalysis(qlSimple, "images/popularity_qlearning_simple.png", false);
+            ChartGenerator.generatePopularityAnalysis(dqnSimple, "images/popularity_dqn_simple.png", false);
+            
+            System.out.println("\n✅ Phase 2 complete: RL extension graphs generated (RL-2 to RL-7 + Metrics + Popularity)");
+        } else {
+            System.err.println("  Python client not connected. Phase 2 skipped.");
         }
         
         printFooter();
@@ -43,7 +139,7 @@ public class TcdrmMain {
     
     private static void printHeader() {
         System.out.println("=".repeat(80));
-        System.out.println("  TCDRM-ADAPTIVE — Paper Figures + RL Extensions");
+        System.out.println("  TCDRM-ADAPTIVE — CloudSimPlus Simulation");
         System.out.println("  Simple: " + TcdrmConstants.RELATIONS_SIMPLE + " relations x " 
             + (int)(TcdrmConstants.AVG_RELATION_SIZE_GB * 1000) + " MB");
         System.out.println("  Complex: " + TcdrmConstants.RELATIONS_COMPLEX + " relations x " 
@@ -58,60 +154,6 @@ public class TcdrmMain {
         System.out.println("\n" + "=".repeat(80));
         System.out.println("  ALL GRAPHS GENERATED IN images/");
         System.out.println("=".repeat(80));
-    }
-    
-    // ========================================================================
-    // Phase 1: Paper Benchmarks
-    // ========================================================================
-    
-    private static BenchmarkResults runPaperBenchmarks() {
-        System.out.println("\n━━━ PHASE 1: Paper Figures (TCDRM vs NoRepLc) ━━━");
-        
-        BenchmarkDataPerQuery norepS = BenchmarkRunner.runNoRep(42L, false, "NoRepLc_Simple");
-        BenchmarkDataPerQuery tcdrmS = BenchmarkRunner.runTcdrm(42L, false, "TCDRM_Simple");
-        BenchmarkDataPerQuery norepC = BenchmarkRunner.runNoRep(42L, true, "NoRepLc_Complex");
-        BenchmarkDataPerQuery tcdrmC = BenchmarkRunner.runTcdrm(42L, true, "TCDRM_Complex");
-        
-        BenchmarkRunner.logSampleValues("NoRepLc Simple", norepS);
-        BenchmarkRunner.logSampleValues("TCDRM   Simple", tcdrmS);
-        BenchmarkRunner.logSampleValues("NoRepLc Complex", norepC);
-        BenchmarkRunner.logSampleValues("TCDRM   Complex", tcdrmC);
-        
-        return new BenchmarkResults(norepS, tcdrmS, norepC, tcdrmC, null, null, null, null);
-    }
-    
-    private static void generatePaperFigures(BenchmarkResults r) throws IOException {
-        PaperFigureGenerator.generateReplicaFactor(r.tcdrmS, r.tcdrmC);
-        PaperFigureGenerator.generateResponseTime(r.tcdrmS, r.norepS, r.tcdrmC, r.norepC);
-        PaperFigureGenerator.generateBwConsumption(r.norepS, r.tcdrmS, r.norepC, r.tcdrmC);
-        PaperFigureGenerator.generateAvgBwPrice(r.tcdrmS, r.norepS, r.tcdrmC, r.norepC);
-        PaperFigureGenerator.generateCumulativeBwPrice(r.tcdrmS, r.norepS, r.tcdrmC, r.norepC);
-        PaperFigureGenerator.generateTotalCost(r.norepS, r.tcdrmS, r.norepC, r.tcdrmC);
-    }
-    
-    // ========================================================================
-    // Phase 2: RL Benchmarks
-    // ========================================================================
-    
-    private static BenchmarkResults runRLBenchmarks(BenchmarkResults paper) throws InterruptedException {
-        System.out.println("\n━━━ PHASE 2: RL Extensions (Q-Learning + DQN) ━━━");
-        
-        gateway = new Py4JGateway();
-        gateway.start();
-        
-        PythonRLBridge bridge = waitForPythonConnection();
-        if (bridge == null) {
-            System.err.println("  Python client not connected. Phase 2 skipped.");
-            return null;
-        }
-        
-        BenchmarkDataPerQuery qlS = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 42L);
-        BenchmarkDataPerQuery dqnS = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Simple", false, 43L);
-        bridge.resetCounters();
-        BenchmarkDataPerQuery qlC = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 42L);
-        BenchmarkDataPerQuery dqnC = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Complex", true, 43L);
-        
-        return new BenchmarkResults(paper.norepS, paper.tcdrmS, paper.norepC, paper.tcdrmC, qlS, dqnS, qlC, dqnC);
     }
     
     private static PythonRLBridge waitForPythonConnection() throws InterruptedException {
@@ -132,42 +174,4 @@ public class TcdrmMain {
         }
         return null;
     }
-    
-    private static void generateRLFigures(BenchmarkResults paper, BenchmarkResults rl) throws IOException {
-        RLFigureGenerator.generateReplicaFactor(paper.tcdrmS, paper.norepS, rl.qlS, rl.dqnS,
-                                                 paper.tcdrmC, paper.norepC, rl.qlC, rl.dqnC);
-        RLFigureGenerator.generateResponseTime(paper.tcdrmS, paper.norepS, rl.qlS, rl.dqnS,
-                                                paper.tcdrmC, paper.norepC, rl.qlC, rl.dqnC);
-        RLFigureGenerator.generateBwConsumption(paper.norepS, paper.tcdrmS, rl.qlS, rl.dqnS,
-                                                 paper.norepC, paper.tcdrmC, rl.qlC, rl.dqnC);
-        RLFigureGenerator.generateAvgBwPrice(paper.tcdrmS, paper.norepS, rl.qlS, rl.dqnS,
-                                              paper.tcdrmC, paper.norepC, rl.qlC, rl.dqnC);
-        RLFigureGenerator.generateCumulativeBwPrice(paper.tcdrmS, paper.norepS, rl.qlS, rl.dqnS,
-                                                     paper.tcdrmC, paper.norepC, rl.qlC, rl.dqnC);
-        RLFigureGenerator.generateTotalCost(paper.norepS, paper.tcdrmS, rl.qlS, rl.dqnS,
-                                             paper.norepC, paper.tcdrmC, rl.qlC, rl.dqnC);
-    }
-    
-    private static void generateIndividualMetrics(BenchmarkResults paper, BenchmarkResults rl) throws IOException {
-        for (var entry : List.of(
-                new Object[]{ paper.norepS, "NOREP", ChartColors.NOREP, "norep_simple" },
-                new Object[]{ paper.tcdrmS, "TCDRM", ChartColors.TCDRM, "tcdrm_simple" },
-                new Object[]{ rl.qlS, "Q-Learning", ChartColors.QLEARNING, "qlearning_simple" },
-                new Object[]{ rl.dqnS, "DQN", ChartColors.DQN, "dqn_simple" })) {
-            SingleModelMetricsPlotter.generateMetricsPlot(
-                (BenchmarkDataPerQuery) entry[0], (String) entry[1], (Color) entry[2],
-                "images/tcdrm_metrics_" + entry[3] + ".png");
-            PopularityMetricsPlotter.generatePopularityCharts(
-                (BenchmarkDataPerQuery) entry[0], (String) entry[1], (Color) entry[2],
-                "images/tcdrm_popularity_" + entry[3] + ".png");
-        }
-    }
-    
-    /** Container for benchmark results */
-    private record BenchmarkResults(
-        BenchmarkDataPerQuery norepS, BenchmarkDataPerQuery tcdrmS,
-        BenchmarkDataPerQuery norepC, BenchmarkDataPerQuery tcdrmC,
-        BenchmarkDataPerQuery qlS, BenchmarkDataPerQuery dqnS,
-        BenchmarkDataPerQuery qlC, BenchmarkDataPerQuery dqnC
-    ) {}
 }

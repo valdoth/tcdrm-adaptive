@@ -111,6 +111,14 @@ public final class TcdrmConstants {
     public static final int MAX_QUERIES = 1000;
     /** Budget initial ($) */
     public static final double INITIAL_BUDGET = 1000.0;
+    
+    // ==================================================================
+    // Popularité pour la réplication (ratio lecture/écriture)
+    // ==================================================================
+    /** Ratio lecture/écriture pour workload OLAP (beaucoup de lectures) */
+    public static final double READ_WRITE_RATIO = 0.9; // 90% lectures, 10% écritures
+    /** Fenêtre temporelle pour calculer la fréquence (nombre de requêtes) */
+    public static final int POPULARITY_WINDOW = 50;
 
     // ==================================================================
     // Warm-up / Gradual Replica Effectiveness

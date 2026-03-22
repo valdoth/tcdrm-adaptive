@@ -8,7 +8,7 @@ simulant des scénarios cloud réalistes.
 Patterns disponibles:
 - steady: Charge constante
 - burst: Pic soudain au milieu
-- cold_to_hot / hot_to_cold: Transition progressive
+- cold_to_hot / hot_to_cold: Transition 
 - daily_cycle: Cycle jour/nuit (sinusoïde)
 - weekend: Baisse week-end
 - budget_critical: Budget décroissant

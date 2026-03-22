@@ -48,15 +48,34 @@ class PythonRLBridge:
             self.dqn_agent.policy_net.eval()
             print("✅ DQN loaded")
         
-        # TCDRM-ADAPTIVE strategies with progressive replication
-        # replicate_interval controls how many queries between each replica creation
+        # TCDRM-ADAPTIVE strategies with DYNAMIC T_SLA and P_SLA (Axe 4 du sujet)
+        # Q-Learning: seuils adaptatifs modérés
         self._ql_strategy = AdaptiveStrategy(
-            initial_threshold=0.8, min_threshold=0.5,
-            sla_violation_trigger=10, replicate_interval=100  # 1 replica every 100 queries
+            initial_p_threshold=0.5,      # P_SLA initial: 50% du seuil de base
+            min_p_threshold=0.3,          # P_SLA min: 30% (réplication agressive)
+            max_p_threshold=1.0,          # P_SLA max: 100% (comme TCDRM statique)
+            p_threshold_decay=0.05,       # Baisse de 5% par adaptation
+            p_threshold_increase=0.02,    # Remontée de 2% quand stable
+            min_t_factor=0.7,             # T_SLA min: 70% du seuil de base
+            max_t_factor=1.3,             # T_SLA max: 130% du seuil de base
+            t_factor_step=0.05,           # Ajustement de 5% par adaptation
+            sla_window=50,                # Fenêtre d'observation: 50 requêtes
+            violation_rate_threshold=0.1, # Seuil de taux de violations: 10%
+            replicate_interval=50         # 1 replica toutes les 50 requêtes
         )
+        # DQN: seuils adaptatifs plus agressifs
         self._dqn_strategy = AdaptiveStrategy(
-            initial_threshold=0.6, min_threshold=0.4,
-            sla_violation_trigger=5, replicate_interval=80  # 1 replica every 80 queries
+            initial_p_threshold=0.4,      # P_SLA initial: 40% (plus agressif)
+            min_p_threshold=0.2,          # P_SLA min: 20%
+            max_p_threshold=0.9,          # P_SLA max: 90%
+            p_threshold_decay=0.08,       # Baisse plus rapide
+            p_threshold_increase=0.03,    # Remontée plus rapide
+            min_t_factor=0.6,             # T_SLA min: 60% (plus tolérant)
+            max_t_factor=1.4,             # T_SLA max: 140%
+            t_factor_step=0.08,           # Ajustement plus rapide
+            sla_window=40,                # Fenêtre plus courte
+            violation_rate_threshold=0.08,# Seuil plus sensible
+            replicate_interval=40         # 1 replica toutes les 40 requêtes
         )
         
         print("✅ Python bridge initialized (TCDRM-ADAPTIVE)")
@@ -79,10 +98,13 @@ class PythonRLBridge:
             return 0
         
         state = self._parse_state(state_array)
-        max_replicas = 6 if state['query_progress'] < 0.01 else 12
+        # Simple queries: 6 replicas max, Complex: 12 replicas max
+        max_replicas = 6 if state['normalized_popularity'] < 0.5 or state['replicas_normalized'] < 0.5 else 12
+        # Dénormaliser le nombre de réplicas
+        actual_replicas = int(round(state['replicas_normalized'] * max_replicas))
         
         return self._ql_strategy.select_action(
-            replicas=state['replicas'],
+            replicas=actual_replicas,
             max_replicas=max_replicas,
             budget=state['budget'],
             normalized_popularity=state['normalized_popularity'],
@@ -105,10 +127,13 @@ class PythonRLBridge:
             return 0
         
         state = self._parse_state(state_array)
-        max_replicas = 6 if state['query_progress'] < 0.01 else 12
+        # Simple queries: 6 replicas max, Complex: 12 replicas max
+        max_replicas = 6 if state['normalized_popularity'] < 0.5 or state['replicas_normalized'] < 0.5 else 12
+        # Dénormaliser le nombre de réplicas
+        actual_replicas = int(round(state['replicas_normalized'] * max_replicas))
         
         return self._dqn_strategy.select_action(
-            replicas=state['replicas'],
+            replicas=actual_replicas,
             max_replicas=max_replicas,
             budget=state['budget'],
             normalized_popularity=state['normalized_popularity'],
@@ -124,7 +149,7 @@ class PythonRLBridge:
         return {
             'latency': float(state_list[0]),
             'budget': float(state_list[1]),
-            'replicas': int(state_list[2]),
+            'replicas_normalized': float(state_list[2]),  # Normalized (0-1), NOT actual count!
             'normalized_popularity': float(state_list[3]),
             'total_cost': float(state_list[4]),
             't_sla_violation': float(state_list[5]) if len(state_list) > 5 else 0.0,

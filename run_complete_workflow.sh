@@ -181,7 +181,7 @@ if [ "$SKIP_TRAINING" = false ]; then
         --output models/simple_qlearning.pkl \
         $TB_FLAG
     
-    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning.pkl"
+    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning_best.pkl"
     echo -e "${GREEN}✅ Q-Learning trained: $QLEARNING_MODEL${NC}"
     echo ""
     
@@ -206,7 +206,7 @@ if [ "$SKIP_TRAINING" = false ]; then
     
     DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
     if [ -z "$DQN_RUN" ]; then
-        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model.pt"
+        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model_best.pt"
     else
         DQN_MODEL="$DQN_RUN/dqn_model.pt"
     fi
@@ -215,10 +215,10 @@ if [ "$SKIP_TRAINING" = false ]; then
     echo ""
     cd "$PROJECT_ROOT"
 else
-    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning.pkl"
+    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning_best.pkl"
     DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
     if [ -z "$DQN_RUN" ]; then
-        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model.pt"
+        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model_best.pt"
     else
         DQN_MODEL="$DQN_RUN/dqn_model.pt"
     fi
