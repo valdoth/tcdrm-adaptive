@@ -151,11 +151,12 @@ public class BenchmarkRunner {
         // 4) Coût de complexité: trop de réplicas
         reward -= Math.max(0, replicas - 1) * 0.25;
 
-        // 5) Régularisation des actions
+        // 5) Régularisation des actions (pénalité augmentée pour réplication)
         if (action == 1) {
-            reward -= 0.2; // REPLICATE a un coût
+            // Pénalité plus forte pour la réplication pour éviter la réplication précoce
+            reward -= 0.5; // REPLICATE a un coût (avant: 0.2)
             if (latency > tSla) {
-                reward += 0.6; // bonus si réplication quand SLA violé
+                reward += 0.8; // bonus plus fort si réplication justifiée par SLA violé (avant: 0.6)
             }
         } else if (action == 2) {
             reward -= 0.1; // DELETE: léger coût de risque

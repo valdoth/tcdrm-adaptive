@@ -60,15 +60,16 @@ public class WorkloadGenerator {
         List<String> dcNames = new ArrayList<>(infrastructure.getAllDatacenters().keySet());
         
         // Définir les probabilités d'accès pour chaque relation
+        // Probabilités plus marquées pour une émergence rapide de la popularité
         double[] accessProbabilities = {
-            0.75,  // R1 - très populaire
-            0.70,  // R2 - très populaire
-            0.50,  // R3 - populaire
-            0.45,  // R4 - populaire
-            0.40,  // R5 - populaire
-            0.15,  // R6 - peu populaire
-            0.12,  // R7 - peu populaire
-            0.10,  // R8 - peu populaire
+            0.85,  // R1 - très populaire (85% des requêtes)
+            0.80,  // R2 - très populaire (80% des requêtes)
+            0.55,  // R3 - populaire
+            0.50,  // R4 - populaire
+            0.45,  // R5 - populaire
+            0.20,  // R6 - peu populaire
+            0.15,  // R7 - peu populaire
+            0.12,  // R8 - peu populaire
             0.08,  // R9 - peu populaire
             0.05   // R10 - peu populaire
         };
@@ -130,13 +131,16 @@ public class WorkloadGenerator {
             
             switch (region) {
                 case "US":
-                    probabilities = new double[]{0.80, 0.75, 0.70, 0.30, 0.25, 0.15, 0.10, 0.08, 0.05, 0.03};
+                    // US: R1, R2, R3 très populaires
+                    probabilities = new double[]{0.90, 0.85, 0.75, 0.35, 0.30, 0.18, 0.12, 0.10, 0.06, 0.04};
                     break;
                 case "EU":
-                    probabilities = new double[]{0.40, 0.80, 0.35, 0.75, 0.70, 0.20, 0.15, 0.10, 0.08, 0.05};
+                    // EU: R2, R4, R5 très populaires
+                    probabilities = new double[]{0.45, 0.90, 0.40, 0.85, 0.75, 0.22, 0.18, 0.12, 0.10, 0.06};
                     break;
                 case "AS":
-                    probabilities = new double[]{0.75, 0.30, 0.25, 0.20, 0.15, 0.80, 0.70, 0.40, 0.30, 0.20};
+                    // AS: R1, R6, R7 très populaires
+                    probabilities = new double[]{0.85, 0.35, 0.30, 0.25, 0.18, 0.90, 0.80, 0.45, 0.35, 0.22};
                     break;
             }
             

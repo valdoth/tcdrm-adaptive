@@ -87,14 +87,22 @@ public class QueryCloudlet {
         // Calculer le temps de transfert pour chaque fragment
         for (DataFragment fragment : fragments) {
             String srcProvider, srcRegion;
+            boolean usingReplica = false;
             
-            // Utiliser le réplica s'il est disponible et dans le même provider
-            if (fragment.hasReplica() && fragment.getReplicaProvider().equals(execProvider)) {
+            // Stratégie de sélection: toujours préférer le réplica s'il existe
+            // 1. Réplica dans la même région (meilleur cas)
+            // 2. Réplica dans le même provider (bon cas)
+            // 3. Réplica dans un autre provider (acceptable)
+            // 4. Primaire (dernier recours)
+            if (fragment.hasReplica()) {
+                // Toujours utiliser le réplica s'il existe
                 srcProvider = fragment.getReplicaProvider();
                 srcRegion = fragment.getReplicaRegion();
+                usingReplica = true;
             } else {
                 srcProvider = fragment.getPrimaryProvider();
                 srcRegion = fragment.getPrimaryRegion();
+                usingReplica = false;
             }
             
             // Données effectives transférées (sélectivité)
@@ -105,8 +113,9 @@ public class QueryCloudlet {
                 effectiveDataGb, srcProvider, srcRegion, execProvider, execRegion, rnd);
             
             // Appliquer le warm-up efficiency pour les réplicas
-            if (fragment.hasReplica() && srcProvider.equals(fragment.getReplicaProvider())) {
+            if (usingReplica) {
                 double warmup = fragment.getWarmupEfficiency();
+                // Bonus de performance pour les réplicas (jusqu'à 30% plus rapide)
                 transferMs = transferMs * (1.0 - 0.3 * warmup);
             }
             

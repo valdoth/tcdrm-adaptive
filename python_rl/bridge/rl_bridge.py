@@ -41,8 +41,8 @@ class PythonRLBridge:
             n_actions=3,
             learning_rate=0.15,
             discount_factor=0.95,
-            epsilon_start=0.3,      # Exploration modérée pour online learning
-            epsilon_min=0.05,
+            epsilon_start=0.075,     # Exploration réduite pour stabilisation rapide
+            epsilon_min=0.01,
             epsilon_decay=0.997,
             use_double_q=True,
             adaptive_lr=True
@@ -51,7 +51,7 @@ class PythonRLBridge:
         if qlearning_model_path and os.path.exists(qlearning_model_path):
             print(f"📦 Loading Q-Learning model: {qlearning_model_path}")
             self.qlearning_agent.load(qlearning_model_path)
-            self.qlearning_agent.epsilon = 0.20  # Online learning: exploration maintenue
+            self.qlearning_agent.epsilon = 0.075  # Online learning: exploration réduite
             stats = self.qlearning_agent.get_stats()
             print(f"✅ Q-Learning loaded (states explored: {stats['states_explored']}/243)")
         else:
@@ -63,15 +63,15 @@ class PythonRLBridge:
             action_dim=3,
             learning_rate=0.001, 
             discount_factor=0.99,
-            epsilon=0.15,  # Exploration modérée, distincte du Q-Learning
-            epsilon_min=0.02,
+            epsilon=0.075,  # Exploration réduite pour stabilisation rapide
+            epsilon_min=0.01,
             epsilon_decay_lambda=0.003
         )
         
         if dqn_model_path and os.path.exists(dqn_model_path):
             print(f"📦 Loading DQN model: {dqn_model_path}")
             self.dqn_agent.load(dqn_model_path)
-            self.dqn_agent.epsilon = 0.10  # Online learning: exploration modérée
+            self.dqn_agent.epsilon = 0.075  # Online learning: exploration réduite
             print("✅ DQN loaded")
         else:
             print("⚠️  DQN: no trained model, using fresh agent")
@@ -88,7 +88,7 @@ class PythonRLBridge:
         
         # Anti-thrashing
         self._thrashing_window = 10
-        self._warmup_queries = 20
+        self._warmup_queries = 50  # Warmup pour observer les patterns initiaux
         
         # Compteurs d'épisodes
         self._ql_episode = 0
@@ -384,15 +384,18 @@ class PythonRLBridge:
     def _physical_mask(self, state: dict) -> np.ndarray:
         """
         Masque d'actions basé uniquement sur les contraintes physiques.
-        L'agent RL décide librement parmi les actions physiquement possibles.
+        L'agent RL apprend via la reward function quand répliquer.
         """
         mask = np.ones(3, dtype=np.float32)
+        
         # DELETE impossible sans réplica
         if float(state['replicas_normalized']) <= 0.0:
             mask[2] = 0.0
+        
         # REPLICATE impossible si déjà au max (normalisé = 1.0)
         if float(state['replicas_normalized']) >= 1.0:
             mask[1] = 0.0
+        
         return mask
 
     def _physical_constraints(self, state: dict):
