@@ -87,8 +87,6 @@ public final class TcdrmConstants {
      *  Each replica incurs write amplification (sync writes) + storage cost.
      *  Paper Eq 2 includes C_IO for replicas. This makes replica cost visible in Fig 7. */
     public static final double REPLICA_MAINTENANCE_COST_PER_QUERY = 0.002;
-    /** Replica creation cost: one-time cost to create and sync a new replica */
-    public static final double REPLICA_CREATION_COST = 0.05;
 
     // ==================================================================
     // Network Parameters

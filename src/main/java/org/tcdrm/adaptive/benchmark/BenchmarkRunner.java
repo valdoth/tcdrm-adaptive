@@ -60,17 +60,14 @@ public class BenchmarkRunner {
     /**
      * Exécute le benchmark RL avec apprentissage en ligne contrôlé.
      *
-     * Utilise des requêtes fixes (R1 simple ou R2 complexe) répétées 1000 fois
-     * pour évaluer les performances de manière déterministe.
      * Le démarrage en mode NoRep est géré côté bridge Python (phase warmup),
      * puis les agents adaptent leurs politiques pendant la simulation.
      */
     public static BenchmarkData runRL(PythonRLBridge bridge, String modelType, 
                                        String name, boolean complex, long seed) {
         System.out.println("  >>> " + modelType.toUpperCase() + " (" + (complex ? "complex" : "simple") + ") - ADAPTIVE ONLINE...");
-        System.out.println("      Requête benchmark: " + org.tcdrm.adaptive.data.BenchmarkQueries.getDescription(complex));
         
-        org.tcdrm.adaptive.simulation.BenchmarkSimulation sim = new org.tcdrm.adaptive.simulation.BenchmarkSimulation(seed, complex);
+        TcdrmSimulation sim = new TcdrmSimulation(seed, complex);
         BenchmarkData data = new BenchmarkData(name);
         
         double cumulCost = 0;
@@ -92,7 +89,7 @@ public class BenchmarkRunner {
             }
             
             // Exécuter la requête avec l'action
-            org.tcdrm.adaptive.simulation.BenchmarkSimulation.QueryResult result = sim.executeRLQuery(action);
+            TcdrmSimulation.QueryResult result = sim.executeRLQuery(action);
             cumulCost += result.bwCost();
             
             lastLatency = result.queryTimeMs();
@@ -170,50 +167,6 @@ public class BenchmarkRunner {
         }
 
         // 7) Bonus de stabilité SLA en présence de réplicas
-        if (replicas > 0 && latency <= tSla) {
-            reward += 0.3;
-        }
-
-        return reward;
-    }
-    
-    /**
-     * Surcharge de calculateReward pour BenchmarkSimulation.QueryResult.
-     * Même logique que pour TcdrmSimulation.QueryResult.
-     */
-    private static double calculateReward(org.tcdrm.adaptive.simulation.BenchmarkSimulation.QueryResult result, 
-                                         double tSla, int action, double previousLatency) {
-        double latency = result.queryTimeMs();
-        double bwCost = result.bwCost();
-        int replicas = result.replicaCount();
-        double interProvider = result.bwInterProviderGb();
-        double interRegion = result.bwInterRegionGb();
-
-        double latencyScore = 1.0 - Math.min(1.0, latency / Math.max(1.0, tSla * 2.0));
-        double reward = 4.0 * latencyScore;
-
-        if (latency > tSla) {
-            reward -= 3.0;
-        }
-
-        reward -= Math.min(2.0, bwCost * 12.0);
-        reward -= Math.min(1.5, interProvider * 18.0);
-        reward -= Math.min(0.8, interRegion * 8.0);
-        reward -= Math.max(0, replicas - 1) * 0.25;
-
-        if (action == 1) {
-            reward -= 0.2;
-            if (latency > tSla) {
-                reward += 0.6;
-            }
-        } else if (action == 2) {
-            reward -= 0.1;
-        }
-
-        if (replicas > 0 && action == 0 && previousLatency > 0.0 && latency < previousLatency) {
-            reward += 0.4;
-        }
-
         if (replicas > 0 && latency <= tSla) {
             reward += 0.3;
         }
