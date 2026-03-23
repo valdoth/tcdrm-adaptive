@@ -126,7 +126,7 @@ public final class TcdrmConstants {
     // où α = 1 - e^(-1/half_life) pour une demi-vie de half_life requêtes
     
     /** Half-life en nombre de requêtes (après N requêtes, la popularité décroît de 50%) */
-    public static final int POPULARITY_HALF_LIFE = 150; // Plus grand = EMA monte plus lentement (avant: 30)
+    public static final int POPULARITY_HALF_LIFE = 30;
     /** Facteur de lissage EMA calculé à partir de half-life: α = 1 - e^(-ln(2)/half_life) */
     public static final double EMA_ALPHA = 1.0 - Math.exp(-Math.log(2) / POPULARITY_HALF_LIFE);
     /** Score d'accès de base par requête (avant normalisation) */
@@ -138,7 +138,7 @@ public final class TcdrmConstants {
     /** Seuil de popularité EMA pour déclencher la première réplication (0.0-1.0) */
     public static final double EMA_REPLICATION_THRESHOLD = 0.4;
     /** Facteur de décroissance par requête sans accès (simule le refroidissement) */
-    public static final double DECAY_PER_QUERY = 0.9995; // Plus proche de 1 = décroît plus lentement (avant: 0.998)
+    public static final double DECAY_PER_QUERY = 0.998;
 
     // ==================================================================
     // Warm-up / Gradual Replica Effectiveness

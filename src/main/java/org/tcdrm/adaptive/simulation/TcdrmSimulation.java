@@ -35,6 +35,10 @@ public class TcdrmSimulation {
     private double currentBudget;
     private int queryCount;
     
+    // Compteurs pour popularité (lecture/écriture)
+    private int readCount;
+    private int writeCount;
+    
     // EMA (Exponential Moving Average) pour popularité - feature d'état pour RL
     private double emaPopularity;
 
@@ -47,6 +51,8 @@ public class TcdrmSimulation {
         this.currentReplicaCount = 0;
         this.currentBudget = TcdrmConstants.INITIAL_BUDGET;
         this.queryCount = 0;
+        this.readCount = 0;
+        this.writeCount = 0;
         this.emaPopularity = 0.0;
         
         // Créer les fragments distribués sur les providers
@@ -94,6 +100,11 @@ public class TcdrmSimulation {
     public QueryResult executeNoRepQuery() {
         // Simuler lecture/écriture (workload OLAP: 90% lectures, 10% écritures)
         boolean isRead = rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO;
+        if (isRead) {
+            readCount++;
+        } else {
+            writeCount++;
+        }
         
         // Mettre à jour la popularité EMA
         updateEmaPopularity(isRead);
@@ -126,13 +137,17 @@ public class TcdrmSimulation {
         
         // Simuler lecture/écriture
         boolean isRead = rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO;
+        if (isRead) {
+            readCount++;
+        } else {
+            writeCount++;
+        }
         
         // Mettre à jour la popularité EMA
         updateEmaPopularity(isRead);
         
         // TCDRM static: réplication basée sur seuil fixe P_SLA
-        // On attend que la popularité dépasse le seuil
-        if (emaPopularity >= TcdrmConstants.EMA_REPLICATION_THRESHOLD && currentReplicaCount < maxReplicas) {
+        if (queryCount >= TcdrmConstants.POPULARITY_THRESHOLD && currentReplicaCount < maxReplicas) {
             creationCost = createNextReplica();
         }
         
@@ -175,6 +190,11 @@ public class TcdrmSimulation {
         
         // Simuler lecture/écriture
         boolean isRead = rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO;
+        if (isRead) {
+            readCount++;
+        } else {
+            writeCount++;
+        }
         
         // Mettre à jour la popularité EMA
         updateEmaPopularity(isRead);
@@ -311,6 +331,8 @@ public class TcdrmSimulation {
         this.currentReplicaCount = 0;
         this.currentBudget = TcdrmConstants.INITIAL_BUDGET;
         this.queryCount = 0;
+        this.readCount = 0;
+        this.writeCount = 0;
         this.emaPopularity = 0.0;
         fragments.forEach(DataFragment::deleteReplica);
     }
