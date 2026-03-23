@@ -38,6 +38,10 @@ public class TcdrmSimulation {
     // Compteurs pour popularité (lecture/écriture)
     private int readCount;
     private int writeCount;
+    
+    // EMA (Exponential Moving Average) pour popularité avec décroissance
+    // Basé sur Redis LFU et algorithmes de ranking avec time decay
+    private double emaPopularity;
 
     public TcdrmSimulation(long seed, boolean complex) {
         this.infrastructure = new MultiCloudInfrastructure();
@@ -50,6 +54,7 @@ public class TcdrmSimulation {
         this.queryCount = 0;
         this.readCount = 0;
         this.writeCount = 0;
+        this.emaPopularity = 0.0;
         
         // Créer les fragments distribués sur les providers
         this.fragments = createDistributedFragments();
@@ -98,11 +103,15 @@ public class TcdrmSimulation {
         query.execute(infrastructure, execProvider, execRegion, rnd);
         
         // Simuler lecture/écriture (workload OLAP: 90% lectures, 10% écritures)
-        if (rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO) {
+        boolean isRead = rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO;
+        if (isRead) {
             readCount++;
         } else {
             writeCount++;
         }
+        
+        // Mettre à jour la popularité EMA
+        updateEmaPopularity(isRead);
         
         QueryResult result = new QueryResult(
             queryCount,
@@ -128,11 +137,15 @@ public class TcdrmSimulation {
         double creationCost = 0.0;
         
         // Simuler lecture/écriture (workload OLAP: 90% lectures, 10% écritures)
-        if (rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO) {
+        boolean isRead = rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO;
+        if (isRead) {
             readCount++;
         } else {
             writeCount++;
         }
+        
+        // Mettre à jour la popularité EMA
+        updateEmaPopularity(isRead);
         
         // Créer un réplica si on dépasse P_SLA et qu'on n'a pas atteint le max
         if (queryCount >= TcdrmConstants.POPULARITY_THRESHOLD && currentReplicaCount < maxReplicas) {
@@ -176,11 +189,15 @@ public class TcdrmSimulation {
         double creationCost = 0.0;
         
         // Simuler lecture/écriture (workload OLAP: 90% lectures, 10% écritures)
-        if (rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO) {
+        boolean isRead = rnd.nextDouble() < TcdrmConstants.READ_WRITE_RATIO;
+        if (isRead) {
             readCount++;
         } else {
             writeCount++;
         }
+        
+        // Mettre à jour la popularité EMA
+        updateEmaPopularity(isRead);
         
         // Appliquer l'action RL
         if (action == 1 && currentReplicaCount < maxReplicas) {
@@ -245,31 +262,71 @@ public class TcdrmSimulation {
     }
 
     /**
+     * Met à jour la popularité EMA après chaque accès.
+     * 
+     * Formule EMA: popularity(t) = α × access_score + (1-α) × popularity(t-1)
+     * 
+     * Cette approche est basée sur:
+     * - Redis LFU: compteur probabiliste avec décroissance temporelle
+     * - Algorithmes de ranking (Reddit, HackerNews): score avec half-life
+     * 
+     * Avantages:
+     * - Décroissance naturelle: la popularité diminue si les accès cessent
+     * - Lissage: évite les pics soudains qui déclenchent une réplication prématurée
+     * - Réaliste: modélise le comportement "hot/cold" des données
+     * 
+     * @param isRead true si l'accès est une lecture, false si écriture
+     */
+    private void updateEmaPopularity(boolean isRead) {
+        // Score d'accès: lectures favorisées (réplication bénéfique)
+        // Écritures pénalisées (coût de synchronisation)
+        double accessScore;
+        if (isRead) {
+            accessScore = TcdrmConstants.ACCESS_SCORE_BASE * TcdrmConstants.READ_BONUS_FACTOR;
+        } else {
+            accessScore = TcdrmConstants.ACCESS_SCORE_BASE * TcdrmConstants.WRITE_PENALTY_FACTOR;
+        }
+        
+        // Normaliser le score (0-1)
+        double normalizedScore = accessScore / (TcdrmConstants.ACCESS_SCORE_BASE * TcdrmConstants.READ_BONUS_FACTOR);
+        
+        // Mise à jour EMA: popularity(t) = α × score + (1-α) × popularity(t-1)
+        double alpha = TcdrmConstants.EMA_ALPHA;
+        emaPopularity = alpha * normalizedScore + (1.0 - alpha) * emaPopularity;
+        
+        // Appliquer une légère décroissance supplémentaire pour éviter la saturation
+        emaPopularity *= TcdrmConstants.DECAY_PER_QUERY;
+        
+        // Borner entre 0 et 1
+        emaPopularity = Math.max(0.0, Math.min(1.0, emaPopularity));
+    }
+    
+    /**
      * Construit l'état pour les modèles RL.
      * [latency, budget, replicas, normalizedPopularity, cost, tSlaViolation, cSlaViolation, queryProgress]
+     * 
+     * La popularité utilise maintenant EMA avec décroissance exponentielle:
+     * - Croît progressivement avec les accès répétés
+     * - Décroît naturellement sans accès
+     * - Favorise les lectures (réplication bénéfique)
+     * - Pénalise les écritures (coût de synchronisation)
      */
     public double[] buildRLState(double lastLatency, double lastCost) {
         double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
         double cSla = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
         
-        // Popularité pour réplication: combine fréquence d'accès ET ratio lecture/écriture
-        // Formule: (freq_lecture / (freq_ecriture + 1)) * (queryCount / P_SLA)
-        // - Ratio L/E élevé → justifie la réplication (peu de coût de synchro)
-        // - Fréquence élevée → justifie la réplication (beaucoup d'accès)
-        double readWriteRatio = (double) readCount / (writeCount + 1);
-        double accessFrequency = (double) queryCount / TcdrmConstants.POPULARITY_THRESHOLD;
-        
-        // Popularité = ratio * fréquence, normalisée
-        // Un ratio de 9.0 (OLAP) avec fréquence 1.0 (P_SLA atteint) → popularité = 0.9
-        double replicationPopularity = (readWriteRatio / 10.0) * accessFrequency;
-        double normalizedPopularity = Math.min(1.0, replicationPopularity);
+        // Popularité normalisée par rapport au seuil de réplication
+        // emaPopularity est déjà entre 0 et 1
+        // On normalise par rapport au seuil: 1.0 = seuil atteint
+        double normalizedPopularity = emaPopularity / TcdrmConstants.EMA_REPLICATION_THRESHOLD;
+        normalizedPopularity = Math.min(1.5, normalizedPopularity); // Cap à 1.5 pour permettre "très populaire"
         
         return new double[] {
             lastLatency / tSla,                                    // Normalized latency
             currentBudget / TcdrmConstants.INITIAL_BUDGET,         // Normalized budget
             (double) currentReplicaCount / maxReplicas,            // Normalized replicas
-            normalizedPopularity,                                  // Popularity (ratio * frequency)
+            normalizedPopularity,                                  // Popularity EMA (0-1.5)
             lastCost / cSla,                                       // Normalized cost
             lastLatency > tSla ? 1.0 : 0.0,                       // T_SLA violation
             lastCost > cSla ? 1.0 : 0.0,                          // C_SLA violation
@@ -292,6 +349,14 @@ public class TcdrmSimulation {
         this.queryCount = 0;
         this.readCount = 0;
         this.writeCount = 0;
+        this.emaPopularity = 0.0;
         fragments.forEach(DataFragment::deleteReplica);
+    }
+    
+    /**
+     * Retourne la popularité EMA actuelle (pour debug/monitoring).
+     */
+    public double getEmaPopularity() {
+        return emaPopularity;
     }
 }

@@ -13,10 +13,10 @@ from .rl_bridge import PythonRLBridge
 
 
 def create_bridge(qlearning_path: str, dqn_path: str) -> PythonRLBridge:
-    """Create RL bridge with available models."""
+    """Create RL bridge with fresh agents for online learning."""
     return PythonRLBridge(
-        qlearning_model_path=qlearning_path if os.path.exists(qlearning_path) else None,
-        dqn_model_path=dqn_path if os.path.exists(dqn_path) else None
+        qlearning_model_path=qlearning_path,  # Path to save learned model
+        dqn_model_path=dqn_path               # Path to save learned model
     )
 
 
@@ -73,11 +73,11 @@ def main():
     """Entry point with CLI argument parsing."""
     parser = argparse.ArgumentParser(description='Python Py4J client for RL models')
     parser.add_argument('--qlearning-model', type=str, 
-                       default='models/simple_qlearning.pkl',
-                       help='Path to Q-Learning model')
+                       default='models/qlearning_cloudsim.pkl',
+                       help='Path to Q-Learning model (trained with CloudSimPlus)')
     parser.add_argument('--dqn-model', type=str,
-                       default='results/dqn/dqn_model.pt',
-                       help='Path to DQN model')
+                       default='models/dqn_cloudsim.pt',
+                       help='Path to DQN model (trained with CloudSimPlus)')
     parser.add_argument('--port', type=int, default=25333,
                        help='Java Gateway port')
     

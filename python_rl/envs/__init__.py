@@ -1,13 +1,9 @@
-from gymnasium.envs.registration import register
+"""
+Environnements Gymnasium pour TCDRM.
 
-register(
-    id='TcdrmQLearning-v2',
-    entry_point='envs.tcdrm_qlearning_env:TcdrmQLearningEnv',
-    max_episode_steps=1000,
-)
+CloudSimEnv: Environnement connecté à CloudSimPlus (Java) via Py4J.
+"""
 
-register(
-    id='TcdrmDQN-v2',
-    entry_point='envs.tcdrm_env_v2:TcdrmV2Env',
-    max_episode_steps=1000,
-)
+from .cloudsim_env import CloudSimEnv, CloudSimQLearningEnv
+
+__all__ = ['CloudSimEnv', 'CloudSimQLearningEnv']

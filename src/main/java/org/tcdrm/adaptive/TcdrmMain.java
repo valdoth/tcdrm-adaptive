@@ -69,11 +69,17 @@ public class TcdrmMain {
         
         PythonRLBridge bridge = waitForPythonConnection();
         if (bridge != null) {
-            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 42L);
-            BenchmarkData dqnSimple = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Simple", false, 43L);
             bridge.resetCounters();
-            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 42L);
-            BenchmarkData dqnComplex = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Complex", true, 43L);
+            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
+
+            bridge.resetCounters();
+            BenchmarkData dqnSimple = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Simple", false, 2000L);
+
+            bridge.resetCounters();
+            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
+
+            bridge.resetCounters();
+            BenchmarkData dqnComplex = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Complex", true, 4000L);
             
             qlSimple.printSummary();
             dqnSimple.printSummary();

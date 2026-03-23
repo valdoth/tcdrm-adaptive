@@ -87,6 +87,8 @@ public final class TcdrmConstants {
      *  Each replica incurs write amplification (sync writes) + storage cost.
      *  Paper Eq 2 includes C_IO for replicas. This makes replica cost visible in Fig 7. */
     public static final double REPLICA_MAINTENANCE_COST_PER_QUERY = 0.002;
+    /** Replica creation cost: one-time cost to create and sync a new replica */
+    public static final double REPLICA_CREATION_COST = 0.05;
 
     // ==================================================================
     // Network Parameters
@@ -113,12 +115,32 @@ public final class TcdrmConstants {
     public static final double INITIAL_BUDGET = 1000.0;
     
     // ==================================================================
-    // Popularité pour la réplication (ratio lecture/écriture)
+    // Popularité pour la réplication (EMA avec décroissance exponentielle)
+    // Basé sur Redis LFU et algorithmes de ranking avec time decay
     // ==================================================================
     /** Ratio lecture/écriture pour workload OLAP (beaucoup de lectures) */
     public static final double READ_WRITE_RATIO = 0.9; // 90% lectures, 10% écritures
     /** Fenêtre temporelle pour calculer la fréquence (nombre de requêtes) */
     public static final int POPULARITY_WINDOW = 50;
+    
+    // === EMA (Exponential Moving Average) pour popularité réaliste ===
+    // Formule: popularity(t) = α × access_score + (1-α) × popularity(t-1)
+    // où α = 1 - e^(-1/half_life) pour une demi-vie de half_life requêtes
+    
+    /** Half-life en nombre de requêtes (après N requêtes, la popularité décroît de 50%) */
+    public static final int POPULARITY_HALF_LIFE = 30;
+    /** Facteur de lissage EMA calculé à partir de half-life: α = 1 - e^(-ln(2)/half_life) */
+    public static final double EMA_ALPHA = 1.0 - Math.exp(-Math.log(2) / POPULARITY_HALF_LIFE);
+    /** Score d'accès de base par requête (avant normalisation) */
+    public static final double ACCESS_SCORE_BASE = 1.0;
+    /** Bonus de score pour les lectures (favorise la réplication pour workloads read-heavy) */
+    public static final double READ_BONUS_FACTOR = 1.5;
+    /** Pénalité de score pour les écritures (coût de synchronisation) */
+    public static final double WRITE_PENALTY_FACTOR = 0.3;
+    /** Seuil de popularité EMA pour déclencher la première réplication (0.0-1.0) */
+    public static final double EMA_REPLICATION_THRESHOLD = 0.4;
+    /** Facteur de décroissance par requête sans accès (simule le refroidissement) */
+    public static final double DECAY_PER_QUERY = 0.998;
 
     // ==================================================================
     // Warm-up / Gradual Replica Effectiveness

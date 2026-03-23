@@ -1,8 +1,8 @@
 #!/bin/bash
-# TCDRM-ADAPTIVE Complete Workflow with TensorBoard
-# 1. Train RL models (Q-Learning + DQN) with optional TensorBoard monitoring
-# 2. Run Java benchmark with Py4J (real RL decisions via TcdrmMain)
-# 3. Generate all comparison graphs
+# TCDRM-ADAPTIVE Complete Workflow
+# 1. Train RL models using CloudSimPlus (Java) for simulations
+# 2. Run Java benchmark with trained models via Py4J
+# 3. Generate comparison graphs
 
 set -e
 
@@ -16,15 +16,16 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="$PROJECT_ROOT/python_rl"
 PYTHON_PID=""
 JAVA_PID=""
-TENSORBOARD_PID=""
+TRAINING_SERVER_PID=""
 
 cleanup_initial() {
     echo -e "${BLUE}🧹 Cleaning up processes and ports...${NC}"
     pkill -f "TcdrmMain" 2>/dev/null || true
+    pkill -f "TrainingServer" 2>/dev/null || true
     pkill -f "connect_to_java.py" 2>/dev/null || true
-    pkill -f "tensorboard" 2>/dev/null || true
+    pkill -f "train_cloudsim.py" 2>/dev/null || true
     lsof -ti:25333 2>/dev/null | xargs kill -9 2>/dev/null || true
-    lsof -ti:6006 2>/dev/null | xargs kill -9 2>/dev/null || true
+    lsof -ti:25335 2>/dev/null | xargs kill -9 2>/dev/null || true
     sleep 2
     
     echo -e "${BLUE}🧹 Removing previous files...${NC}"
@@ -32,14 +33,13 @@ cleanup_initial() {
     
     if [ "$SKIP_TRAINING" = false ]; then
         echo "   Removing old models (retraining planned)..."
-        rm -f "$PYTHON_DIR/models/simple_qlearning.pkl" 2>/dev/null || true
-        rm -rf "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null || true
-        rm -f "$PYTHON_DIR/results/dqn/dqn_model.pt" 2>/dev/null || true
+        rm -f "$PYTHON_DIR/models/qlearning_cloudsim.pkl" 2>/dev/null || true
+        rm -f "$PYTHON_DIR/models/dqn_cloudsim.pt" 2>/dev/null || true
     else
         echo "   Keeping existing models..."
     fi
     
-    rm -f /tmp/java_benchmark.log /tmp/python_client.log 2>/dev/null || true
+    rm -f /tmp/java_benchmark.log /tmp/python_client.log /tmp/training_server.log 2>/dev/null || true
     echo -e "${GREEN}✅ Initial cleanup done${NC}"
     echo ""
 }
@@ -49,10 +49,11 @@ cleanup() {
     echo -e "${BLUE}🧹 Cleaning up...${NC}"
     [ -n "$PYTHON_PID" ] && kill $PYTHON_PID 2>/dev/null || true
     [ -n "$JAVA_PID" ] && kill $JAVA_PID 2>/dev/null || true
-    [ -n "$TENSORBOARD_PID" ] && kill $TENSORBOARD_PID 2>/dev/null || true
+    [ -n "$TRAINING_SERVER_PID" ] && kill $TRAINING_SERVER_PID 2>/dev/null || true
     pkill -f "connect_to_java.py" 2>/dev/null || true
     pkill -f "TcdrmMain" 2>/dev/null || true
-    pkill -f "tensorboard" 2>/dev/null || true
+    pkill -f "TrainingServer" 2>/dev/null || true
+    pkill -f "train_cloudsim.py" 2>/dev/null || true
     echo -e "${GREEN}✅ Cleanup done${NC}"
 }
 trap cleanup EXIT INT TERM
@@ -64,26 +65,19 @@ show_help() {
     echo "  --skip-training       Skip training (use existing models)"
     echo "  --skip-compile        Skip Java compilation"
     echo "  --skip-simulation     Skip Java simulation (training only)"
-    echo "  --episodes N          Training episodes [default: 2000]"
-    echo "  --queries N           Benchmark queries [default: 1000]"
-    echo "  --tensorboard         Enable TensorBoard monitoring"
-    echo "  --tensorboard-port N  TensorBoard port [default: 6006]"
+    echo "  --episodes N          Training episodes [default: 100]"
     echo "  --help                Show this help"
     echo ""
     echo "Examples:"
     echo "  $0                                    # Full workflow"
-    echo "  $0 --tensorboard                      # With TensorBoard"
     echo "  $0 --skip-training                    # Simulation only"
-    echo "  $0 --episodes 3000 --queries 1500     # Extended training"
+    echo "  $0 --episodes 200                     # Extended training"
 }
 
 SKIP_TRAINING=false
 SKIP_COMPILE=false
 SKIP_SIMULATION=false
-N_EPISODES=2000
-N_QUERIES=1000
-ENABLE_TENSORBOARD=false
-TENSORBOARD_PORT=6006
+N_EPISODES=1000
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -91,9 +85,6 @@ while [[ $# -gt 0 ]]; do
         --skip-compile)      SKIP_COMPILE=true; shift ;;
         --skip-simulation)   SKIP_SIMULATION=true; shift ;;
         --episodes)          N_EPISODES="$2"; shift 2 ;;
-        --queries)           N_QUERIES="$2"; shift 2 ;;
-        --tensorboard)       ENABLE_TENSORBOARD=true; shift ;;
-        --tensorboard-port)  TENSORBOARD_PORT="$2"; shift 2 ;;
         --help)              show_help; exit 0 ;;
         *)                   echo -e "${RED}Unknown option: $1${NC}"; show_help; exit 1 ;;
     esac
@@ -101,16 +92,14 @@ done
 
 echo "============================================================"
 echo "  TCDRM-ADAPTIVE COMPLETE WORKFLOW"
-echo "  Python (Training) + Java/CloudSim (Real RL Decisions)"
+echo "  Training with CloudSimPlus + Benchmark"
 echo "============================================================"
 echo ""
 echo "Configuration:"
 echo "  - Training episodes: $N_EPISODES"
-echo "  - Benchmark queries: $N_QUERIES"
 echo "  - Skip training: $SKIP_TRAINING"
 echo "  - Skip compile: $SKIP_COMPILE"
 echo "  - Skip simulation: $SKIP_SIMULATION"
-echo "  - TensorBoard: $ENABLE_TENSORBOARD (port: $TENSORBOARD_PORT)"
 echo ""
 
 cleanup_initial
@@ -121,107 +110,75 @@ cleanup_initial
 
 if [ "$SKIP_TRAINING" = false ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  STEP 1/3: Training RL Models (Python)"
+    echo "  STEP 1/3: Training RL Models with CloudSimPlus"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "  Training uses CloudSimPlus (Java) for simulations."
+    echo "  This ensures training and inference use the same environment."
+    echo ""
+    
+    # Start Java Training Server
+    echo ">>> Starting Java TrainingServer..."
+    mvn exec:java -Dexec.mainClass="org.tcdrm.adaptive.training.TrainingServer" -q > /tmp/training_server.log 2>&1 &
+    TRAINING_SERVER_PID=$!
+    
+    # Wait for server to start
+    sleep 5
+    for i in {1..10}; do
+        if lsof -i:25335 > /dev/null 2>&1; then
+            echo -e "${GREEN}✅ TrainingServer ready on port 25335${NC}"
+            break
+        fi
+        if [ $i -eq 10 ]; then
+            echo -e "${RED}❌ ERROR: TrainingServer not ready after 20s${NC}"
+            tail -30 /tmp/training_server.log
+            exit 1
+        fi
+        echo "   Waiting... ($i/10)"
+        sleep 2
+    done
     echo ""
     
     cd "$PYTHON_DIR"
     
-    # Start TensorBoard if enabled
-    if [ "$ENABLE_TENSORBOARD" = true ]; then
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo -e "${BLUE}  📊 TENSORBOARD - REAL-TIME MONITORING${NC}"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo ">>> Starting TensorBoard (port $TENSORBOARD_PORT)..."
-        uv run tensorboard --logdir=runs --port=$TENSORBOARD_PORT --bind_all > /tmp/tensorboard.log 2>&1 &
-        TENSORBOARD_PID=$!
-        sleep 3
-        
-        echo -e "${GREEN}✅ TensorBoard started (PID: $TENSORBOARD_PID)${NC}"
-        echo ""
-        echo -e "${BLUE}┌─────────────────────────────────────────────────────────┐${NC}"
-        echo -e "${BLUE}│  🌐 TENSORBOARD DASHBOARD:                             │${NC}"
-        echo -e "${BLUE}│                                                         │${NC}"
-        echo -e "${BLUE}│     ${GREEN}http://localhost:$TENSORBOARD_PORT${BLUE}                            │${NC}"
-        echo -e "${BLUE}│                                                         │${NC}"
-        echo -e "${BLUE}│  📊 Real-time metrics:                                 │${NC}"
-        echo -e "${BLUE}│     • Reward per step and episode                      │${NC}"
-        echo -e "${BLUE}│     • Latency, Cost, Budget, Replicas                  │${NC}"
-        echo -e "${BLUE}│     • Epsilon, States Explored (Q-Learning)            │${NC}"
-        echo -e "${BLUE}│     • Loss, Q-values (DQN)                             │${NC}"
-        echo -e "${BLUE}│                                                         │${NC}"
-        echo -e "${BLUE}│  💡 Open in browser to see training curves            │${NC}"
-        echo -e "${BLUE}└─────────────────────────────────────────────────────────┘${NC}"
-        echo ""
-        echo -e "${YELLOW}⏳ TensorBoard will stay active during workflow${NC}"
-        echo ""
-        sleep 2
-    fi
-    
-    # Q-Learning training
+    # Q-Learning training with CloudSimPlus
     echo ">>> 1.1 Training Q-Learning ($N_EPISODES episodes)..."
-    echo "    Hyperparameters: lr=0.1, gamma=0.95, epsilon_decay=0.995"
-    if [ "$ENABLE_TENSORBOARD" = true ]; then
-        echo -e "    ${GREEN}📊 TensorBoard: ENABLED${NC}"
-        echo -e "    ${BLUE}🌐 View metrics: http://localhost:$TENSORBOARD_PORT${NC}"
-    fi
+    echo "    Using CloudSimPlus for simulations"
     echo ""
     
-    TB_FLAG=""
-    [ "$ENABLE_TENSORBOARD" = true ] && TB_FLAG="--tensorboard"
-    
-    uv run python train_simple_qlearning.py \
+    uv run python train_cloudsim.py \
+        --agent qlearning \
         --episodes $N_EPISODES \
-        --lr 0.1 \
-        --gamma 0.95 \
-        --epsilon-decay 0.995 \
-        --data-gb 5.3 \
-        --output models/simple_qlearning.pkl \
-        $TB_FLAG
+        --output models/qlearning_cloudsim.pkl
     
-    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning_best.pkl"
+    QLEARNING_MODEL="$PYTHON_DIR/models/qlearning_cloudsim.pkl"
     echo -e "${GREEN}✅ Q-Learning trained: $QLEARNING_MODEL${NC}"
     echo ""
     
-    # DQN training
-    echo ">>> 1.2 Training DQN ($N_EPISODES episodes, $N_QUERIES queries)..."
-    echo "    Hyperparameters: lr=0.0003, gamma=0.99, batch_size=128"
-    if [ "$ENABLE_TENSORBOARD" = true ]; then
-        echo -e "    ${GREEN}📊 TensorBoard: ENABLED${NC}"
-        echo -e "    ${BLUE}🌐 View metrics: http://localhost:$TENSORBOARD_PORT${NC}"
-    fi
+    # DQN training with CloudSimPlus
+    echo ">>> 1.2 Training DQN ($N_EPISODES episodes)..."
+    echo "    Using CloudSimPlus for simulations"
     echo ""
     
-    uv run python train_dqn_policy.py \
+    uv run python train_cloudsim.py \
+        --agent dqn \
         --episodes $N_EPISODES \
-        --queries $N_QUERIES \
-        --buffer-size 50000 \
-        --batch-size 128 \
-        --lr 0.0003 \
-        --gamma 0.99 \
-        --output-dir results/dqn \
-        $TB_FLAG
+        --output models/dqn_cloudsim.pt
     
-    DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
-    if [ -z "$DQN_RUN" ]; then
-        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model_best.pt"
-    else
-        DQN_MODEL="$DQN_RUN/dqn_model.pt"
-    fi
-    
+    DQN_MODEL="$PYTHON_DIR/models/dqn_cloudsim.pt"
     echo -e "${GREEN}✅ DQN trained: $DQN_MODEL${NC}"
     echo ""
+    
+    # Stop Training Server
+    echo ">>> Stopping TrainingServer..."
+    kill $TRAINING_SERVER_PID 2>/dev/null || true
+    TRAINING_SERVER_PID=""
+    sleep 2
+    
     cd "$PROJECT_ROOT"
 else
-    QLEARNING_MODEL="$PYTHON_DIR/models/simple_qlearning_best.pkl"
-    DQN_RUN=$(ls -td "$PYTHON_DIR/results/dqn/run_"* 2>/dev/null | head -1)
-    if [ -z "$DQN_RUN" ]; then
-        DQN_MODEL="$PYTHON_DIR/results/dqn/dqn_model_best.pt"
-    else
-        DQN_MODEL="$DQN_RUN/dqn_model.pt"
-    fi
+    QLEARNING_MODEL="$PYTHON_DIR/models/qlearning_cloudsim.pkl"
+    DQN_MODEL="$PYTHON_DIR/models/dqn_cloudsim.pt"
     
     echo "⏭️  Training skipped (--skip-training)"
     echo "   Q-Learning: $QLEARNING_MODEL"
@@ -231,13 +188,13 @@ fi
 
 # Verify models exist
 if [ ! -f "$QLEARNING_MODEL" ]; then
-    echo -e "${RED}❌ ERROR: Q-Learning model not found: $QLEARNING_MODEL${NC}"
-    exit 1
+    echo -e "${YELLOW}⚠️  Q-Learning model not found: $QLEARNING_MODEL${NC}"
+    echo "   Will use fresh agent during simulation"
 fi
 
 if [ ! -f "$DQN_MODEL" ]; then
     echo -e "${YELLOW}⚠️  DQN model not found: $DQN_MODEL${NC}"
-    echo "   Simulation will continue with Q-Learning only"
+    echo "   Will use fresh agent during simulation"
 fi
 
 # ============================================================
@@ -400,28 +357,10 @@ else
 fi
 echo ""
 
-if [ "$ENABLE_TENSORBOARD" = true ]; then
-    echo "  3. TensorBoard (ACTIVE):"
-    echo ""
-    echo -e "     ${GREEN}┌─────────────────────────────────────────────────────┐${NC}"
-    echo -e "     ${GREEN}│  📊 TENSORBOARD STILL ACTIVE                       │${NC}"
-    echo -e "     ${GREEN}│                                                     │${NC}"
-    echo -e "     ${GREEN}│  🌐 Dashboard: http://localhost:$TENSORBOARD_PORT                  │${NC}"
-    echo -e "     ${GREEN}│  📁 Logs: python_rl/runs/                          │${NC}"
-    echo -e "     ${GREEN}│                                                     │${NC}"
-    echo -e "     ${GREEN}│  💡 Compare Q-Learning and DQN in the interface    │${NC}"
-    echo -e "     ${GREEN}└─────────────────────────────────────────────────────┘${NC}"
-    echo ""
-else
-    echo "  3. TensorBoard:"
-    echo "     ⏭️  Not enabled (use --tensorboard for monitoring)"
-fi
-
 echo ""
-echo "📈 View graphs:"
+echo " View graphs:"
 echo "  open images/*.png"
 echo ""
-[ "$ENABLE_TENSORBOARD" = true ] && echo "📊 TensorBoard:" && echo "  open http://localhost:$TENSORBOARD_PORT" && echo ""
 
 echo "============================================================"
 echo "  🎉 Workflow complete!"
