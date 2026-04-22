@@ -1,0 +1,25 @@
+[project]
+name = "tcdrm-gym-validation"
+version = "0.0.1"
+description = "Minimal Python deps to run the RL client for TCDRM-ADAPTIVE validation"
+requires-python = ">=3.9"
+
+dependencies = [
+  "gymnasium>=0.29.0",
+  "numpy>=1.24.0",
+  "pandas>=2.0.0",
+  "matplotlib>=3.7.0",
+  "seaborn>=0.12.0",
+  "py4j>=0.10.9.9",
+  "torch>=2.0.0",
+  "tqdm>=4.65.0",
+  "pyyaml>=6.0",
+  "tensorboard>=2.20.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bridge"]

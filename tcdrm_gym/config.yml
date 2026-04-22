@@ -1,0 +1,7 @@
+qlearning:
+  episodes: 20
+  save_path: models/qlearning_cloudsim.pkl
+
+dqn:
+  episodes: 20
+  save_path: models/dqn_cloudsim.pt

@@ -1,0 +1,10 @@
+{
+  "episode": 36,
+  "best_avg10_reward": 9216.870904875594,
+  "epsilon": 0.99297,
+  "states_explored": 243,
+  "metrics_tail": {
+    "query": 1000,
+    "cumulative_reward": 9193.907716861044
+  }
+}

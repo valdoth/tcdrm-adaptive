@@ -1,0 +1,5 @@
+name,queries,final_cumul_bw_cost,total_bw_cost,total_cpu_cost,total_replica_cost,total_cost,total_bw_inter_provider_gb,total_bw_inter_region_gb,total_sla_violations,final_replica_count
+QLearning_Simple,1000,8.0118,8.0118,1.799963,0,9.811763,16.65,1333.35,19,3
+DQN_Simple,1000,8.2944,8.2944,1.800774,0,10.095174,47.25,1302.75,53,3
+QLearning_Complex,1000,8.0496,8.0496,1.800848,0,9.850448,18,1332,0,6
+DQN_Complex,1000,9.0882,9.0882,1.799863,0,10.888063,203.85,1146.15,0,6

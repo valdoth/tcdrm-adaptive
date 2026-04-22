@@ -1,0 +1,38 @@
+# Configuration améliorée pour Q-Learning TCDRM-ADAPTIVE
+# Basée sur l'analyse des problèmes identifiés
+
+training:
+  # Hyperparamètres optimisés pour Q-Learning tabulaire
+  qlearning:
+    learning_rate: 0.05          # Réduit pour stabilité (était 0.1)
+    discount_factor: 0.95       # Réduit pour éviter surévaluation (était 0.99)
+    epsilon_start: 1.0
+    epsilon_min: 0.01           # Plus bas pour meilleure exploitation (était 0.05)
+    epsilon_decay: 0.98         # Plus rapide pour converger (était 0.995)
+    optimistic_init: 10.0       # Initialisation optimiste pour exploration
+    
+  # Stratégies d'entraînement
+  episodes: 100                 # Augmenté pour meilleure convergence
+  early_stopping:
+    patience: 20                 # Arrêter si pas d'amélioration après 20 épisodes
+    min_episodes: 50            # Minimum avant early stopping
+    
+  # Exploration améliorée
+  exploration_strategy:
+    use_ucb: true               # Upper Confidence Bounds pour exploration intelligente
+    ucb_c: 2.0                  # Paramètre UCB
+    decay_schedule: "exponential"  # exponential, linear, or adaptive
+    
+# Configuration de l'environnement
+environment:
+  max_episode_length: 300      # Plus long pour meilleure exploration
+  reward_shaping:
+    success_bonus: 50.0         # Bonus pour respecter SLA
+    violation_penalty: -100.0   # Pénalité forte pour violations SLA
+    cost_penalty_weight: 0.1    # Pondération pour coût
+    
+# Validation et testing
+validation:
+  eval_frequency: 10           # Évaluer tous les 10 épisodes
+  eval_episodes: 5             # Nombre d'épisodes pour évaluation
+  save_best_only: true        # Ne sauvegarder que le meilleur modèle

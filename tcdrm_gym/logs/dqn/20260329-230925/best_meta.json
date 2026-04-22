@@ -1,0 +1,16 @@
+{
+  "episode": 17,
+  "best_avg10_reward": 4186.797807122528,
+  "epsilon": 0.982161032358301,
+  "buffer": 18000,
+  "network": {
+    "policy_params": 9092,
+    "policy_grad_norm": 1.8685145896015456,
+    "buffer_size": 18000,
+    "avg_loss": 8.826514732837676
+  },
+  "metrics_tail": {
+    "query": 1000,
+    "cumulative_reward": 3988.589466214529
+  }
+}
