@@ -16,14 +16,14 @@ public class BenchmarkRunner {
     public static BenchmarkData runNoRep(long seed, boolean complex, String name) {
         TcdrmSimulation sim = new TcdrmSimulation(seed, complex);
         BenchmarkData data = new BenchmarkData(name);
-        
+
         double cumulCost = 0;
-        
+
         int maxQ = RuntimeConfig.getMaxQueries() != null ? RuntimeConfig.getMaxQueries() : TcdrmConstants.MAX_QUERIES;
         for (int q = 0; q < maxQ; q++) {
             TcdrmSimulation.QueryResult result = sim.executeNoRepQuery();
-            cumulCost += result.bwCost();
-            
+            cumulCost += result.totalCost();
+
             double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
             data.addQueryResult(
                 q, result.queryTimeMs(), result.bwCost(), cumulCost,
@@ -31,7 +31,7 @@ public class BenchmarkRunner {
                 result.cpuCost(), 0, tSla
             );
         }
-        
+
         return data;
     }
 
@@ -41,14 +41,14 @@ public class BenchmarkRunner {
     public static BenchmarkData runTcdrm(long seed, boolean complex, String name) {
         TcdrmSimulation sim = new TcdrmSimulation(seed, complex);
         BenchmarkData data = new BenchmarkData(name);
-        
+
         double cumulCost = 0;
-        
+
         int maxQ = RuntimeConfig.getMaxQueries() != null ? RuntimeConfig.getMaxQueries() : TcdrmConstants.MAX_QUERIES;
         for (int q = 0; q < maxQ; q++) {
             TcdrmSimulation.QueryResult result = sim.executeTcdrmQuery();
-            cumulCost += result.bwCost();
-            
+            cumulCost += result.totalCost();
+
             double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
             data.addQueryResult(
                 q, result.queryTimeMs(), result.bwCost(), cumulCost,
@@ -56,133 +56,140 @@ public class BenchmarkRunner {
                 result.cpuCost(), 0, tSla
             );
         }
-        
+
         return data;
     }
 
     /**
-     * Exécute le benchmark RL avec apprentissage en ligne contrôlé.
-     *
-     * Le démarrage en mode NoRep est géré côté bridge Python (phase warmup),
-     * puis les agents adaptent leurs politiques pendant la simulation.
+     * Exécute le benchmark RL avec apprentissage en ligne.
+     * La récompense est alignée avec TrainingEnvironment.calculateReward() pour éviter
+     * toute divergence train/eval.
      */
-    public static BenchmarkData runRL(PythonRLBridge bridge, String modelType, 
+    public static BenchmarkData runRL(PythonRLBridge bridge, String modelType,
                                        String name, boolean complex, long seed) {
         System.out.println("  >>> " + modelType.toUpperCase() + " (" + (complex ? "complex" : "simple") + ") - ADAPTIVE ONLINE...");
-        
+
         TcdrmSimulation sim = new TcdrmSimulation(seed, complex);
         BenchmarkData data = new BenchmarkData(name);
-        
+
         double cumulCost = 0;
         double lastLatency = 0;
         double lastCost = 0;
         double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
-        
+        double cSla = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
+        int lastReplicaCount = 0;
+
+        // Ring buffer for thrash detection (mirrors TrainingEnvironment)
+        int[] actionRing = new int[10];
+        int ringPos = 0;
+        int ringCount = 0;
+
         int maxQ = RuntimeConfig.getMaxQueries() != null ? RuntimeConfig.getMaxQueries() : TcdrmConstants.MAX_QUERIES;
         for (int q = 0; q < maxQ; q++) {
-            // Construire l'état pour le modèle RL
             double[] state = sim.buildRLState(lastLatency, lastCost);
-            double previousLatency = lastLatency;
-            
-            // Obtenir l'action du modèle Python
+
+            // Determine action validity (mirrors TrainingEnvironment.step() / getActionMask())
+            int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
+            boolean decisionZone = (sim.getQueryCount() >= TcdrmConstants.POPULARITY_THRESHOLD)
+                || (sim.getEmaPopularity() >= TcdrmConstants.EMA_REPLICATION_THRESHOLD);
+            boolean canReplicate = lastReplicaCount < maxReplicas && decisionZone && sim.getCurrentBudget() > 0;
+            boolean canDelete = lastReplicaCount > 0;
+
+            // Get action from Python RL bridge (no policy assist override)
             int action;
             if ("qlearning".equals(modelType)) {
                 action = bridge.selectActionQLearning(state);
-                // Policy assist (anti-stall): lorsque l'on est en zone de décision,
-                // continuer à répliquer tant que le nombre de réplicas n'a pas atteint le maximum autorisé.
-                boolean replicateAllowed = (sim.getQueryCount() >= TcdrmConstants.POPULARITY_THRESHOLD)
-                    || (sim.getEmaPopularity() >= TcdrmConstants.EMA_REPLICATION_THRESHOLD);
-                int maxReplicas = TcdrmConstants.maxReplicasForQueryType(sim.isComplex());
-                if (action == 0 && replicateAllowed && sim.getCurrentReplicaCount() < maxReplicas) {
-                    action = 1; // Continuer la réplication jusqu'au plafond lorsque c'est permis
-                }
             } else {
                 action = bridge.selectActionDQN(state);
             }
-            
-            // Exécuter la requête avec l'action
+
+            boolean lastAssignmentSuccess = !((action == 1 && !canReplicate) || (action == 2 && !canDelete));
+
+            // Execute the query
             TcdrmSimulation.QueryResult result = sim.executeRLQuery(action);
-            cumulCost += result.bwCost();
-            
+            cumulCost += result.totalCost();
+
             lastLatency = result.queryTimeMs();
             lastCost = result.totalCost();
+            lastReplicaCount = result.replicaCount();
 
-            // Apprentissage en ligne: récompense + transition
-            double reward = calculateReward(result, tSla, action, previousLatency);
+            // Record action for thrash detection then compute reward
+            actionRing[ringPos % 10] = action;
+            ringPos++;
+            if (ringCount < 10) ringCount++;
+
+            double reward = calculateReward(result, tSla, cSla, action,
+                lastAssignmentSuccess, complex, actionRing, ringCount);
             double[] nextState = sim.buildRLState(lastLatency, lastCost);
-            boolean done = (q == TcdrmConstants.MAX_QUERIES - 1);
+            boolean done = (q == maxQ - 1);
 
             if ("qlearning".equals(modelType)) {
                 bridge.updateQLearning(reward, nextState, done);
             } else {
                 bridge.updateDQN(reward, nextState, done);
             }
-            
+
             data.addQueryResult(
                 q, result.queryTimeMs(), result.bwCost(), cumulCost,
                 result.replicaCount(), result.bwInterProviderGb(), result.bwInterRegionGb(),
                 result.cpuCost(), 0, tSla
             );
         }
-        
+
         System.out.println("      " + modelType.toUpperCase() + " terminé (adaptive online)");
         return data;
     }
 
     /**
-     * Fonction de récompense orientée objectifs TCDRM-ADAPTIVE.
-     *
-     * Objectifs principaux:
-     * - minimiser latence et violations SLA,
-     * - limiter le coût et la sur-réplication,
-     * - encourager une réplication utile (pas systématique).
+     * Reward aligned with TrainingEnvironment.calculateReward() (DQN_TCDRM_v2.md spec):
+     *   R = r1·SLA_OK − r2·SLA_VIOL − r3·COST_OVER − r4·REPL_COST − r5·THRASH
      */
-    private static double calculateReward(TcdrmSimulation.QueryResult result, double tSla, int action, double previousLatency) {
+    private static double calculateReward(TcdrmSimulation.QueryResult result, double tSla, double cSla,
+                                           int action, boolean lastAssignmentSuccess, boolean complex,
+                                           int[] actionRing, int ringCount) {
         double latency = result.queryTimeMs();
-        double bwCost = result.bwCost();
         int replicas = result.replicaCount();
-        double interProvider = result.bwInterProviderGb();
-        double interRegion = result.bwInterRegionGb();
 
-        // 1) Qualité de service (latence)
-        double latencyScore = 1.0 - Math.min(1.0, latency / Math.max(1.0, tSla * 2.0));
-        double reward = 4.0 * latencyScore;
+        double tQ_norm = latency / Math.max(1.0, tSla);
+        double cQ_norm = result.totalCost() / Math.max(1e-9, cSla);
 
-        // 2) Pénalité forte si violation SLA
-        if (latency > tSla) {
-            reward -= 3.0;
+        // SLA_OK: reward proportional to how far below tSla (r1=10)
+        double rewardWaitTime = 10.0 * Math.max(0.0, 1.0 - tQ_norm);
+
+        // SLA_VIOL: proportional penalty when latency exceeds tSla (r2=20)
+        double rewardQueuePenalty = -20.0 * Math.max(0.0, tQ_norm - 1.0);
+
+        // COST_OVER: penalty when per-query cost exceeds C_SLA (r3=15)
+        double costOverPenalty = -15.0 * Math.max(0.0, cQ_norm - 1.0);
+
+        // REPL_COST: actual bandwidth cost of creating a replica, normalized (r4=5)
+        double replCostPenalty = 0.0;
+        if (action == 1 && lastAssignmentSuccess) {
+            double dataGb = TcdrmConstants.queryDataSizeGb(complex);
+            replCostPenalty = -5.0 * (dataGb * TcdrmConstants.COST_BW_INTER_PROVIDER)
+                / Math.max(1.0, TcdrmConstants.INITIAL_BUDGET);
         }
 
-        // 3) Coût bande passante (normalisé)
-        reward -= Math.min(2.0, bwCost * 12.0);
+        // THRASH: penalise rapid alternation of REPLICATE/DELETE (r5=8)
+        double thrashPenalty = isRingThrashing(actionRing, ringCount) ? -8.0 : 0.0;
 
-        // 3bis) Récompenser la réduction du trafic coûteux inter-provider/inter-region
-        reward -= Math.min(1.5, interProvider * 18.0);
-        reward -= Math.min(0.8, interRegion * 8.0);
+        // Light maintenance cost per active replica (encourages parsimony)
+        double rewardUnutilization = -0.05 * replicas;
 
-        // 4) Coût de complexité: trop de réplicas
-        reward -= Math.max(0, replicas - 1) * 0.25;
+        // Invalid action signal
+        double rewardInvalidAction = lastAssignmentSuccess ? 0.0 : -2.0;
 
-        // 5) Régularisation des actions
-        if (action == 1) {
-            reward -= 0.2; // REPLICATE a un coût
-            if (latency > tSla) {
-                reward += 0.6; // bonus si réplication quand SLA violé
-            }
-        } else if (action == 2) {
-            reward -= 0.1; // DELETE: léger coût de risque
+        return rewardWaitTime + rewardQueuePenalty + costOverPenalty
+            + replCostPenalty + thrashPenalty + rewardUnutilization + rewardInvalidAction;
+    }
+
+    private static boolean isRingThrashing(int[] ring, int count) {
+        if (count < 6) return false;
+        int replicates = 0, deletes = 0;
+        for (int a : ring) {
+            if (a == 1) replicates++;
+            else if (a == 2) deletes++;
         }
-
-        // 6) Encourager l'usage des réplicas existants si cela améliore réellement la latence
-        if (replicas > 0 && action == 0 && previousLatency > 0.0 && latency < previousLatency) {
-            reward += 0.4;
-        }
-
-        // 7) Bonus de stabilité SLA en présence de réplicas
-        if (replicas > 0 && latency <= tSla) {
-            reward += 0.3;
-        }
-
-        return reward;
+        return replicates >= 2 && deletes >= 2;
     }
 }

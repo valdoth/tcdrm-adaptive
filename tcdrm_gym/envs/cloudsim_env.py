@@ -39,21 +39,25 @@ class CloudSimEnv(gym.Env):
     
 	metadata = {"render_modes": ["human"]}
     
-	def __init__(self, port: int = 25335, complex: bool = False, seed: int = None, config: dict | None = None):
+	def __init__(self, port: int = 25335, complex: bool = False, seed: int = None,
+	             config: dict | None = None, auto_seed: bool = False):
 		"""
 		Initialise l'environnement CloudSim.
-        
+
 		Args:
-			port: Port du serveur Java TrainingServer
-			complex: True pour requêtes complexes, False pour simples
-			seed: Graine aléatoire pour reproductibilité
+			port:      Port du serveur Java TrainingServer
+			complex:   True pour requêtes complexes, False pour simples
+			seed:      Graine aléatoire initiale (reproductibilité)
+			auto_seed: Si True, incrémente la graine à chaque reset() pour
+			           diversifier les épisodes et améliorer la généralisation.
 		"""
 		super().__init__()
-        
-		self.port = port
-		self.complex = complex
-		self._seed = seed if seed is not None else 42
-		self._config = config or {}
+
+		self.port      = port
+		self.complex   = complex
+		self._seed     = seed if seed is not None else 42
+		self._auto_seed = auto_seed
+		self._config   = config or {}
         
 		# Espaces d'action et d'observation
 		self.action_space = spaces.Discrete(3)  # NOOP, REPLICATE, DELETE
@@ -108,10 +112,13 @@ class CloudSimEnv(gym.Env):
 			info: Informations supplémentaires
 		"""
 		super().reset(seed=seed)
-        
+
 		if seed is not None:
 			self._seed = seed
-        
+		elif self._auto_seed:
+			# Diversification des épisodes : chaque reset utilise une graine distincte
+			self._seed += 1
+
 		self._connect()
         
 		# Préférence: reset structuré si disponible (à la manière du repo de référence)
@@ -244,15 +251,11 @@ class CloudSimEnv(gym.Env):
 			info["action_mask"] = [bool(x) for x in list(mask)]
 		except Exception:
 			pass
-		else:
-			info = {
-				"query": self._server.getCurrentQuery(self.complex),
-				"cumulative_reward": self._server.getCumulativeReward(self.complex)
-			}
         
 		if done:
-			self.episode_rewards.append(info["cumulative_reward"])
-        
+			# .get() évite un KeyError si cumulative_reward est absent de l'info dict
+			self.episode_rewards.append(info.get("cumulative_reward", float(reward)))
+
 		return state, reward, done, False, info
     
 	def close(self):

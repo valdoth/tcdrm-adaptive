@@ -14,16 +14,17 @@ import org.tcdrm.adaptive.simulation.TcdrmSimulation;
  * l'entraînement et l'inférence utilisent exactement le même environnement.
  */
 public class TrainingEnvironment {
-    
+
     private TcdrmSimulation simulation;
     private final long seed;
     private final boolean complex;
     private final TrainingSettings settings;
-    
+
     private int currentQuery;
     private double lastLatency;
     private double lastCost;
     private double tSla;
+    private double cSla;
     private double cumulativeReward;
     // Metrics for external-style logging
     private int slaViolations;
@@ -36,6 +37,11 @@ public class TrainingEnvironment {
     private double rewardUnutilization;
     private double rewardQueuePenalty;
     private double rewardInvalidAction;
+
+    // Action history ring buffer for thrash detection (last 10 actions)
+    private final int[] actionRingBuffer = new int[10];
+    private int actionRingPos = 0;
+    private int actionRingCount = 0;
     
     public TrainingEnvironment(long seed, boolean complex) { this(seed, complex, new TrainingSettings()); }
 
@@ -46,6 +52,7 @@ public class TrainingEnvironment {
         double tSimple = this.settings.getTSlaSimpleMs() > 0 ? this.settings.getTSlaSimpleMs() : TcdrmConstants.TSLA_SIMPLE_MS;
         double tComplex = this.settings.getTSlaComplexMs() > 0 ? this.settings.getTSlaComplexMs() : TcdrmConstants.TSLA_COMPLEX_MS;
         this.tSla = complex ? tComplex : tSimple;
+        this.cSla = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
         reset();
     }
     
@@ -71,6 +78,9 @@ public class TrainingEnvironment {
         this.rewardUnutilization = 0.0;
         this.rewardQueuePenalty = 0.0;
         this.rewardInvalidAction = 0.0;
+        this.actionRingPos = 0;
+        this.actionRingCount = 0;
+        java.util.Arrays.fill(actionRingBuffer, 0);
         // Optional dynamic warmup before RL actions to avoid static starts
         int wu = settings.getWarmupQueries();
         if (wu > 0) {
@@ -125,13 +135,15 @@ public class TrainingEnvironment {
      * @return StepResult contenant (état, récompense, done, info)
      */
     public StepResult step(int action) {
-        // Déterminer validité de l'action (action masking)
+        // Déterminer validité de l'action (action masking — miroir de getActionMask)
         int maxEp = settings.getMaxEpisodeLength() > 0 ? settings.getMaxEpisodeLength() : TcdrmConstants.MAX_QUERIES;
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-        boolean canReplicate = lastReplicaCount < maxReplicas;
+        boolean decisionZone = (simulation.getQueryCount() >= TcdrmConstants.POPULARITY_THRESHOLD)
+            || (simulation.getEmaPopularity() >= TcdrmConstants.EMA_REPLICATION_THRESHOLD);
+        boolean canReplicate = lastReplicaCount < maxReplicas && decisionZone && simulation.getCurrentBudget() > 0;
         boolean canDelete = lastReplicaCount > 0;
         lastInvalidAction = (action == 1 && !canReplicate) || (action == 2 && !canDelete);
-        lastAssignmentSuccess = (action == 1 && canReplicate) || (action == 2 && canDelete) || action == 0;
+        lastAssignmentSuccess = !lastInvalidAction;
 
         // Exécuter la requête avec l'action
         TcdrmSimulation.QueryResult result = simulation.executeRLQuery(action);
@@ -178,28 +190,66 @@ public class TrainingEnvironment {
     public double getLastLatency() { return lastLatency; }
     
     /**
-     * Calcule la récompense pour une action.
-     * 
-     * Récompense basée sur:
-     * - Latence basse = récompense positive
-     * - Violation SLA = pénalité
-     * - Réplication = petit coût (encourage la parcimonie)
-     * - Bonus si réplication réduit la latence
+     * Calcule la récompense alignée sur la spec DQN_TCDRM_v2.md:
+     *   R = r1·SLA_OK − r2·SLA_VIOL − r3·COST_OVER − r4·REPL_COST − r5·THRASH
+     *
+     * tQ_norm = latency / T_SLA  (normalisé sur l'objectif SLA, pas 5×)
+     * cQ_norm = cost   / C_SLA
      */
     private double calculateReward(TcdrmSimulation.QueryResult result, int action) {
         double latency = result.queryTimeMs();
         int replicas = result.replicaCount();
-        
-        // Composantes inspirées du repo external (noms compatibles)
-        rewardWaitTime = 10.0 * (1.0 - Math.min(1.0, latency / Math.max(1.0, tSla * 5.0))); // plus c'est bas, mieux c'est
-        rewardQueuePenalty = (latency > tSla) ? -5.0 : 0.0; // proxy SLA violation
-        rewardUnutilization = -0.1 * replicas; // coût implicite de maintenance (stabilité souhaitée)
-        rewardInvalidAction = lastInvalidAction ? -1.0 : 0.0;
-        
-        // Léger bonus si réplication quand latence très haute
-        double replicationBonus = (action == 1 && latency > (2.0 * tSla)) ? 1.5 : 0.0;
-        
-        return rewardWaitTime + rewardQueuePenalty + rewardUnutilization + rewardInvalidAction + replicationBonus;
+
+        double tQ_norm = latency / Math.max(1.0, tSla);
+        double cQ_norm = result.totalCost() / Math.max(1e-9, cSla);
+
+        // SLA_OK: reward proportional to how far below tSla we are (r1=10)
+        rewardWaitTime = 10.0 * Math.max(0.0, 1.0 - tQ_norm);
+
+        // SLA_VIOL: proportional penalty when latency exceeds tSla (r2=20)
+        rewardQueuePenalty = -20.0 * Math.max(0.0, tQ_norm - 1.0);
+
+        // COST_OVER: penalty when per-query cost exceeds C_SLA (r3=15)
+        double costOverPenalty = -15.0 * Math.max(0.0, cQ_norm - 1.0);
+
+        // REPL_COST: actual bandwidth cost of creating a replica, normalized (r4=5)
+        double replCostPenalty = 0.0;
+        if (action == 1 && lastAssignmentSuccess) {
+            double dataGb = TcdrmConstants.queryDataSizeGb(complex);
+            replCostPenalty = -5.0 * (dataGb * TcdrmConstants.COST_BW_INTER_PROVIDER)
+                / Math.max(1.0, TcdrmConstants.INITIAL_BUDGET);
+        }
+
+        // THRASH: penalise rapid alternation of REPLICATE/DELETE (r5=8)
+        recordAction(action);
+        double thrashPenalty = isThrashing() ? -8.0 : 0.0;
+
+        // Light maintenance cost per active replica (encourages parsimony)
+        rewardUnutilization = -0.05 * replicas;
+
+        // Invalid action: stronger signal so agent stops wasting actions (was -1)
+        rewardInvalidAction = lastInvalidAction ? -2.0 : 0.0;
+
+        return rewardWaitTime + rewardQueuePenalty + costOverPenalty
+            + replCostPenalty + thrashPenalty + rewardUnutilization + rewardInvalidAction;
+    }
+
+    /** Records action into ring buffer for thrash detection. */
+    private void recordAction(int action) {
+        actionRingBuffer[actionRingPos % 10] = action;
+        actionRingPos++;
+        if (actionRingCount < 10) actionRingCount++;
+    }
+
+    /** Returns true if last 10 actions contain ≥2 REPLICATEs and ≥2 DELETEs. */
+    private boolean isThrashing() {
+        if (actionRingCount < 6) return false;
+        int replicates = 0, deletes = 0;
+        for (int a : actionRingBuffer) {
+            if (a == 1) replicates++;
+            else if (a == 2) deletes++;
+        }
+        return replicates >= 2 && deletes >= 2;
     }
     
     /**
@@ -241,10 +291,11 @@ public class TrainingEnvironment {
     /** Masque d'actions valides: [noop, replicate, delete] */
     public boolean[] getActionMask() {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-        // Répliquer seulement si capacité dispo ET si zone de décision atteinte (P_SLA ou popularité EMA)
+        // Répliquer seulement si: capacité dispo + zone de décision atteinte + budget suffisant
         boolean decisionZone = simulation.getQueryCount() >= TcdrmConstants.POPULARITY_THRESHOLD
             || simulation.getEmaPopularity() >= TcdrmConstants.EMA_REPLICATION_THRESHOLD;
-        boolean canReplicate = lastReplicaCount < maxReplicas && decisionZone;
+        boolean canReplicate = lastReplicaCount < maxReplicas && decisionZone
+            && simulation.getCurrentBudget() > 0;
         boolean canDelete = lastReplicaCount > 0;
         return new boolean[] { true, canReplicate, canDelete };
     }

@@ -1,0 +1,9 @@
+name,queries,final_cumul_bw_cost,total_bw_cost,total_cpu_cost,total_replica_cost,total_cost,total_bw_inter_provider_gb,total_bw_inter_region_gb,total_sla_violations,final_replica_count
+NoRepLc_Simple,1000,24.241463,11.6415,1.799963,0,13.441463,900,450,1000,0
+TCDRM_Simple,1000,26.118563,8.7246,1.799963,0,10.524563,181.35,1168.65,202,3
+QLearning_Simple,1000,24.241463,11.6415,1.799963,0,13.441463,900,450,1000,0
+DQN_Simple,1000,26.673474,8.1747,1.800774,0,9.975474,15.75,1334.25,18,3
+NoRepLc_Complex,1000,24.355748,11.7549,1.800848,0,13.555748,900,450,0,0
+TCDRM_Complex,1000,31.146548,8.9757,1.800848,0,10.776548,182.7,1167.3,0,6
+QLearning_Complex,1000,24.355748,11.7549,1.800848,0,13.555748,900,450,0,0
+DQN_Complex,1000,32.501263,8.1234,1.799863,0,9.923263,17.1,1332.9,0,6

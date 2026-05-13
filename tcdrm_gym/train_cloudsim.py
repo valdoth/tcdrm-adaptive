@@ -257,7 +257,10 @@ def train_dqn(env: CloudSimEnv, episodes: int, save_path: str):
 		buffer_capacity=50000,
 		batch_size=64,
 		use_double_dqn=True,
-		use_dueling=True
+		use_dueling=True,
+		n_step=3,              # retours 3-step (Rainbow) : meilleure attribution du crédit
+		min_buffer_size=1000,  # warmup : 1000 transitions avant la première mise à jour
+		normalize_rewards=True,  # normalisation Welford des récompenses
 	)
     
 	best_reward = float('-inf')
@@ -336,6 +339,9 @@ def train_dqn(env: CloudSimEnv, episodes: int, save_path: str):
 						except Exception:
 							pass
 			tb_writer.add_scalar('loss/avg100', float(net_stats.get('avg_loss', 0)), episode)
+			if 'reward_mean' in net_stats:
+				tb_writer.add_scalar('reward_norm/mean', float(net_stats['reward_mean']), episode)
+				tb_writer.add_scalar('reward_norm/std',  float(net_stats['reward_std']),  episode)
 
 		if episode % 10 == 0 or episode == episodes - 1:
 			metrics_tail = ""
@@ -468,7 +474,10 @@ def main():
 				lr_scheduler='cosine',
 				scheduler_params={'T_max': 5000, 'eta_min': 1e-5},
 				epsilon_schedule='linear',
-				epsilon_linear_steps=5000
+				epsilon_linear_steps=5000,
+				n_step=3,
+				min_buffer_size=1000,
+				normalize_rewards=True,
 			)
 			# Train loop reuse
 			train_dqn(env, args.episodes, args.output or 'models/ddqn_cloudsim.pt')

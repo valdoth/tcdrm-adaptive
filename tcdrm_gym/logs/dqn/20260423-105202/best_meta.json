@@ -1,0 +1,35 @@
+{
+  "episode": 987,
+  "best_avg10_reward": 1174.7439346254682,
+  "epsilon": 0.37232058805316676,
+  "buffer": 50000,
+  "network": {
+    "policy_params": 9092,
+    "policy_grad_norm": 0.7605915903113782,
+    "buffer_size": 50000,
+    "avg_loss": 0.11118038217537105,
+    "reward_mean": -1.982451152632791,
+    "reward_std": 4.069042820361451
+  },
+  "metrics_tail": {
+    "last_latency_ms": 44.92398292187885,
+    "query": 3000,
+    "cumulative_reward": 1218.020013734978,
+    "sla_violations": 21,
+    "cumulative_cost": 63.98693867739023,
+    "replica_count": 3,
+    "budget_remaining": 1936.0130613226074,
+    "reward_wait_time": 7.753800853906058,
+    "reward_unutilization": -0.15000000000000002,
+    "reward_queue_penalty": -0.0,
+    "reward_invalid_action": 0.0,
+    "invalid_action_taken": false,
+    "assignment_success": true,
+    "replica_changes": 3,
+    "action_mask": [
+      true,
+      true,
+      true
+    ]
+  }
+}

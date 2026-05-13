@@ -4,7 +4,6 @@ Python RL Bridge for Java/CloudSim via Py4J.
 Charge les modèles RL entraînés avec CloudSimPlus et les expose à Java.
 """
 
-import math
 import os
 import numpy as np
 import torch
@@ -46,9 +45,11 @@ class PythonRLBridge:
             discount_factor=0.99,
             epsilon=0.075,
             epsilon_min=0.01,
-            epsilon_decay_lambda=0.003
+            epsilon_decay_lambda=0.003,
+            n_step=3,              # retours 3-step : meilleure attribution du crédit
+            min_buffer_size=1000,  # warmup : 1000 transitions avant toute mise à jour
+            normalize_rewards=True,  # normalisation Welford des récompenses en ligne
         )
-        self._dqn_online_eps_decay = 0.00015
         if dqn_model_path and os.path.exists(dqn_model_path):
             print(f"📦 Loading DQN model: {dqn_model_path}")
             self.dqn_agent.load(dqn_model_path)
@@ -140,7 +141,7 @@ class PythonRLBridge:
         next_state = self._parse_state(next_state_array)
         next_continuous = self._build_dqn_state(next_state)
         self.dqn_agent.update(self._dqn_last_state, self._dqn_last_action, float(reward), next_continuous, bool(done))
-        self.dqn_agent.epsilon = max(self.dqn_agent.epsilon_min, self.dqn_agent.epsilon * math.exp(-0.00015))
+        # Decay epsilon once per episode only (not per step — avoids double decay)
         if done:
             self.dqn_agent.decay_epsilon()
             self._dqn_episode += 1
@@ -228,13 +229,30 @@ class PythonRLBridge:
             adaptive_state.last_delete_q = adaptive_state.query_counter
     
     def _physical_mask(self, state: dict) -> np.ndarray:
+        """Mirror Java TrainingEnvironment.getActionMask() logic exactly."""
         mask = np.ones(3, dtype=np.float32)
-        if float(state['replicas_normalized']) <= 0.0:
+        replicas = float(state['replicas_normalized'])
+        budget = float(state['budget'])
+        # p_sla_progress >= 1.0  ↔  queryCount >= POPULARITY_THRESHOLD (200)
+        # pop >= 1.0              ↔  emaPopularity >= EMA_REPLICATION_THRESHOLD
+        p_progress = float(state.get('p_sla_progress', 0.0))
+        pop = float(state.get('normalized_popularity', 0.0))
+
+        # DELETE: blocked when no replicas exist
+        if replicas <= 0.0:
             mask[2] = 0.0
-        if float(state['replicas_normalized']) >= 1.0:
+
+        # REPLICATE: blocked when at max capacity, budget exhausted, or decision zone not reached
+        if replicas >= 1.0:
             mask[1] = 0.0
+        elif budget <= 0.0:
+            mask[1] = 0.0
+        elif p_progress < 1.0 and pop < 1.0:
+            # Decision zone not reached: neither P_SLA nor EMA threshold met
+            mask[1] = 0.0
+
         return mask
-    
+
     def _physical_constraints(self, state: dict):
         mask = self._physical_mask(state)
         return [i for i, v in enumerate(mask) if v > 0.5]

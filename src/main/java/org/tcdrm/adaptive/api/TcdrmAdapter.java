@@ -345,7 +345,118 @@ public final class TcdrmAdapter {
         }
     }
 
-    
+    /**
+     * Full 4-model comparison (NoRepLc + TCDRM + Q-Learning + DQN) for both simple and complex
+     * workloads. Generates all paper-style figures and the summary CSV.
+     *
+     * Run sequence:
+     *   1. NoRepLc and TCDRM baselines (no Python needed)
+     *   2. Wait for Python, then run Q-Learning and DQN online
+     *   3. Generate all 4-model figures and summary_phase2_rl.csv
+     */
+    public static void runAllFourModels(int gatewayTimeoutSec) {
+        System.setProperty("java.awt.headless", "true");
+        new File("images").mkdirs();
+        new File("metrics").mkdirs();
+
+        System.out.println("\n[4-model] Running NoRepLc and TCDRM baselines...");
+        BenchmarkData norepSimple  = BenchmarkRunner.runNoRep(1000L, false, "NoRepLc_Simple");
+        BenchmarkData tcdrmSimple  = BenchmarkRunner.runTcdrm(1000L, false, "TCDRM_Simple");
+        BenchmarkData norepComplex = BenchmarkRunner.runNoRep(3000L, true,  "NoRepLc_Complex");
+        BenchmarkData tcdrmComplex = BenchmarkRunner.runTcdrm(3000L, true,  "TCDRM_Complex");
+
+        try {
+            BenchmarkExporter.exportPerQueryCsv(norepSimple,  "metrics/baseline_norep_simple.csv");
+            BenchmarkExporter.exportPerQueryCsv(tcdrmSimple,  "metrics/baseline_tcdrm_simple.csv");
+            BenchmarkExporter.exportPerQueryCsv(norepComplex, "metrics/baseline_norep_complex.csv");
+            BenchmarkExporter.exportPerQueryCsv(tcdrmComplex, "metrics/baseline_tcdrm_complex.csv");
+        } catch (java.io.IOException ioe) {
+            throw new RuntimeException("Failed to export baseline CSVs", ioe);
+        }
+
+        Py4JGateway gateway = new Py4JGateway();
+        int gwPort;
+        try { gwPort = Integer.parseInt(System.getenv().getOrDefault("TCDRM_PY4J_PORT", "25333")); }
+        catch (NumberFormatException nfe) { gwPort = 25333; }
+        gateway.start(gwPort);
+
+        try {
+            PythonRLBridge bridge = waitForPython(gateway, Math.max(5, gatewayTimeoutSec));
+            if (bridge == null) throw new IllegalStateException("Python client not connected within timeout");
+            if (!bridge.isQLearningReady()) throw new IllegalStateException("Python Q-Learning model not loaded.");
+            if (!bridge.isDQNReady())       throw new IllegalStateException("Python DQN model not loaded.");
+
+            System.out.println("\n[4-model] Running Q-Learning and DQN (simple)...");
+            bridge.resetCounters();
+            BenchmarkData qlSimple  = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
+            bridge.resetCounters();
+            BenchmarkData dqnSimple = BenchmarkRunner.runRL(bridge, "dqn",       "DQN_Simple",       false, 2000L);
+
+            System.out.println("\n[4-model] Running Q-Learning and DQN (complex)...");
+            bridge.resetCounters();
+            BenchmarkData qlComplex  = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
+            bridge.resetCounters();
+            BenchmarkData dqnComplex = BenchmarkRunner.runRL(bridge, "dqn",       "DQN_Complex",       true, 4000L);
+
+            try {
+                // Per-query CSVs
+                BenchmarkExporter.exportPerQueryCsv(qlSimple,   "metrics/rl_qlearning_simple.csv");
+                BenchmarkExporter.exportPerQueryCsv(dqnSimple,  "metrics/rl_dqn_simple.csv");
+                BenchmarkExporter.exportPerQueryCsv(qlComplex,  "metrics/rl_qlearning_complex.csv");
+                BenchmarkExporter.exportPerQueryCsv(dqnComplex, "metrics/rl_dqn_complex.csv");
+                BenchmarkExporter.exportOvertimeAverages(qlSimple,   "metrics/log_overtime.csv", 100);
+                BenchmarkExporter.exportOvertimeAverages(dqnSimple,  "metrics/log_overtime.csv", 100);
+                BenchmarkExporter.exportOvertimeAverages(qlComplex,  "metrics/log_overtime.csv", 100);
+                BenchmarkExporter.exportOvertimeAverages(dqnComplex, "metrics/log_overtime.csv", 100);
+
+                // Summary CSV (all 8 runs)
+                java.util.List<BenchmarkData> allModels = java.util.Arrays.asList(
+                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                    norepComplex, tcdrmComplex, qlComplex, dqnComplex
+                );
+                BenchmarkExporter.exportSummaryCsv(allModels, "metrics/summary_phase2_rl.csv");
+
+                // 4-model paper figures
+                ChartGenerator.generateReplicaFactor4Models(
+                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    "images/fig1_replica_factor_4models.png");
+                ChartGenerator.generateResponseTime4Models(
+                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    "images/fig2_response_time_4models.png");
+                ChartGenerator.generateBwConsumption4Models(
+                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    "images/fig3_bw_consumption_4models.png");
+                ChartGenerator.generateAvgBwPrice4Models(
+                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    "images/fig4_avg_bw_price_4models.png");
+                ChartGenerator.generateCumulativeBwPrice4Models(
+                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    "images/fig5_cumulative_bw_price_4models.png");
+                ChartGenerator.generateTotalCost4Models(
+                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
+                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    "images/fig6_total_cost_4models.png");
+
+                // Per-workload RL comparison figures (response_time, replicas, cost)
+                ChartGenerator.generateRLComparison(
+                    norepSimple, tcdrmSimple, qlSimple, dqnSimple, "images/rl4_simple", false);
+                ChartGenerator.generateRLComparison(
+                    norepComplex, tcdrmComplex, qlComplex, dqnComplex, "images/rl4_complex", true);
+
+            } catch (java.io.IOException ioe) {
+                throw new RuntimeException("Failed to export 4-model outputs", ioe);
+            }
+
+            System.out.println("\n[4-model] Complete → see images/ and metrics/\n");
+        } finally {
+            gateway.stop();
+        }
+    }
 
     private static PythonRLBridge waitForPython(Py4JGateway gateway, int maxWaitSeconds) {
         System.out.println("  Waiting for Python client (timeout: " + maxWaitSeconds + "s)...");

@@ -1,26 +1,27 @@
 import org.tcdrm.adaptive.api.TcdrmAdapter;
 
 /**
- * Two-model RL comparison (EMA by default): runs simple then complex.
+ * Full 4-model comparison: NoRepLc + TCDRM + Q-Learning + DQN, simple + complex.
+ * Generates all paper figures (Fig 1–6) and summary_phase2_rl.csv.
  */
 public class RLComparisonEvaluation {
     private static final int TIMEOUT_SEC = 120;
 
     public static void main(String[] args) {
-        System.out.println("Begin simulation (RL comparison: Q-Learning vs DQN — simple + complex, EMA)...");
+        System.out.println("Begin full 4-model comparison (NoRepLc + TCDRM + Q-Learning + DQN)...");
         try {
             TcdrmAdapter.initSimulation();
-            // RANDOM par requête + 1000 requêtes pour alignement
             TcdrmAdapter.setExecRegion("RANDOM");
             TcdrmAdapter.setMaxQueries(1000);
 
-            // Run both simple then complex in a single Python session
-            TcdrmAdapter.runQlearningVsDqnBoth(TIMEOUT_SEC);
+            // Runs NoRepLc + TCDRM baselines, then waits for Python and runs QL + DQN.
+            // Generates all paper figures and summary CSV.
+            TcdrmAdapter.runAllFourModels(TIMEOUT_SEC);
 
-            System.out.println("\n✅ RL 2-models simple+complex comparison complete → images/ & metrics/\n");
+            System.out.println("\n✅ 4-model comparison complete → images/ & metrics/\n");
         } catch (Exception e) {
             e.printStackTrace();
-            System.err.println("Unwanted errors happen during RL comparison run");
+            System.err.println("Error during 4-model comparison run");
         }
     }
 }
