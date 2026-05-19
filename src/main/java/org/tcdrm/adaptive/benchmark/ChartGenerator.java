@@ -135,8 +135,8 @@ public class ChartGenerator {
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
-        chart.addSeries("Q-Learning", x, ql.getCumulativeCost()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getCumulativeCost()).setLineColor(COLOR_DQN);
+        chart.addSeries("Q-Learning", x, ql.getCumulativeBwCostList()).setLineColor(COLOR_QLEARNING);
+        chart.addSeries("DQN", x, dqn.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
         try { BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG); } catch (IOException e) { throw new RuntimeException(e); }
     }
 
@@ -260,17 +260,15 @@ public class ChartGenerator {
             .width(400).height(400)
             .title(title)
             .xAxisTitle("Query Number")
-            .yAxisTitle("Cumulative Cost ($)")
+            .yAxisTitle("Cumulative BW Cost ($)")
             .build();
 
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         chart.getStyler().setMarkerSize(0);
-        
+
         List<Integer> x = norep.getQueryNumbers();
-        chart.addSeries("NoRepLc", x, norep.getCumulativeCost())
-            .setLineColor(COLOR_NOREP);
-        chart.addSeries("TCDRM", x, tcdrm.getCumulativeCost())
-            .setLineColor(COLOR_TCDRM);
+        chart.addSeries("NoRepLc", x, norep.getCumulativeBwCostList()).setLineColor(COLOR_NOREP);
+        chart.addSeries("TCDRM", x, tcdrm.getCumulativeBwCostList()).setLineColor(COLOR_TCDRM);
 
         return chart;
     }
@@ -337,13 +335,13 @@ public class ChartGenerator {
         costChart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         costChart.getStyler().setMarkerSize(0);
         
-        costChart.addSeries("NoRepLc", x, norep.getCumulativeCost())
+        costChart.addSeries("NoRepLc", x, norep.getCumulativeBwCostList())
             .setLineColor(COLOR_NOREP);
-        costChart.addSeries("TCDRM", x, tcdrm.getCumulativeCost())
+        costChart.addSeries("TCDRM", x, tcdrm.getCumulativeBwCostList())
             .setLineColor(COLOR_TCDRM);
-        costChart.addSeries("Q-Learning", x, qlearning.getCumulativeCost())
+        costChart.addSeries("Q-Learning", x, qlearning.getCumulativeBwCostList())
             .setLineColor(COLOR_QLEARNING);
-        costChart.addSeries("DQN", x, dqn.getCumulativeCost())
+        costChart.addSeries("DQN", x, dqn.getCumulativeBwCostList())
             .setLineColor(COLOR_DQN);
         
         BitmapEncoder.saveBitmap(costChart, prefix + "_cost.png", BitmapEncoder.BitmapFormat.PNG);
@@ -532,12 +530,13 @@ public class ChartGenerator {
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         chart.getStyler().setMarkerSize(0);
         chart.getStyler().setPlotGridLinesVisible(true);
-        
+
         List<Integer> x = norep.getQueryNumbers();
-        chart.addSeries("TCDRM", x, tcdrm.getCumulativeCost()).setLineColor(COLOR_TCDRM);
-        chart.addSeries("NoRepLc", x, norep.getCumulativeCost()).setLineColor(COLOR_NOREP);
-        chart.addSeries("Q-Learning", x, ql.getCumulativeCost()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getCumulativeCost()).setLineColor(COLOR_DQN);
+        // Use cumulative BW cost (transfer only) so NoRepLc shows highest as expected
+        chart.addSeries("TCDRM", x, tcdrm.getCumulativeBwCostList()).setLineColor(COLOR_TCDRM);
+        chart.addSeries("NoRepLc", x, norep.getCumulativeBwCostList()).setLineColor(COLOR_NOREP);
+        chart.addSeries("Q-Learning", x, ql.getCumulativeBwCostList()).setLineColor(COLOR_QLEARNING);
+        chart.addSeries("DQN", x, dqn.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
 
         return chart;
     }
@@ -768,20 +767,20 @@ public class ChartGenerator {
         System.out.println("  [RL-2] Replicas (2 models) saved");
     }
 
-    /** Cumulative cost comparison (2 models). */
+    /** Cumulative BW cost comparison (2 models). */
     public static void generateRL2CumulativeCost(BenchmarkData ql, BenchmarkData dqn,
                                                  String filename) throws IOException {
         XYChart chart = new XYChartBuilder()
             .width(800).height(500)
-            .title("Cumulative Cost — RL (2 models)")
-            .xAxisTitle("Query Number").yAxisTitle("Cumulative Cost ($)").build();
+            .title("Cumulative BW Cost — RL (2 models)")
+            .xAxisTitle("Query Number").yAxisTitle("Cumulative BW Cost ($)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
-        chart.addSeries("Q-Learning", x, ql.getCumulativeCost()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getCumulativeCost()).setLineColor(COLOR_DQN);
+        chart.addSeries("Q-Learning", x, ql.getCumulativeBwCostList()).setLineColor(COLOR_QLEARNING);
+        chart.addSeries("DQN", x, dqn.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
-        System.out.println("  [RL-2] Cumulative Cost (2 models) saved");
+        System.out.println("  [RL-2] Cumulative BW Cost (2 models) saved");
     }
 
     /** Avg BW price over time (2 models). */
@@ -827,7 +826,7 @@ public class ChartGenerator {
         XYChart costChart = new XYChartBuilder().width(500).height(350)
             .title("Cumulative BW Cost").xAxisTitle("Query").yAxisTitle("Cost ($)").build();
         costChart.getStyler().setMarkerSize(0);
-        costChart.addSeries("Cumulative Cost", x, data.getCumulativeCost()).setLineColor(COLOR_TCDRM);
+        costChart.addSeries("Cumulative BW Cost", x, data.getCumulativeBwCostList()).setLineColor(COLOR_TCDRM);
         g.drawImage(BitmapEncoder.getBufferedImage(costChart), 550, 40, null);
         
         // 3. SLA Violations
