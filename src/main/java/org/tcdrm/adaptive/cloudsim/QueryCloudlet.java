@@ -48,11 +48,15 @@ public class QueryCloudlet {
             String srcProvider;
             String srcRegion;
             boolean usingReplica = false;
+            double warmupEff = 0.0;
 
             if (fragment.hasReplica()) {
-                srcProvider = fragment.getReplicaProvider();
-                srcRegion = fragment.getReplicaRegion();
+                // Pick the closest replica to minimize transfer cost
+                String[] best = fragment.getBestReplicaLocation(execProvider, execRegion);
+                srcProvider = best[0];
+                srcRegion   = best[1];
                 usingReplica = true;
+                warmupEff = fragment.getWarmupEfficiency();
             } else {
                 srcProvider = fragment.getPrimaryProvider();
                 srcRegion = fragment.getPrimaryRegion();
@@ -64,8 +68,7 @@ public class QueryCloudlet {
                 effectiveDataGb, srcProvider, srcRegion, execProvider, execRegion, rnd);
 
             if (usingReplica) {
-                double warmup = fragment.getWarmupEfficiency();
-                transferMs = transferMs * (1.0 - 0.3 * warmup);
+                transferMs = transferMs * (1.0 - 0.3 * warmupEff);
             }
 
             if (TcdrmConstants.PARALLEL_FETCH) {
@@ -89,8 +92,14 @@ public class QueryCloudlet {
 
         double joinFactor = nJoins * (nJoins + 1) / 2.0;
 
+        // Count fragments where the best replica is intra-DC (same provider + region)
+        final String ep = execProvider, er = execRegion;
         long localFragments = fragments.stream()
-            .filter(f -> f.hasReplica() && f.getReplicaProvider().equals(execProvider))
+            .filter(f -> {
+                if (!f.hasReplica()) return false;
+                String[] best = f.getBestReplicaLocation(ep, er);
+                return best[0].equals(ep) && best[1].equals(er);
+            })
             .count();
         double localFraction = (double) localFragments / nRelations;
         double avgWarmup = fragments.stream()
@@ -105,7 +114,8 @@ public class QueryCloudlet {
         double targetJoinMs = joinFactor * TcdrmConstants.JOIN_BASE_MS * joinSpeedup * cpuJitter;
         long miJoin = Math.max(1L, Math.round((targetJoinMs / 1000.0) * MultiCloudInfrastructure.VM_MIPS));
 
-        int pesRequired = Math.min(nRelations, 4);
+        // 1 PE per cloudlet avoids VM contention and gives deterministic join times
+        int pesRequired = 1;
         this.cloudlet = new CloudletSimple(miJoin, pesRequired);
         long inputSize = (long) (nRelations * TcdrmConstants.AVG_RELATION_SIZE_GB * 1024);
         long outputSize = (long) (TcdrmConstants.AVG_RELATION_SIZE_GB * TcdrmConstants.QUERY_SELECTIVITY * 1024);
@@ -125,7 +135,8 @@ public class QueryCloudlet {
         double miTotal = nRelations * nJoins * TcdrmConstants.MI_PER_JOIN_PER_RELATION;
         this.cpuCost = (miTotal / 10.0) * TcdrmConstants.CPU_COST_PER_10M_MI * cpuJitter;
 
-        double totalDataGb = nRelations * TcdrmConstants.AVG_RELATION_SIZE_GB;
+        // IO cost on effective data accessed (with selectivity), not full relation size
+        double totalDataGb = nRelations * TcdrmConstants.AVG_RELATION_SIZE_GB * TcdrmConstants.QUERY_SELECTIVITY;
         this.ioCost = totalDataGb * TcdrmConstants.IO_COST_PER_GB;
     }
 

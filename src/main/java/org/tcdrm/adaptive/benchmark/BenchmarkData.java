@@ -31,6 +31,9 @@ public class BenchmarkData {
     private double cumulBwInterProvider = 0;
     private double cumulBwInterRegion = 0;
     private int totalSlaViolations = 0;
+    // Cumulative BW cost (transfer only, not total) for correct BW price charts
+    private double cumulBwCostRunning = 0;
+    private final List<Double> cumulativeBwCostList = new ArrayList<>();
 
     public BenchmarkData(String name) {
         this.name = name;
@@ -58,10 +61,12 @@ public class BenchmarkData {
             totalSlaViolations++;
         }
         slaViolations.add(totalSlaViolations);
-        
-        // Avg BW price
-        avgBwPrice.add(cumCost / (queryNum + 1));
-        
+
+        // Cumulative BW cost (transfer cost only) for correct BW price charts
+        cumulBwCostRunning += cost;
+        cumulativeBwCostList.add(cumulBwCostRunning);
+        avgBwPrice.add(cumulBwCostRunning / (queryNum + 1));
+
         totalBwCost += cost;
         totalCpuCost += cpuCost;
         totalReplicaCost += replicaCost;
@@ -98,6 +103,7 @@ public class BenchmarkData {
     
     public List<Double> getCumulativeBwInterProviderGb() { return cumulativeBwInterProviderGb; }
     public List<Double> getCumulativeBwInterRegionGb() { return cumulativeBwInterRegionGb; }
+    public List<Double> getCumulativeBwCostList() { return cumulativeBwCostList; }
     public List<Integer> getSlaViolations() { return slaViolations; }
     public List<Double> getAvgBwPrice() { return avgBwPrice; }
     public int getTotalSlaViolations() { return totalSlaViolations; }
