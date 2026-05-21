@@ -94,10 +94,13 @@ echo "Using JAR: $JAR"
 # Ensure local folders (store models at validation/models)
 mkdir -p images metrics models
 
-# Copy RL models locally if available (do not overwrite user-provided)
+# Always sync latest trained models from tcdrm_gym/models (force overwrite)
 if [ -d "../tcdrm_gym/models" ]; then
-  [ -f models/qlearning_cloudsim.pkl ] || cp -f ../tcdrm_gym/models/qlearning_cloudsim.pkl models/ 2>/dev/null || true
-  [ -f models/dqn_cloudsim.pt ] || cp -f ../tcdrm_gym/models/dqn_cloudsim.pt models/ 2>/dev/null || true
+  cp -f ../tcdrm_gym/models/qlearning_cloudsim.pkl models/ 2>/dev/null || true
+  cp -f ../tcdrm_gym/models/dqn_cloudsim.pt         models/ 2>/dev/null || true
+  # Also keep _final variants for reference
+  cp -f ../tcdrm_gym/models/qlearning_cloudsim_final.pkl models/ 2>/dev/null || true
+  cp -f ../tcdrm_gym/models/dqn_cloudsim_final.pt        models/ 2>/dev/null || true
 fi
 
 # Report model presence to avoid silent fallbacks (QL → random)

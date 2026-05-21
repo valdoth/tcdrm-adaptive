@@ -81,11 +81,6 @@ class PythonRLBridge:
     def selectActionQLearning(self, state_array):
         try:
             state = self._parse_state(state_array)
-            if self._ql_state.query_counter < self._warmup_queries:
-                self._record_action(self._ql_state, 0)
-                self._ql_last_state = None
-                self._ql_last_action = None
-                return 0
             if self._is_thrashing(self._ql_state):
                 self._record_action(self._ql_state, 0)
                 return 0
@@ -103,11 +98,6 @@ class PythonRLBridge:
     def selectActionDQN(self, state_array):
         try:
             state = self._parse_state(state_array)
-            if self._dqn_state.query_counter < self._warmup_queries:
-                self._record_action(self._dqn_state, 0)
-                self._dqn_last_state = None
-                self._dqn_last_action = None
-                return 0
             if self._is_thrashing(self._dqn_state):
                 self._record_action(self._dqn_state, 0)
                 return 0
@@ -153,11 +143,7 @@ class PythonRLBridge:
             self.qlearning_agent.save(self._ql_model_path)
             print(f"💾 Q-Learning saved to {self._ql_model_path}")
         if self._dqn_model_path:
-            torch.save({
-                'policy_net_state_dict': self.dqn_agent.policy_net.state_dict(),
-                'target_net_state_dict': self.dqn_agent.target_net.state_dict(),
-                'epsilon': self.dqn_agent.epsilon
-            }, self._dqn_model_path)
+            self.dqn_agent.save(self._dqn_model_path)
             print(f"💾 DQN saved to {self._dqn_model_path}")
     
     def _discretize_state_for_qlearning(self, state: dict) -> int:
@@ -229,26 +215,19 @@ class PythonRLBridge:
             adaptive_state.last_delete_q = adaptive_state.query_counter
     
     def _physical_mask(self, state: dict) -> np.ndarray:
-        """Mirror Java TrainingEnvironment.getActionMask() logic exactly."""
+        """Mirror Java TrainingEnvironment.getActionMask() — RL decides when to replicate."""
         mask = np.ones(3, dtype=np.float32)
         replicas = float(state['replicas_normalized'])
         budget = float(state['budget'])
-        # p_sla_progress >= 1.0  ↔  queryCount >= POPULARITY_THRESHOLD (200)
-        # pop >= 1.0              ↔  emaPopularity >= EMA_REPLICATION_THRESHOLD
-        p_progress = float(state.get('p_sla_progress', 0.0))
-        pop = float(state.get('normalized_popularity', 0.0))
 
         # DELETE: blocked when no replicas exist
         if replicas <= 0.0:
             mask[2] = 0.0
 
-        # REPLICATE: blocked when at max capacity, budget exhausted, or decision zone not reached
+        # REPLICATE: blocked only when at max capacity or budget exhausted
         if replicas >= 1.0:
             mask[1] = 0.0
         elif budget <= 0.0:
-            mask[1] = 0.0
-        elif p_progress < 1.0 and pop < 1.0:
-            # Decision zone not reached: neither P_SLA nor EMA threshold met
             mask[1] = 0.0
 
         return mask

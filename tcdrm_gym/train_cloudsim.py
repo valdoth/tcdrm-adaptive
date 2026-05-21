@@ -93,7 +93,7 @@ def to_builtin(obj):
 	return obj
 
 
-def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str):
+def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, seed_base: int = 42):
 	print("=" * 70)
 	print("Q-LEARNING TRAINING with CloudSimPlus")
 	print("=" * 70)
@@ -134,12 +134,12 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str):
 		tb_writer = None
     
 	for episode in range(episodes):
-		state, info = env.reset(seed=42 + episode)
+		state, info = env.reset(seed=seed_base + episode)
 		agent.start_episode()
 		episode_reward = 0
 		done = False
 		last_info = info
-        
+
 		while not done:
 			valid_actions = None
 			if isinstance(last_info, dict) and 'action_mask' in last_info:
@@ -241,28 +241,29 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str):
 	return agent, rewards_history
 
 
-def train_dqn(env: CloudSimEnv, episodes: int, save_path: str):
+def train_dqn(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 42, agent: DQNAgent = None):
 	print("=" * 70)
 	print("DQN TRAINING with CloudSimPlus")
 	print("=" * 70)
     
-	agent = DQNAgent(
-		state_dim=9,
-		action_dim=3,
-		learning_rate=0.001,
-		discount_factor=0.99,
-		epsilon=1.0,
-		epsilon_min=0.05,
-		epsilon_decay_lambda=0.001,
-		buffer_capacity=50000,
-		batch_size=64,
-		use_double_dqn=True,
-		use_dueling=True,
-		n_step=3,              # retours 3-step (Rainbow) : meilleure attribution du crédit
-		min_buffer_size=1000,  # warmup : 1000 transitions avant la première mise à jour
-		normalize_rewards=True,  # normalisation Welford des récompenses
-	)
-    
+	if agent is None:
+		agent = DQNAgent(
+			state_dim=9,
+			action_dim=3,
+			learning_rate=0.001,
+			discount_factor=0.99,
+			epsilon=1.0,
+			epsilon_min=0.05,
+			epsilon_decay_lambda=0.001,
+			buffer_capacity=50000,
+			batch_size=64,
+			use_double_dqn=True,
+			use_dueling=True,
+			n_step=3,
+			min_buffer_size=1000,
+			normalize_rewards=True,
+		)
+
 	best_reward = float('-inf')
 	rewards_history = []
 	log_dir = ensure_log_dir('dqn')
@@ -283,11 +284,11 @@ def train_dqn(env: CloudSimEnv, episodes: int, save_path: str):
 		tb_writer = None
     
 	for episode in range(episodes):
-		state, info = env.reset(seed=42 + episode)
+		state, info = env.reset(seed=seed_base + episode)
 		episode_reward = 0
 		done = False
 		last_info = info
-        
+
 		while not done:
 			action_mask = None
 			if isinstance(last_info, dict) and 'action_mask' in last_info:
@@ -455,11 +456,11 @@ def main():
 		cfg['tinyLfuTauLo'] = float(max(0.0, min(1.0, args.tinylfu_tau_lo)))
 		if args.agent == 'qlearning':
 			env = CloudSimQLearningEnv(port=args.port, complex=args.complex, config=cfg)
-			train_qlearning(env, args.episodes, args.output)
+			train_qlearning(env, args.episodes, args.output, seed_base=args.seed_base)
 		elif args.agent == 'ddqn':
 			env = CloudSimEnv(port=args.port, complex=args.complex, config=cfg)
-			# DDQN = DQN with use_double_dqn=True
-			agent = DQNAgent(
+			# Double DQN with Dueling, cosine LR and linear epsilon schedule
+			ddqn_agent = DQNAgent(
 				state_dim=9,
 				action_dim=3,
 				learning_rate=0.001,
@@ -479,11 +480,11 @@ def main():
 				min_buffer_size=1000,
 				normalize_rewards=True,
 			)
-			# Train loop reuse
-			train_dqn(env, args.episodes, args.output or 'models/ddqn_cloudsim.pt')
+			train_dqn(env, args.episodes, args.output or 'models/ddqn_cloudsim.pt',
+			          seed_base=args.seed_base, agent=ddqn_agent)
 		else:
 			env = CloudSimEnv(port=args.port, complex=args.complex, config=cfg)
-			train_dqn(env, args.episodes, args.output)
+			train_dqn(env, args.episodes, args.output, seed_base=args.seed_base)
 		env.close()
 	except ConnectionError as e:
 		print(f"\n❌ {e}")

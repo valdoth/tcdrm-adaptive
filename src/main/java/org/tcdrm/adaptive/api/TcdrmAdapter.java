@@ -118,6 +118,9 @@ public final class TcdrmAdapter {
                 BenchmarkExporter.exportOvertimeAverages(qlComplex, "metrics/log_overtime.csv", 100);
                 ChartGenerator.generateModelMetrics(qlComplex, "images/metrics_qlearning_complex.png", true);
                 ChartGenerator.generatePopularityAnalysis(qlComplex, "images/popularity_qlearning_complex.png", true);
+                BenchmarkExporter.exportSummaryCsv(
+                    java.util.Arrays.asList(qlSimple, qlComplex),
+                    "metrics/summary_qlearning.csv");
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export Q-Learning complex outputs", ioe);
             }
@@ -163,6 +166,9 @@ public final class TcdrmAdapter {
                 BenchmarkExporter.exportOvertimeAverages(dqnComplex, "metrics/log_overtime.csv", 100);
                 ChartGenerator.generateModelMetrics(dqnComplex, "images/metrics_dqn_complex.png", true);
                 ChartGenerator.generatePopularityAnalysis(dqnComplex, "images/popularity_dqn_complex.png", true);
+                BenchmarkExporter.exportSummaryCsv(
+                    java.util.Arrays.asList(dqnSimple, dqnComplex),
+                    "metrics/summary_dqn.csv");
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export DQN complex outputs", ioe);
             }

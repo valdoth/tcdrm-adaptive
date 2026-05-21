@@ -40,8 +40,8 @@ public final class TcdrmConstants {
     // ==================================================================
     /** T_SLA for simple queries (ms) */
     public static final double TSLA_SIMPLE_MS = 200.0;
-    /** C_SLA for simple queries ($ per query) */
-    public static final double CSLA_SIMPLE = 0.015;
+    /** C_SLA for simple queries ($ per query) — from original: CSLA = 0.01 */
+    public static final double CSLA_SIMPLE = 0.010;
     /** T_SLA for complex queries (ms) */
     public static final double TSLA_COMPLEX_MS = 400.0;
     /** C_SLA for complex queries ($ per query) */
@@ -61,8 +61,8 @@ public final class TcdrmConstants {
     // ==================================================================∏
     // Bandwidth Costs (Paper Table 1 — img-001.png, averages)
     // ==================================================================
-    /** $/GB — Intra-datacenter (avg of Google/AWS/Azure) */
-    public static final double COST_BW_INTRA_DC = 0.002;
+    /** $/GB — Intra-datacenter (all 3 providers: 0.001 per SimulationProvidersParameters) */
+    public static final double COST_BW_INTRA_DC = 0.001;
     /** $/GB — Inter-region (same provider) */
     public static final double COST_BW_INTER_REGION = 0.008;
     /** $/GB — Inter-provider */
@@ -109,8 +109,12 @@ public final class TcdrmConstants {
     // ==================================================================
     /** Number of queries per experiment (Paper: 1000, WhatsApp: 3000) */
     public static final int MAX_QUERIES = 3000;
-    /** Budget initial ($) */
-    public static final double INITIAL_BUDGET = 2000.0;  // Benchmark standard: 2000 instead of 1000
+    /**
+     * Budget initial du locataire ($).
+     * Calibré à 2× le coût total attendu sous CSLA (simple: 3000×0.010×2 = 60$).
+     * Permet que la dimension "budget" dans l'état RL soit informative (décroissance visible).
+     */
+    public static final double INITIAL_BUDGET = 60.0;
     
     // ==================================================================
     // Popularité pour la réplication (EMA avec décroissance exponentielle)

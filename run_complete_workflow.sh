@@ -69,7 +69,7 @@ show_help() {
     echo "  --skip-training       Skip training (use existing models)"
     echo "  --skip-compile        Skip Java compilation"
     echo "  --skip-simulation     Skip Java simulation (training only)"
-    echo "  --episodes N          Training episodes [default: 100]"
+    echo "  --episodes N          Training episodes [default: 100] (benchmark toujours 1000 requêtes)"
     echo "  --help                Show this help"
     echo ""
     echo "Examples:"
@@ -81,7 +81,7 @@ show_help() {
 SKIP_TRAINING=false
 SKIP_COMPILE=false
 SKIP_SIMULATION=false
-N_EPISODES=1000
+N_EPISODES=100
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -223,20 +223,26 @@ if [ "$SKIP_COMPILE" = false ]; then
     echo "  STEP 2/3: Compiling Java"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    
+
     if ! command -v mvn &> /dev/null; then
         echo -e "${RED}❌ Maven not installed${NC}"
         exit 1
     fi
-    
+
     echo ">>> Maven compilation..."
-    mvn clean package -q
-    
+    # Si Step 1 a déjà produit le JAR, éviter 'clean' (évite double compilation)
+    if [ "$SKIP_TRAINING" = false ] && ls "$PROJECT_ROOT/target"/*-with-dependencies.jar >/dev/null 2>&1; then
+        echo "   (JAR déjà présent depuis Step 1, compilation incrémentale)"
+        mvn package -q -DskipTests
+    else
+        mvn clean package -q -DskipTests
+    fi
+
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ Compilation error${NC}"
         exit 1
     fi
-    
+
     echo -e "${GREEN}✅ Compilation successful${NC}"
     echo ""
 else
@@ -261,31 +267,47 @@ if [ "$SKIP_SIMULATION" = false ]; then
     echo ""
     
     echo ">>> Starting Java benchmark (TcdrmMain)..."
-    mvn exec:java -Dexec.mainClass="org.tcdrm.adaptive.TcdrmMain" -q > /tmp/java_benchmark.log 2>&1 &
+    # --headless : export PNG sans serveur graphique (CI/terminal)
+    # --rl-only  : non utilisé ici car on veut Phase 1 + Phase 2
+    # La Phase 1 (4×1000 requêtes + graphiques) s'exécute AVANT l'ouverture du gateway Py4J.
+    # Le timeout Python interne de TcdrmMain est 120s (--py-timeout, TcdrmMainArgs).
+    mvn exec:java -Dexec.mainClass="org.tcdrm.adaptive.TcdrmMain" \
+        -Dexec.args="--headless" > /tmp/java_benchmark.log 2>&1 &
     JAVA_PID=$!
-    
+
     echo -e "${GREEN}✅ Java started (PID: $JAVA_PID)${NC}"
     echo ""
-    
-    # Wait for Py4J gateway
-    echo ">>> Waiting for Py4J gateway..."
-    sleep 10
-    
-    for i in {1..10}; do
+
+    # Attente du gateway Py4J — TcdrmMain n'ouvre le port QU'APRÈS la Phase 1
+    # (Phase 1 = 4 scénarios × 1000 requêtes + génération graphiques ≈ 2-5 min)
+    # Timeout total : 5 min (150 × 2s), avec affichage de progression toutes les 20s.
+    echo ">>> Waiting for Py4J gateway (Phase 1 must complete first, may take ~3-5 min)..."
+    GATEWAY_MAX_WAIT=150   # 150 × 2s = 300s = 5 minutes
+    for i in $(seq 1 $GATEWAY_MAX_WAIT); do
         if lsof -i:"$GATEWAY_PORT" > /dev/null 2>&1; then
-            echo -e "${GREEN}✅ Gateway ready on port ${GATEWAY_PORT}${NC}"
+            echo -e "${GREEN}✅ Gateway ready on port ${GATEWAY_PORT} (after $((i*2))s)${NC}"
             break
         fi
-        if [ $i -eq 10 ]; then
-            echo -e "${RED}❌ ERROR: Gateway not ready after 20s${NC}"
+        if ! ps -p $JAVA_PID > /dev/null 2>&1; then
+            echo -e "${RED}❌ ERROR: TcdrmMain exited before opening gateway${NC}"
+            tail -50 /tmp/java_benchmark.log
+            exit 1
+        fi
+        if [ $i -eq $GATEWAY_MAX_WAIT ]; then
+            echo -e "${RED}❌ ERROR: Gateway not ready after $((GATEWAY_MAX_WAIT*2))s${NC}"
             tail -30 /tmp/java_benchmark.log
             exit 1
         fi
-        echo "   Waiting... ($i/10)"
+        # Afficher la progression toutes les 20 secondes
+        if [ $((i % 10)) -eq 0 ]; then
+            echo "   Phase 1 running... ($((i*2))s / $((GATEWAY_MAX_WAIT*2))s)"
+            # Montrer la dernière ligne du log pour avoir un feedback
+            tail -1 /tmp/java_benchmark.log 2>/dev/null | sed 's/^/   > /'
+        fi
         sleep 2
     done
-    
-    sleep 5
+
+    sleep 3
     
     # Start Python client
     echo ">>> Starting Python client..."

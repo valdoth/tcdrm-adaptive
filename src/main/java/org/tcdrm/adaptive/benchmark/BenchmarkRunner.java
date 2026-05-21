@@ -75,8 +75,10 @@ public class BenchmarkRunner {
         double cumulCost = 0;
         double lastLatency = 0;
         double lastCost = 0;
-        double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
-        double cSla = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
+        // TSLA adaptatif : utilise la valeur dynamique de la simulation (Axe 4)
+        double tSla = sim.getDynamicTSla();
+        // CSLA de référence (budget total / nombre de requêtes) — le budget total est statique
+        double cSlaRef = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
         int lastReplicaCount = 0;
 
         // Ring buffer for thrash detection (mirrors TrainingEnvironment)
@@ -86,13 +88,16 @@ public class BenchmarkRunner {
 
         int maxQ = RuntimeConfig.getMaxQueries() != null ? RuntimeConfig.getMaxQueries() : TcdrmConstants.MAX_QUERIES;
         for (int q = 0; q < maxQ; q++) {
-            double[] state = sim.buildRLState(lastLatency, lastCost);
+            // CSLA effectif = budget_restant / requêtes_restantes (miroir de TrainingEnvironment)
+            int remaining = Math.max(1, maxQ - q);
+            double perQueryBudget = sim.getCurrentBudget() / remaining;
+            double effectiveCsla = Math.min(cSlaRef, Math.max(perQueryBudget, cSlaRef * 0.1));
+
+            double[] state = sim.buildRLState(lastLatency, lastCost, effectiveCsla);
 
             // Determine action validity (mirrors TrainingEnvironment.step() / getActionMask())
             int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-            boolean decisionZone = (sim.getQueryCount() >= TcdrmConstants.POPULARITY_THRESHOLD)
-                || (sim.getEmaPopularity() >= TcdrmConstants.EMA_REPLICATION_THRESHOLD);
-            boolean canReplicate = lastReplicaCount < maxReplicas && decisionZone && sim.getCurrentBudget() > 0;
+            boolean canReplicate = lastReplicaCount < maxReplicas && sim.getCurrentBudget() > 0;
             boolean canDelete = lastReplicaCount > 0;
 
             // Get action from Python RL bridge (no policy assist override)
@@ -103,7 +108,11 @@ public class BenchmarkRunner {
                 action = bridge.selectActionDQN(state);
             }
 
-            boolean lastAssignmentSuccess = !((action == 1 && !canReplicate) || (action == 2 && !canDelete));
+            // DELETE silencieux si popularité dépasse le seuil PSLA dynamique de la simulation
+            boolean deleteSilentlyBlocked = (action == 2 && canDelete
+                && sim.getEmaPopularity() >= sim.getDynamicPSlaLo());
+            boolean lastAssignmentSuccess = !((action == 1 && !canReplicate)
+                || (action == 2 && !canDelete) || deleteSilentlyBlocked);
 
             // Execute the query
             TcdrmSimulation.QueryResult result = sim.executeRLQuery(action);
@@ -118,9 +127,13 @@ public class BenchmarkRunner {
             ringPos++;
             if (ringCount < 10) ringCount++;
 
-            double reward = calculateReward(result, tSla, cSla, action,
+            double reward = calculateReward(result, tSla, effectiveCsla, action,
                 lastAssignmentSuccess, complex, actionRing, ringCount);
-            double[] nextState = sim.buildRLState(lastLatency, lastCost);
+            // Next-state CSLA (budget already decremented by executeRLQuery)
+            int remainingNext = Math.max(1, maxQ - q - 1);
+            double effectiveCslaNext = Math.min(cSlaRef,
+                Math.max(sim.getCurrentBudget() / remainingNext, cSlaRef * 0.1));
+            double[] nextState = sim.buildRLState(lastLatency, lastCost, effectiveCslaNext);
             boolean done = (q == maxQ - 1);
 
             if ("qlearning".equals(modelType)) {

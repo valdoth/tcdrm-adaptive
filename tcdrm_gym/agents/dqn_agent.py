@@ -215,7 +215,7 @@ class ReplayBuffer:
 class DQNAgent:
     def __init__(
         self,
-        state_dim:              int   = 8,
+        state_dim:              int   = 9,
         action_dim:             int   = 3,
         hidden_dims:            list  = None,
         learning_rate:          float = 0.0005,
