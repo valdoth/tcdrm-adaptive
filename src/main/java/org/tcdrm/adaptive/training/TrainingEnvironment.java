@@ -26,6 +26,11 @@ public class TrainingEnvironment {
     private double tSla;
     private double cSla;
     private double cumulativeReward;
+    // Seuils adaptatifs — méta-boucle inter-épisodes (Sujet 1, Axe 4)
+    // CSLA reste statique (contrat tenant) ; TSLA et PSLA évoluent selon les performances.
+    private double dynamicTSla;
+    private double dynamicPSlaHi;
+    private double dynamicPSlaLo;
     // Metrics for external-style logging
     private int slaViolations;
     private double cumulativeCost;
@@ -49,10 +54,14 @@ public class TrainingEnvironment {
         this.seed = seed;
         this.complex = complex;
         this.settings = settings != null ? settings : new TrainingSettings();
-        double tSimple = this.settings.getTSlaSimpleMs() > 0 ? this.settings.getTSlaSimpleMs() : TcdrmConstants.TSLA_SIMPLE_MS;
-        double tComplex = this.settings.getTSlaComplexMs() > 0 ? this.settings.getTSlaComplexMs() : TcdrmConstants.TSLA_COMPLEX_MS;
-        this.tSla = complex ? tComplex : tSimple;
         this.cSla = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
+        // Initialisation des seuils adaptatifs à partir des valeurs de référence (ou settings)
+        double tSimple  = this.settings.getTSlaSimpleMs()  > 0 ? this.settings.getTSlaSimpleMs()  : TcdrmConstants.TSLA_SIMPLE_MS;
+        double tComplex = this.settings.getTSlaComplexMs() > 0 ? this.settings.getTSlaComplexMs() : TcdrmConstants.TSLA_COMPLEX_MS;
+        this.dynamicTSla   = complex ? tComplex : tSimple;
+        this.dynamicPSlaHi = TcdrmConstants.EMA_REPLICATION_THRESHOLD;
+        this.dynamicPSlaLo = TcdrmConstants.EMA_DELETE_THRESHOLD;
+        this.tSla = this.dynamicTSla;
         reset();
     }
     
@@ -62,7 +71,14 @@ public class TrainingEnvironment {
      * @return État initial (voir {@link TcdrmSimulation#buildRLState})
      */
     public double[] reset() {
+        // Méta-adaptation : ajuster TSLA/PSLA à partir des métriques de l'épisode précédent
+        if (currentQuery > 0) {
+            endEpisodeAndAdapt();
+        }
         this.simulation = new TcdrmSimulation(seed, complex);
+        // Injecter les seuils adaptatifs dans la nouvelle simulation
+        this.simulation.setDynamicThresholds(dynamicTSla, dynamicPSlaHi, dynamicPSlaLo);
+        this.tSla = this.dynamicTSla;
         // Popularity strategy: default EMA (TinyLFU disabled unless explicitly configured)
         this.currentQuery = 0;
         this.lastLatency = 0.0;
@@ -138,11 +154,13 @@ public class TrainingEnvironment {
         // Déterminer validité de l'action (action masking — miroir de getActionMask)
         int maxEp = settings.getMaxEpisodeLength() > 0 ? settings.getMaxEpisodeLength() : TcdrmConstants.MAX_QUERIES;
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-        boolean decisionZone = (simulation.getQueryCount() >= TcdrmConstants.POPULARITY_THRESHOLD)
-            || (simulation.getEmaPopularity() >= TcdrmConstants.EMA_REPLICATION_THRESHOLD);
-        boolean canReplicate = lastReplicaCount < maxReplicas && decisionZone && simulation.getCurrentBudget() > 0;
+        boolean canReplicate = lastReplicaCount < maxReplicas && simulation.getCurrentBudget() > 0;
         boolean canDelete = lastReplicaCount > 0;
-        lastInvalidAction = (action == 1 && !canReplicate) || (action == 2 && !canDelete);
+        // DELETE silencieux si popularité dépasse le seuil PSLA dynamique
+        boolean deleteSilentlyBlocked = (action == 2 && canDelete
+            && simulation.getEmaPopularity() >= simulation.getDynamicPSlaLo());
+        lastInvalidAction = (action == 1 && !canReplicate) || (action == 2 && !canDelete)
+            || deleteSilentlyBlocked;
         lastAssignmentSuccess = !lastInvalidAction;
 
         // Exécuter la requête avec l'action
@@ -179,12 +197,27 @@ public class TrainingEnvironment {
     
     /**
      * Retourne l'état actuel de l'environnement.
-     * 
+     *
      * Format: [latency, budget, replicas, popularity, cost, t_sla_violation, c_sla_violation,
      * progress, p_sla_progress]
+     * Le coût par requête est normalisé par le CSLA effectif = budget_restant / requêtes_restantes.
+     * Le budget TOTAL (INITIAL_BUDGET) est statique — déclaré par le locataire dans son SLA.
      */
     public double[] getState() {
-        return simulation.buildRLState(lastLatency, lastCost);
+        return simulation.buildRLState(lastLatency, lastCost, computeEffectiveCsla());
+    }
+
+    /**
+     * CSLA effectif par requête = budget_restant / requêtes_restantes.
+     * Le budget total est statique (défini par le locataire) ; ce calcul répartit
+     * équitablement ce qui reste sur les requêtes à venir.
+     * Borné à [10%, 100%] du CSLA de référence pour éviter les extrêmes.
+     */
+    private double computeEffectiveCsla() {
+        int maxEp = settings.getMaxEpisodeLength() > 0 ? settings.getMaxEpisodeLength() : TcdrmConstants.MAX_QUERIES;
+        int remaining = Math.max(1, maxEp - currentQuery);
+        double perQueryBudget = simulation.getCurrentBudget() / remaining;
+        return Math.min(cSla, Math.max(perQueryBudget, cSla * 0.1));
     }
 
     public double getLastLatency() { return lastLatency; }
@@ -193,15 +226,16 @@ public class TrainingEnvironment {
      * Calcule la récompense alignée sur la spec DQN_TCDRM_v2.md:
      *   R = r1·SLA_OK − r2·SLA_VIOL − r3·COST_OVER − r4·REPL_COST − r5·THRASH
      *
-     * tQ_norm = latency / T_SLA  (normalisé sur l'objectif SLA, pas 5×)
-     * cQ_norm = cost   / C_SLA
+     * tQ_norm = latency / T_SLA
+     * cQ_norm = cost / CSLA_effectif  où CSLA_effectif = budget_restant / requêtes_restantes
+     * Le budget TOTAL est statique (déclaré par le locataire) ; le CSLA par requête en découle.
      */
     private double calculateReward(TcdrmSimulation.QueryResult result, int action) {
         double latency = result.queryTimeMs();
         int replicas = result.replicaCount();
 
         double tQ_norm = latency / Math.max(1.0, tSla);
-        double cQ_norm = result.totalCost() / Math.max(1e-9, cSla);
+        double cQ_norm = result.totalCost() / Math.max(1e-9, computeEffectiveCsla());
 
         // SLA_OK: reward proportional to how far below tSla we are (r1=10)
         rewardWaitTime = 10.0 * Math.max(0.0, 1.0 - tQ_norm);
@@ -291,14 +325,123 @@ public class TrainingEnvironment {
     /** Masque d'actions valides: [noop, replicate, delete] */
     public boolean[] getActionMask() {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-        // Répliquer seulement si: capacité dispo + zone de décision atteinte + budget suffisant
-        boolean decisionZone = simulation.getQueryCount() >= TcdrmConstants.POPULARITY_THRESHOLD
-            || simulation.getEmaPopularity() >= TcdrmConstants.EMA_REPLICATION_THRESHOLD;
-        boolean canReplicate = lastReplicaCount < maxReplicas && decisionZone
-            && simulation.getCurrentBudget() > 0;
+        boolean canReplicate = lastReplicaCount < maxReplicas && simulation.getCurrentBudget() > 0;
         boolean canDelete = lastReplicaCount > 0;
         return new boolean[] { true, canReplicate, canDelete };
     }
+
+    // === Méta-adaptation des seuils TSLA / PSLA — machine à états (Sujet 1, Axe 4) ===
+    // Inspiré de Mechouche 2024 (Def 3.4 stratégie de reconfiguration, Def 3.7 transition,
+    // Def 3.8 événement avec prédicat temporel, Def 3.9 action de reconfiguration).
+    // CSLA reste statique — c'est le contrat budget du locataire.
+
+    /** États de la politique de réplication (Mechouche Def 3.5). */
+    private enum ReplicationState {
+        /** Budget dépassé → restreindre la réplication (pSlaHi élevé). */
+        CONSERVATIVE,
+        /** Fonctionnement normal. */
+        BALANCED,
+        /** Taux de violations élevé → encourager la réplication (pSlaHi bas). */
+        AGGRESSIVE
+    }
+
+    // Persistant entre épisodes — ne pas réinitialiser dans reset()
+    private ReplicationState replicationState = ReplicationState.BALANCED;
+    // Compteurs de soutien pour prédicat temporel (Mechouche Def 3.8 : durée minimale)
+    private int consecutiveViolationEpisodes = 0;
+    private int consecutiveCostOverEpisodes  = 0;
+
+    /**
+     * Évalue les événements, transite l'état de réplication, puis ajuste TSLA/PSLA.
+     *
+     * Événements (Def 3.8 ResourceRelatedEvent, prédicat temporel = 2 épisodes consécutifs) :
+     *   evtHighViolation : violationRate > 20% pendant ≥2 épisodes
+     *   evtHighCost      : avgCostRatio  > 120% pendant ≥2 épisodes
+     *   evtStable        : violationRate < 5% ET costRatio < 80% (instantané)
+     *
+     * Transitions (Def 3.7) — priorité coût > violations > stable :
+     *   BALANCED    → CONSERVATIVE  si evtHighCost
+     *   BALANCED    → AGGRESSIVE    si evtHighViolation (et pas evtHighCost)
+     *   AGGRESSIVE  → BALANCED      si evtHighCost ou evtStable
+     *   CONSERVATIVE→ BALANCED      si evtHighViolation ou evtStable
+     *
+     * Actions de reconfiguration (Def 3.9) appliquées selon le nouvel état :
+     *   AGGRESSIVE   : baisser dynamicTSla + baisser pSlaHi (répliquer plus facilement)
+     *   CONSERVATIVE : remonter pSlaHi (répliquer moins souvent) + récupérer dynamicTSla
+     *   BALANCED     : dérive douce vers les valeurs contractuelles
+     */
+    private void adaptThresholds(double violationRate, double avgCostRatio) {
+        // --- Évaluation des événements avec prédicat temporel (Def 3.8) ---
+        boolean highViolation = violationRate > 0.20;
+        boolean highCost      = avgCostRatio   > 1.20;
+
+        consecutiveViolationEpisodes = highViolation ? consecutiveViolationEpisodes + 1 : 0;
+        consecutiveCostOverEpisodes  = highCost      ? consecutiveCostOverEpisodes  + 1 : 0;
+
+        // Les événements ne se déclenchent qu'après 2 épisodes consécutifs (hysteresis)
+        boolean evtHighViolation = consecutiveViolationEpisodes >= 2;
+        boolean evtHighCost      = consecutiveCostOverEpisodes  >= 2;
+        boolean evtStable        = violationRate < 0.05 && avgCostRatio < 0.80;
+
+        // --- Transitions de la machine à états (Def 3.7) ---
+        ReplicationState prev = replicationState;
+        switch (replicationState) {
+            case BALANCED:
+                if      (evtHighCost)      replicationState = ReplicationState.CONSERVATIVE;
+                else if (evtHighViolation) replicationState = ReplicationState.AGGRESSIVE;
+                break;
+            case AGGRESSIVE:
+                if (evtHighCost || evtStable) replicationState = ReplicationState.BALANCED;
+                break;
+            case CONSERVATIVE:
+                if (evtHighViolation || evtStable) replicationState = ReplicationState.BALANCED;
+                break;
+        }
+        // Réinitialiser les compteurs de soutien en cas de changement d'état
+        if (replicationState != prev) {
+            consecutiveViolationEpisodes = 0;
+            consecutiveCostOverEpisodes  = 0;
+        }
+
+        // --- Actions de reconfiguration selon le nouvel état (Def 3.9) ---
+        double contractTSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
+        double tStep    = contractTSla * 0.05;
+        double pslaStep = 0.02;
+
+        switch (replicationState) {
+            case AGGRESSIVE:
+                dynamicTSla   = Math.max(contractTSla * 0.60, dynamicTSla - tStep);
+                dynamicPSlaHi = Math.max(0.15, dynamicPSlaHi - pslaStep);
+                dynamicPSlaLo = Math.max(0.05, dynamicPSlaLo - pslaStep);
+                break;
+            case CONSERVATIVE:
+                dynamicPSlaHi = Math.min(0.80, dynamicPSlaHi + pslaStep);
+                dynamicPSlaLo = Math.min(dynamicPSlaHi - 0.05, dynamicPSlaLo + pslaStep);
+                dynamicTSla   = Math.min(contractTSla, dynamicTSla + tStep * 0.5);
+                break;
+            case BALANCED:
+                // Dérive douce vers les valeurs de référence du contrat
+                dynamicTSla   = Math.min(contractTSla, dynamicTSla + tStep * 0.3);
+                dynamicPSlaHi += (TcdrmConstants.EMA_REPLICATION_THRESHOLD - dynamicPSlaHi) * 0.10;
+                dynamicPSlaLo += (TcdrmConstants.EMA_DELETE_THRESHOLD       - dynamicPSlaLo) * 0.10;
+                break;
+        }
+    }
+
+    /** Calcule les métriques de l'épisode courant et applique la méta-adaptation. */
+    private void endEpisodeAndAdapt() {
+        int maxEp = settings.getMaxEpisodeLength() > 0 ? settings.getMaxEpisodeLength() : TcdrmConstants.MAX_QUERIES;
+        double violationRate = (double) slaViolations / Math.max(1, maxEp);
+        double avgCostRatio  = (cumulativeCost / Math.max(1, maxEp))
+            / Math.max(1e-9, complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE);
+        adaptThresholds(violationRate, avgCostRatio);
+    }
+
+    public double getDynamicTSla()   { return dynamicTSla; }
+    public double getDynamicPSlaHi() { return dynamicPSlaHi; }
+    public double getDynamicPSlaLo() { return dynamicPSlaLo; }
+    /** État courant de la politique de réplication (CONSERVATIVE / BALANCED / AGGRESSIVE). */
+    public String getReplicationState() { return replicationState.name(); }
 
     public boolean isDifferentSeedOrSettings(long s, TrainingSettings st) {
         if (this.seed != s) return true;
