@@ -1,175 +1,82 @@
-# 📊 Guide de Génération des Diagrammes TCDRM-ADAPTIVE 2024
+# 📊 Guide de Génération des Diagrammes TCDRM-ADAPTIVE
 
-## ⚠️ Problème Rencontré
+## ✅ La génération locale fonctionne
 
-Les outils automatiques de génération de diagrammes Mermaid (Mermaid.ink, Kroki, Mermaid CLI) ne fonctionnent pas actuellement :
-- **Mermaid.ink** : Erreur 403 Forbidden
-- **Kroki** : Erreur 403 Forbidden  
-- **Mermaid CLI** : Nécessite Chrome/Chromium (non installé)
-
----
-
-## ✅ Solution : Génération Manuelle
-
-### **Méthode Recommandée : Mermaid Live Editor**
-
-1. **Ouvrir** : https://mermaid.live/
-
-2. **Pour chaque diagramme dans `workflow_diagrams_2024.md`** :
-   - Copier le code Mermaid (entre ` ```mermaid` et ` ``` `)
-   - Coller dans l'éditeur Mermaid Live
-   - Cliquer sur **"Download PNG"**
-   - Sauvegarder avec le nom approprié dans `docs/diagrams/`
-
----
-
-## 📋 Liste des 10 Diagrammes à Générer
-
-### **1. Architecture Globale 2024**
-**Fichier** : `01_architecture_globale_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 1  
-**Description** : 2 modèles RL (Q-Learning, DQN) + 11 patterns cloud + baselines
-
-### **2. Patterns Cloud Réels**
-**Fichier** : `02_patterns_cloud_reels_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 2  
-**Description** : Distribution 11 types + cas d'usage (E-commerce, IoT, Streaming)
-
-### **3. Workflow Complet 2024**
-**Fichier** : `03_workflow_complet_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 3  
-**Description** : Entraînement → Simulation CloudSim → Visualisation
-
-### **4. Améliorations Algorithmes**
-**Fichier** : `04_ameliorations_algorithmes_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 4  
-**Description** : Double Q-Learning, Double DQN, Dueling, PER
-
-### **5. Processus de Décision 2024**
-**Fichier** : `05_processus_decision_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 5  
-**Description** : Q-Learning vs DQN avec architecture détaillée
-
-### **6. Comparaison 4 Modèles**
-**Fichier** : `06_comparaison_4_modeles_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 6  
-**Description** : Performance attendue (sans PPO)
-
-### **7. Timeline Workflow**
-**Fichier** : `07_timeline_workflow_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 7  
-**Description** : Gantt 45-60 min
-
-### **8. Architecture Résultats**
-**Fichier** : `08_architecture_resultats_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 8  
-**Description** : Modèles + Métriques + Documentation
-
-### **9. Fonction de Récompense**
-**Fichier** : `09_fonction_recompense_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 9  
-**Description** : 7 composantes multi-objectif
-
-### **10. Conformité algo.md**
-**Fichier** : `10_conformite_algo_2024.png`  
-**Source** : `workflow_diagrams_2024.md` - Section 10  
-**Description** : Vérification 100% Q-Learning + DQN
-
----
-
-## 🧹 Diagrammes Obsolètes Supprimés
-
-Les anciens diagrammes avec PPO ont été identifiés mais **ne peuvent pas être supprimés automatiquement** car ils n'existent pas dans le dossier actuel :
-
-- ❌ `01_architecture_globale_tcdrm-adaptive_3_modèles_rl.png` (non trouvé)
-- ❌ `04_processus_de_décision_multi-modèles.png` (non trouvé)
-- ❌ `08_métriques_comparatives_5_modèles.png` (non trouvé)
-
-**Note** : Ces fichiers n'existent pas, donc aucune suppression nécessaire.
-
----
-
-## 📂 Diagrammes Actuels dans `docs/diagrams/`
-
-```
-01_architecture_globale.png (84 KB)
-02_workflow_complet_3_étapes.png (42 KB)
-02_workflow_complet_tcdrm-adaptive.png (74 KB)
-03_flux_de_données.png (117 KB)
-04_processus_de_décision_q-learning.png (21 KB)
-05_comparaison_q-learning_vs_tcdrm_statique.png (33 KB)
-06_timeline_du_workflow.png (50 KB)
-07_architecture_des_résultats.png (95 KB)
-07_timeline_du_workflow_complet.png (42 KB)
-08_métriques_comparatives.png (22 KB)
-```
-
-**Total** : 10 fichiers PNG (ancienne version)
-
----
-
-## 🎯 Actions à Effectuer
-
-### **Option 1 : Génération Manuelle (Recommandé)**
-
-1. Ouvrir https://mermaid.live/
-2. Pour chaque section de `workflow_diagrams_2024.md` :
-   - Copier le code Mermaid
-   - Générer le PNG
-   - Télécharger avec le nom approprié
-3. Placer les 10 fichiers dans `docs/diagrams/`
-
-**Temps estimé** : 15-20 minutes
-
-### **Option 2 : Installer Chrome pour Mermaid CLI**
+Contrairement à une version précédente de ce guide, **Mermaid CLI (`mmdc`)
+fonctionne désormais en local** et n'a plus besoin des API externes
+(Mermaid.ink, Kroki) qui renvoyaient des erreurs 403/503/400.
 
 ```bash
-# Installer Chrome Headless Shell
-npx puppeteer browsers install chrome-headless-shell
+# 1. Installer Mermaid CLI (une fois)
+npm install -g @mermaid-js/mermaid-cli
 
-# Puis exécuter le script
+# 2. Installer Chrome headless pour Puppeteer (une fois)
+#    Utiliser la version exacte attendue par puppeteer-core embarqué
+#    dans @mermaid-js/mermaid-cli (vérifier avec :
+#    cat node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/package.json)
+npx --yes puppeteer@<version-de-puppeteer-core> browsers install chrome-headless-shell@<version-attendue>
+
+# 3. Générer les 10 diagrammes
 cd docs
-./generate_diagrams_2024.sh
+bash generate_diagrams_2024.sh
 ```
 
-**Temps estimé** : 5 minutes (après installation)
+Le script :
+1. Vérifie que `mmdc` est installé.
+2. Vide les anciens PNG du dossier `diagrams/`.
+3. Extrait chaque bloc ` ```mermaid ` de `workflow_diagrams_2024.md` et génère le PNG correspondant.
+4. Assainit le nom de fichier (accents, apostrophes, flèches, `+`, `%` retirés) pour éviter de casser la commande de génération.
 
-### **Option 3 : Utiliser VS Code Extension**
+## 📋 Les 10 Diagrammes
 
-1. Installer l'extension "Markdown Preview Mermaid Support"
-2. Ouvrir `workflow_diagrams_2024.md`
-3. Prévisualiser chaque diagramme
-4. Faire clic droit → Exporter en PNG
+| # | Fichier | Description |
+|---|---|---|
+| 1 | `01_architecture_globale_tcdrm-adaptive_2_modeles_rl.png` | 2 modèles RL (Q-Learning, DQN) + workload réel + baselines |
+| 2 | `02_modele_de_workload_et_strategies_de_popularite.png` | 10 relations à popularité fixe, 3 stratégies de popularité, 3 stratégies de warmup |
+| 3 | `03_workflow_detaille_entrainement_compilation_benchmark.png` | Entraînement → modèles `.pkl`/`.pt` → compilation → benchmark → graphes |
+| 4 | `04_techniques_damelioration_des_algorithmes_rl.png` | Détail des techniques Q-Learning et DQN, avec formules |
+| 5 | `05_processus_de_decision_q-learning_vs_dqn.png` | Flux état (9D réel) → action pour Q-Learning et DQN |
+| 6 | `06_comparaison_4_modeles_sans_ppo.png` | Classement mesuré NoRep / TCDRM / Q-Learning / DQN |
+| 7 | `07_workflow_complet_run-complete-workflow.png` | 3 étapes de `run_complete_workflow.sh` |
+| 8 | `08_architecture_des_resultats.png` | Modèles entraînés, logs CSV/TensorBoard, graphes réels |
+| 9 | `09_fonction_de_recompense.png` | 7 composantes réelles de `TrainingEnvironment.calculateReward()` |
+| 10 | `10_techniques_rl_implementees_verification_code.png` | Techniques RL implémentées, par fichier source |
 
-**Temps estimé** : 10-15 minutes
+Les diagrammes 3, 4 et 5 échouaient auparavant à la génération à cause
+d'erreurs de l'API `mermaid.ink` (503/400), pas par choix de contenu. Ils
+sont désormais générés en local sans erreur (voir
+`RESULTAT_GENERATION_DIAGRAMMES_2024.md`).
 
----
+## ⚠️ Erreur de parsing Mermaid la plus fréquente
 
-## ✅ Checklist de Validation
+```
+Error: Parse error on line N: ... Expecting 'SQE', ... got 'PS'/'SQS'
+```
 
-Après génération, vérifier que tous les diagrammes sont présents :
+Cause : un label de nœud contient des crochets `[...]` ou des parenthèses
+`(...)` non échappés, que Mermaid interprète comme une nouvelle forme de
+nœud. Solution : entourer tout le label de guillemets :
 
-- [ ] `01_architecture_globale_2024.png`
-- [ ] `02_patterns_cloud_reels_2024.png`
-- [ ] `03_workflow_complet_2024.png`
-- [ ] `04_ameliorations_algorithmes_2024.png`
-- [ ] `05_processus_decision_2024.png`
-- [ ] `06_comparaison_4_modeles_2024.png`
-- [ ] `07_timeline_workflow_2024.png`
-- [ ] `08_architecture_resultats_2024.png`
-- [ ] `09_fonction_recompense_2024.png`
-- [ ] `10_conformite_algo_2024.png`
+```
+NODE["texte avec (parenthèses) et [crochets]"]
+```
 
----
+## 🔄 Avant de modifier un diagramme
 
-## 📖 Documentation Associée
+Si le code change (nouvel hyperparamètre, nouvelle technique RL, nouveau
+champ d'état), vérifier dans le code source avant de mettre à jour le
+diagramme correspondant :
 
-- `workflow_diagrams_2024.md` : Source des diagrammes Mermaid
-- `README_DIAGRAMS_2024.md` : Documentation des modifications
-- `CHANGELOG_DIAGRAMS_2024.md` : Historique des changements
+- État/actions/récompense : `tcdrm_gym/envs/cloudsim_env.py`,
+  `src/main/java/.../simulation/TcdrmSimulation.java` (`buildRLState`),
+  `src/main/java/.../training/TrainingEnvironment.java` (`calculateReward`).
+- Agents RL : `tcdrm_gym/agents/simple_qlearning_agent.py`,
+  `tcdrm_gym/agents/dqn_agent.py`.
+- Workload/popularité : `src/main/java/.../data/WorkloadGenerator.java`,
+  `src/main/java/.../data/RelationPopularityTracker.java`,
+  `src/main/java/.../simulation/TinyLFU.java`.
+- Workflow : `run_complete_workflow.sh`.
 
----
-
-**Date** : Février 2024  
-**Status** : ⚠️ Génération manuelle requise  
-**Raison** : APIs externes bloquées, Chrome non installé pour Mermaid CLI
+Éviter de référencer des numéros de ligne précis dans les diagrammes : ils
+deviennent obsolètes dès la moindre modification du fichier. Préférer les
+noms de classes/méthodes/fichiers, plus stables.
