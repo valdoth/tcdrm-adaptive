@@ -1,6 +1,55 @@
-# 📋 Changelog Diagrammes TCDRM-ADAPTIVE 2024
+# 📋 Changelog Diagrammes TCDRM-ADAPTIVE
+
+## Version 3.0 - 21 juin 2026 (alignement sur le code réel)
+
+### ⚠️ Constat
+
+La Version 2.0 ci-dessous décrivait des "11 patterns cloud"
+(`steady`, `burst`, `read_intensive`, `black_friday`, etc.), une fonction de
+récompense à 7 composantes `ALPHA/BETA/GAMMA/DELTA/EPSILON/ZETA/ETA`, et
+faisait référence à `algo.md` et à des chemins `python_rl/...`. **Aucun de
+ces éléments n'existe dans le code actuel du dépôt** (`tcdrm_gym/`,
+`src/main/java/org/tcdrm/adaptive/`). Il s'agissait d'une spécification
+prévue qui n'a jamais été implémentée telle quelle, ou qui a été abandonnée
+avant cette mise à jour.
+
+### ✅ Corrections apportées
+
+- **Workload** : remplacement des "11 patterns cloud" par le workload réel —
+  10 relations (`R1`-`R10`) à popularité fixe (`WorkloadGenerator.java`) et
+  3 stratégies de popularité interchangeables (`EMA`, `TinyLFU`, hybride),
+  vérifiées dans `RelationPopularityTracker.java` / `TinyLFU.java`.
+- **État RL** : 9 dimensions réelles (et non 8) — voir `buildRLState()` dans
+  `TcdrmSimulation.java` et `CloudSimEnv` dans `cloudsim_env.py`.
+- **Classes d'environnement** : `CloudSimQLearningEnv` / `CloudSimEnv` (et
+  non `TcdrmQLearningEnv` / `TcdrmV2Env`, qui n'existent pas).
+- **Fonction de récompense** : remplacement des 7 composantes fictives par
+  les 7 composantes réelles de `TrainingEnvironment.calculateReward()` :
+  `SLA_OK (r1=10)`, `SLA_VIOL (r2=20)`, `COST_OVER (r3=15)`,
+  `REPL_COST (r4=5)`, `THRASH (r5=8)`, `UNUTILIZATION (-0.05/réplica)`,
+  `INVALID_ACTION (-2)`.
+- **Conformité "algo.md"** : `algo.md` a été supprimé du dépôt (fichier de
+  notes redondant) ; le diagramme 10 référence désormais les fichiers/
+  techniques sans numéros de ligne (instables dans le temps).
+- **Périmètre** : les 10 diagrammes sont conservés. Les diagrammes 3, 4 et 5
+  avaient été temporairement retirés en pensant qu'ils étaient redondants,
+  avant de constater qu'ils manquaient en réalité à cause d'erreurs de
+  génération (API `mermaid.ink`, 503/400) et non par choix de contenu. Ils
+  ont été restaurés, corrigés (état 9D, Q(λ), n-step, Welford) et génèrent
+  désormais sans erreur en local via Mermaid CLI.
+- **Génération** : passage à Mermaid CLI (`mmdc`) en local — l'API
+  `mermaid.ink` utilisée par la Version 2.0 renvoyait des erreurs 403/503/400
+  pour plusieurs diagrammes.
+
+---
 
 ## Version 2.0 - Février 2024
+
+> ⚠️ **Cette version décrit une spécification qui n'a pas été retenue.** Les
+> "11 patterns cloud", la fonction de récompense à composantes
+> `ALPHA/BETA/GAMMA/...` et les chemins `python_rl/...` mentionnés ci-dessous
+> ne correspondent à aucun code présent dans le dépôt actuel. Conservé pour
+> mémoire ; se référer à la Version 3.0 ci-dessus pour l'état réel.
 
 ### 🎯 Modifications Majeures
 

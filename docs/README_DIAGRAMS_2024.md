@@ -1,200 +1,77 @@
-# 📊 Diagrammes TCDRM-ADAPTIVE 2024 - Mise à Jour
+# 📊 Diagrammes TCDRM-ADAPTIVE — État Actuel
 
-## 🎯 Modifications Récentes
+> Mis à jour pour refléter le code réel du dépôt (vérifié le 21/06/2026).
+> Voir `CHANGELOG_DIAGRAMS_2024.md` pour l'historique des corrections.
 
-Ce document récapitule les mises à jour des diagrammes suite aux améliorations apportées au projet TCDRM-ADAPTIVE.
+## 🎯 Ce que montrent les diagrammes
 
----
+- **2 modèles RL** : Q-Learning (`tcdrm_gym/agents/simple_qlearning_agent.py`) et DQN
+  (`tcdrm_gym/agents/dqn_agent.py`). **PPO n'est pas implémenté** dans ce projet.
+- **Comparaison à 4 stratégies** : NoRep, TCDRM (seuil statique), Q-Learning, DQN.
+- **Workload réel** : 10 relations (`R1`-`R10`) à popularité fixe générées par
+  `WorkloadGenerator.java`, suivies via `RelationPopularityTracker` / `TinyLFU.java`,
+  avec 3 stratégies de popularité interchangeables (`EMA`, `TinyLFU`, `EMA+TinyLFU`).
+  **Il n'existe pas de "11 patterns cloud" (steady/burst/black_friday/...)** dans le
+  code — cette idée figurait dans une version antérieure des diagrammes mais n'a
+  jamais été implémentée.
+- **Fonction de récompense réelle à 7 composantes**, calculée dans
+  `TrainingEnvironment.calculateReward()` (Java) : `SLA_OK`, `SLA_VIOL`,
+  `COST_OVER`, `REPL_COST`, `THRASH`, `UNUTILIZATION`, `INVALID_ACTION`.
 
-## 📝 Changements Principaux
+## 📂 Fichiers
 
-### **1. Suppression de PPO**
-- ❌ PPO retiré des diagrammes (non utilisé actuellement)
-- ✅ Focus sur Q-Learning et DQN uniquement
-- ✅ Comparaison 4 modèles : Q-Learning, DQN, TCDRM Statique, NOREP
+- `workflow_diagrams_2024.md` : source Mermaid des 10 diagrammes (vérifiée contre le code).
+- `diagrams/` : PNG générés depuis ce fichier.
+- `generate_diagrams_2024.sh` : script de génération via Mermaid CLI (`mmdc`), exécutable en local.
 
-### **2. Ajout des Patterns Cloud Réels**
-- ✅ **4 nouveaux patterns** ajoutés (28% des épisodes)
-  - `read_intensive` (12%) : 90% lectures, 10% écritures
-  - `write_intensive` (8%) : 30% lectures, 70% écritures
-  - `geo_distributed` (10%) : EU 40%, US 35%, ASIA 25%
-  - `black_friday` (2%) : Pic extrême 10x
+## 🎨 Les 10 Diagrammes
 
-- ✅ **7 patterns de base** conservés (72% des épisodes)
-  - steady, burst, cold_to_hot, hot_to_cold, daily_cycle, weekend, budget_critical
+| # | Diagramme | Contenu |
+|---|-----------|---------|
+| 1 | Architecture Globale | 2 modèles RL + workload réel + baselines |
+| 2 | Workload et Popularité | 10 relations, 3 stratégies de popularité, 3 stratégies de warmup |
+| 3 | Workflow Détaillé | Entraînement → modèles → compilation → benchmark → graphes |
+| 4 | Techniques d'Amélioration | Détail des techniques Q-Learning et DQN, avec formules |
+| 5 | Processus de Décision | Flux état → action pour Q-Learning et DQN (état 9D réel) |
+| 6 | Comparaison 4 Modèles | Classement mesuré (NoRep < TCDRM < Q-Learning < DQN) |
+| 7 | Workflow Complet | 3 étapes de `run_complete_workflow.sh` |
+| 8 | Architecture des Résultats | Modèles, logs CSV/TensorBoard, graphes réels |
+| 9 | Fonction de Récompense | 7 composantes réelles de `calculateReward()` |
+| 10 | Techniques RL Implémentées | Liste des techniques par fichier (sans numéros de ligne) |
 
-### **3. Vérification Algorithmes RL**
-- ✅ **Q-Learning** : Conformité 100% avec `algo.md`
-  - Double Q-Learning implémenté (ligne 134-161)
-  - Learning Rate Adaptatif (ligne 128-130)
-  - Exploration Intelligente (ligne 88-98)
+Les diagrammes 3, 4 et 5 avaient initialement échoué à la génération (erreurs
+403/503/400 de l'API `mermaid.ink`, documentées dans
+`RESULTAT_GENERATION_DIAGRAMMES_2024.md`) — ce n'était pas un retrait
+volontaire. Ils sont désormais générés en local sans erreur et ont été
+corrigés pour correspondre au code actuel.
 
-- ✅ **DQN** : Conformité 100% avec `algo.md`
-  - Double DQN implémenté (ligne 388-391)
-  - Dueling Architecture (ligne 292-293)
-  - Prioritized Experience Replay (ligne 306-309)
-  - Soft Target Update (ligne 420-423)
+## 🔧 Génération des PNG
 
----
-
-## 📂 Fichiers de Diagrammes
-
-### **Nouveau (2024)**
-- `workflow_diagrams_2024.md` : **Diagrammes mis à jour** avec :
-  - 10 diagrammes Mermaid
-  - Patterns cloud réels
-  - Améliorations algorithmes
-  - Sans PPO
-  - Conformité 100%
-
-### **Ancien (Référence)**
-- `workflow_diagrams_updated.md` : Version précédente avec PPO
-
----
-
-## 🎨 Diagrammes Disponibles (2024)
-
-| # | Diagramme | Description | Nouveauté |
-|---|-----------|-------------|-----------|
-| 1 | Architecture Globale | 2 modèles RL + 11 patterns | ✅ Patterns cloud |
-| 2 | Patterns Cloud Réels | Distribution 11 types | ✅ NOUVEAU |
-| 3 | Workflow Complet | Entraînement → Simulation → Visualisation | ✅ Sans PPO |
-| 4 | Améliorations Algorithmes | Double Q/DQN, Dueling, PER | ✅ NOUVEAU |
-| 5 | Processus de Décision | Q-Learning vs DQN détaillé | ✅ Dueling |
-| 6 | Comparaison 4 Modèles | Performance attendue | ✅ Sans PPO |
-| 7 | Timeline Workflow | Gantt 45-60 min | ✅ Mis à jour |
-| 8 | Architecture Résultats | Modèles + Métriques + Docs | ✅ Docs ajoutés |
-| 9 | Fonction de Récompense | 7 composantes | ✅ Complet |
-| 10 | Conformité algo.md | Vérification 100% | ✅ NOUVEAU |
-
----
-
-## 🔧 Génération des Diagrammes PNG
-
-### **Méthode 1 : Mermaid CLI (Recommandé)**
+Mermaid CLI fonctionne désormais en local (Chrome headless installé via
+Puppeteer) :
 
 ```bash
-# Installer Mermaid CLI
-npm install -g @mermaid-js/mermaid-cli
-
-# Générer tous les diagrammes
 cd docs
-mmdc -i workflow_diagrams_2024.md -o diagrams/2024/
+bash generate_diagrams_2024.sh
 ```
 
-### **Méthode 2 : Mermaid Live Editor**
+Le script nettoie le dossier `diagrams/` et régénère les 10 fichiers à partir
+de `workflow_diagrams_2024.md`. Pièges connus, déjà corrigés dans le script :
 
-1. Ouvrir https://mermaid.live/
-2. Copier le code Mermaid depuis `workflow_diagrams_2024.md`
-3. Exporter en PNG
-4. Sauvegarder dans `docs/diagrams/2024/`
+- Crochets `[...]` ou parenthèses `(...)` non échappés dans un label de
+  nœud → entourer le label de guillemets, ex.
+  `NODE["texte avec (parenthèses) ou [crochets]"]`.
+- Apostrophes, flèches (`→`) ou autres caractères non-ASCII dans le **titre**
+  d'un diagramme (`## N. Titre`) → le script assainit désormais le nom de
+  fichier généré (suppression de tout caractère hors `[a-z0-9_-]`).
 
-### **Méthode 3 : VS Code Extension**
+## ✅ À jour avec le code
 
-1. Installer l'extension "Markdown Preview Mermaid Support"
-2. Ouvrir `workflow_diagrams_2024.md`
-3. Prévisualiser et exporter
-
----
-
-## 📊 Diagrammes Générés (PNG)
-
-Les diagrammes PNG seront générés dans :
-```
-docs/diagrams/2024/
-├── 01_architecture_globale_2024.png
-├── 02_patterns_cloud_reels.png
-├── 03_workflow_complet_2024.png
-├── 04_ameliorations_algorithmes.png
-├── 05_processus_decision_2024.png
-├── 06_comparaison_4_modeles.png
-├── 07_timeline_workflow_2024.png
-├── 08_architecture_resultats_2024.png
-├── 09_fonction_recompense.png
-└── 10_conformite_algo.png
-```
-
----
-
-## 📈 Statistiques
-
-### **Patterns de Données**
-- **Avant** : 7 patterns (100%)
-- **Après** : 11 patterns (100%)
-  - 7 patterns de base : 72%
-  - 4 patterns cloud : 28%
-
-### **Couverture Cas d'Usage**
-- **Avant** : ~60% (patterns génériques)
-- **Après** : ~95% (patterns cloud réels)
-
-### **Algorithmes RL**
-- **Q-Learning** : 3 améliorations (Double Q, LR adaptatif, Exploration)
-- **DQN** : 4 améliorations (Double DQN, Dueling, PER, Soft Update)
-- **Conformité** : 100% avec `algo.md`
-
----
-
-## 🎯 Cas d'Usage Couverts
-
-| Pattern | Cas d'Usage | Exemple Réel |
-|---------|-------------|--------------|
-| `read_intensive` | E-commerce, CDN | Amazon, Cloudflare |
-| `write_intensive` | IoT, Logging | AWS IoT, Datadog |
-| `geo_distributed` | Streaming global | Netflix, YouTube |
-| `black_friday` | Événements saisonniers | Black Friday, Noël |
-| `burst` | Flash crowd | Reddit, Twitter |
-| `daily_cycle` | Applications métier | Salesforce, SAP |
-| `weekend` | Services B2B | LinkedIn, Slack |
-
----
-
-## 📖 Documentation Associée
-
-### **Analyses**
-- `ANALYSE_DOUBLE_DQN_ET_PATTERNS.md` : Vérification algorithmes + patterns manquants
-- `PATTERNS_CLOUD_IMPLEMENTES.md` : Détails des 11 patterns + cas d'usage
-- `MODIFICATIONS_ENTRAINEMENT.md` : Changements appliqués aux fichiers d'entraînement
-
-### **Code Modifié**
-- `python_rl/train_dqn_policy.py` : Ligne 155-229 (4 nouveaux patterns)
-- `python_rl/train_simple_qlearning.py` : Ligne 132-188 (4 nouveaux patterns)
-- `python_rl/agents/dqn_agent.py` : Double DQN, Dueling, PER, Soft Update
-- `python_rl/agents/simple_qlearning_agent.py` : Double Q-Learning, LR adaptatif, Exploration
-
----
-
-## 🚀 Prochaines Étapes
-
-### **Optionnel : Patterns Supplémentaires**
-- Multi-tenant (distribution Pareto 80/20)
-- Batch vs Real-Time (latence critique vs acceptable)
-- Cross-region replication lag
-
-### **Validation**
-- Entraîner les modèles avec les nouveaux patterns
-- Comparer les performances sur patterns cloud vs patterns de base
-- Analyser les décisions de réplication par pattern
-
----
-
-## ✅ Résumé
-
-**Diagrammes mis à jour** :
-- ✅ 10 diagrammes Mermaid dans `workflow_diagrams_2024.md`
-- ✅ Patterns cloud réels ajoutés (11 types)
-- ✅ PPO supprimé (focus Q-Learning + DQN)
-- ✅ Améliorations algorithmes documentées
-- ✅ Conformité 100% avec `algo.md`
-
-**Prêt pour génération PNG** :
-```bash
-cd docs
-mmdc -i workflow_diagrams_2024.md -o diagrams/2024/
-```
-
----
-
-**Date de mise à jour** : Février 2024  
-**Version** : 2.0  
-**Auteur** : TCDRM-ADAPTIVE Team
+- État DQN : **9 dimensions** (`latency, budget, replicas, popularity, cost,
+  t_sla_violation, c_sla_violation, progress, p_sla_progress`), pas 8.
+- Réseau DQN : `9 → 64 → 64 → [Value: 32→1, Advantage: 32→3]` (Dueling),
+  conforme à `DuelingDQNNetwork` (hidden_dims par défaut `[64, 64]`).
+- Classes d'environnement réelles : `CloudSimQLearningEnv`, `CloudSimEnv`
+  (et non `TcdrmQLearningEnv` / `TcdrmV2Env`).
+- Modèles sauvegardés : `models/qlearning_cloudsim.pkl`,
+  `models/dqn_cloudsim.pt` (cf. `tcdrm_gym/config.yml`).

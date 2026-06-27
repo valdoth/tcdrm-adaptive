@@ -18,9 +18,11 @@ PYTHON_DIR="$PROJECT_ROOT/tcdrm_gym"
 # Ports (allow override via env)
 GATEWAY_PORT="${TCDRM_PY4J_PORT:-25333}"
 TRAIN_PORT="${TCDRM_TRAIN_PORT:-25335}"
+TENSORBOARD_PORT="${TCDRM_TENSORBOARD_PORT:-6006}"
 PYTHON_PID=""
 JAVA_PID=""
 TRAINING_SERVER_PID=""
+TENSORBOARD_PID=""
 
 cleanup_initial() {
     echo -e "${BLUE}🧹 Cleaning up processes and ports...${NC}"
@@ -28,8 +30,10 @@ cleanup_initial() {
     pkill -f "TrainingServer" 2>/dev/null || true
     pkill -f "connect_to_java.py" 2>/dev/null || true
     pkill -f "train_cloudsim.py" 2>/dev/null || true
+    pkill -f "tensorboard" 2>/dev/null || true
     lsof -ti:"$GATEWAY_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
     lsof -ti:"$TRAIN_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    lsof -ti:"$TENSORBOARD_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
     sleep 2
     
     echo -e "${BLUE}🧹 Removing previous files...${NC}"
@@ -54,6 +58,7 @@ cleanup() {
     [ -n "$PYTHON_PID" ] && kill $PYTHON_PID 2>/dev/null || true
     [ -n "$JAVA_PID" ] && kill $JAVA_PID 2>/dev/null || true
     [ -n "$TRAINING_SERVER_PID" ] && kill $TRAINING_SERVER_PID 2>/dev/null || true
+    [ -n "$TENSORBOARD_PID" ] && kill $TENSORBOARD_PID 2>/dev/null || true
     pkill -f "connect_to_java.py" 2>/dev/null || true
     pkill -f "TcdrmMain" 2>/dev/null || true
     pkill -f "TrainingServer" 2>/dev/null || true
@@ -107,6 +112,30 @@ echo "  - Skip simulation: $SKIP_SIMULATION"
 echo ""
 
 cleanup_initial
+
+# ============================================================
+# TensorBoard (live training metrics from tcdrm_gym/logs)
+# ============================================================
+
+echo ">>> Starting TensorBoard on port ${TENSORBOARD_PORT}..."
+mkdir -p "$PYTHON_DIR/logs"
+cd "$PYTHON_DIR"
+nohup uv run tensorboard --logdir logs --port "$TENSORBOARD_PORT" --reload_interval 5 > /tmp/tensorboard.log 2>&1 &
+TENSORBOARD_PID=$!
+cd "$PROJECT_ROOT"
+
+for i in {1..15}; do
+    if lsof -i:"$TENSORBOARD_PORT" > /dev/null 2>&1; then
+        echo -e "${GREEN}✅ TensorBoard ready: http://localhost:${TENSORBOARD_PORT}${NC}"
+        break
+    fi
+    if [ $i -eq 15 ]; then
+        echo -e "${YELLOW}⚠️  TensorBoard did not start after 15s (see /tmp/tensorboard.log)${NC}"
+        TENSORBOARD_PID=""
+    fi
+    sleep 1
+done
+echo ""
 
 # ============================================================
 # STEP 1: Train RL Models
