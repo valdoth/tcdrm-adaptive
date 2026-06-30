@@ -255,8 +255,14 @@ public class TrainingEnvironment {
         double budgetUrgency = 1.0 + Math.max(0.0, 1.0 - budgetRatio); // 1.0 (plein) → 2.0 (vide)
         double costOverPenalty = -settings.getRewardCostOver() * budgetUrgency * Math.max(0.0, cQ_norm - 1.0);
 
+        // LOW_POPULARITY : pénalité proportionnelle à (1 - popularityScore) lors d'une réplication.
+        // Enseigne à l'agent de ne pas répliquer avant que les données soient connues,
+        // sans aucun seuil statique — le signal vient de l'état et de la récompense.
+        double popularityScore = simulation.getPopularityScore();
+
         // REPL_COST : coût réel bande passante de création du réplica
         double replCostPenalty = 0.0;
+        double lowPopularityPenalty = 0.0;
         double prematureReplPenalty = 0.0;
         double correctTriggerBonus = 0.0;
         if (action == 1 && lastAssignmentSuccess) {
@@ -264,6 +270,9 @@ public class TrainingEnvironment {
             replCostPenalty = -settings.getRewardReplCost()
                 * (dataGb * TcdrmConstants.COST_BW_INTER_PROVIDER)
                 / Math.max(1.0, TcdrmConstants.INITIAL_BUDGET);
+
+            // LOW_POPULARITY : pénalité maximale au query 0, nulle à partir de P_SLA.
+            lowPopularityPenalty = -settings.getRewardLowPopularity() * (1.0 - popularityScore);
 
             // PREMATURE_REPL : pénalité si on réplique sans pression SLA réelle.
             // slaMargin ∈ [0,1] : 1=latence nulle (très prématuré), 0=SLA violé (justifié).
@@ -298,8 +307,8 @@ public class TrainingEnvironment {
         rewardInvalidAction = lastInvalidAction ? -settings.getRewardInvalid() : 0.0;
 
         return rewardWaitTime + rewardQueuePenalty + costOverPenalty
-            + replCostPenalty + prematureReplPenalty + prematureDeletePenalty + correctTriggerBonus
-            + thrashPenalty + rewardUnutilization + rewardInvalidAction;
+            + replCostPenalty + lowPopularityPenalty + prematureReplPenalty + prematureDeletePenalty
+            + correctTriggerBonus + thrashPenalty + rewardUnutilization + rewardInvalidAction;
     }
 
     /** Records action into ring buffer for thrash detection. */

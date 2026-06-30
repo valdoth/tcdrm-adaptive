@@ -200,15 +200,9 @@ public class TcdrmSimulation {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
         double creationCost = 0.0;
 
-        // Fenêtre minimale d'observation : l'agent attend MIN_RL_WARMUP requêtes pour avoir
-        // des patterns d'accès observables. C'est distinct du P_SLA=200 de TCDRM :
-        // après query 20, l'agent est LIBRE de décider — c'est ce qu'il doit apprendre.
-        // La reward function guide le bon timing sans le forcer (prematureReplPenalty,
-        // correctTriggerBonus, SLA_VIOL penalty).
-        if (queryCount < TcdrmConstants.MIN_RL_WARMUP) {
-            action = 0;
-        }
-
+        // Aucun blocage statique : l'agent apprend lui-même quand répliquer.
+        // state[7] (popularityScore) et la lowPopularityPenalty dans la reward lui enseignent
+        // de ne pas répliquer quand les données ne sont pas encore connues.
         if (action == 1 && currentReplicaCount < maxReplicas && currentBudget > 0) {
             creationCost = createReplica();
             currentBudget -= creationCost;
@@ -388,6 +382,20 @@ public class TcdrmSimulation {
         return false;
     }
 
+    /**
+     * Popularité normalisée [0,1] du fragment le plus accédé.
+     * 0.0 = aucune donnée observée (query 0), 1.0 = P_SLA atteint (query 200+).
+     * Utilisé comme state[7] pour que l'agent apprenne lui-même à ne pas répliquer
+     * quand les données ne sont pas encore connues — sans aucun seuil codé en dur.
+     */
+    public double getPopularityScore() {
+        int maxAccess = 0;
+        for (DataFragment f : fragments) {
+            if (f.getAccessCount() > maxAccess) maxAccess = f.getAccessCount();
+        }
+        return Math.min(1.0, (double) maxAccess / TcdrmConstants.P_SLA);
+    }
+
     private void deleteLastReplica() {
         for (int i = fragments.size() - 1; i >= 0; i--) {
             if (fragments.get(i).hasReplica()) {
@@ -432,29 +440,6 @@ public class TcdrmSimulation {
         double cSla = cSlaEffective;
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
 
-        // Estimation du gain de réplication : différence latence NoRep vs meilleur site avec réplicas.
-        // Disponible dès le début (sans blocage P_SLA) : l'agent apprend lui-même quand répliquer.
-        // Si aucun réplica n'existe, le gain = 0 naturellement (bestSourceLocation → primaire).
-        double replicationGain = 0.0;
-        if (currentReplicaCount < maxReplicas) {
-            List<DataFragment> nextActive = selectFragmentsForQuery(queryCount);
-            String[] optSite = findOptimalExecSite(nextActive);
-            double noRepTime  = estimateNoRepTransferMs(nextActive, optSite[0], optSite[1]);
-            double withRepTime = 0;
-            for (DataFragment frag : nextActive) {
-                DataFragment.LocationChoice loc = frag.bestSourceLocation(optSite[0], optSite[1]);
-                double dataGb = frag.getSizeGb() * TcdrmConstants.QUERY_SELECTIVITY;
-                double t = estimateMeanTransferMs(dataGb, loc.provider(), loc.region(), optSite[0], optSite[1]);
-                if (loc.usingReplica()) t *= (1.0 - 0.3 * loc.warmupEff());
-                withRepTime = TcdrmConstants.PARALLEL_FETCH
-                    ? Math.max(withRepTime, t)
-                    : withRepTime + t;
-            }
-            if (noRepTime > 1e-9) {
-                replicationGain = Math.max(0.0, Math.min(1.0, (noRepTime - withRepTime) / noRepTime));
-            }
-        }
-
         return new double[] {
             lastLatency / tSla,                                    // 0: latence normalisée
             currentBudget / TcdrmConstants.INITIAL_BUDGET,         // 1: budget
@@ -463,7 +448,9 @@ public class TcdrmSimulation {
             lastLatency > tSla ? 1.0 : 0.0,                       // 4: violation T_SLA
             lastCost > cSla ? 1.0 : 0.0,                          // 5: violation C_SLA
             (double) queryCount / TcdrmConstants.MAX_QUERIES,      // 6: progression [0,1]
-            replicationGain                                        // 7: gain estimé réplication [0,1]
+            getPopularityScore()                                   // 7: popularité normalisée [0,1]
+                                                                   //    0 = données inconnues (query 0)
+                                                                   //    1 = P_SLA atteint (query 200+)
         };
     }
 
