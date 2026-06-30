@@ -33,7 +33,7 @@ class CloudSimEnv(gym.Env):
 		4: t_sla_violation
 		5: c_sla_violation
 		6: progress          - Progression des requêtes / MAX_QUERIES
-		7: replication_gain  - Gain estimé si réplication [0,1]
+		7: popularity_score  - Popularité normalisée [0,1] : 0=query 0, 1=P_SLA atteint
 	"""
     
 	metadata = {"render_modes": ["human"]}
@@ -284,9 +284,9 @@ class CloudSimQLearningEnv(CloudSimEnv):
 	L'état continu (8 dimensions) est discrétisé en 729 états (3^6).
 	Dimensions : RT, COST, PROGRESS, BUD, NET, GAIN.
 
-	GAIN (replicationGain, dim 7) encode directement la condition de popularité
-	de l'Algorithme 1 du papier : 0 pendant le warmup (P_SLA non atteint),
-	> 0 quand le workload est stabilisé et la réplication serait bénéfique.
+	GAIN (popularityScore, dim 7) encode la popularité normalisée des données [0,1].
+	0.0 au query 0 (données inconnues), 1.0 quand P_SLA atteint (query 200+).
+	L'agent apprend lui-même à ne pas répliquer quand popularityScore est faible.
 	"""
 
 	def __init__(self, port: int = 25335, complex: bool = False, seed: int = None, config: dict | None = None):
@@ -304,7 +304,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 		- PROGRESS : avancement épisode          [6]
 		- BUD      : budget restant              [1]
 		- NET      : taux réplicas actifs        [2]
-		- GAIN     : gain estimé si réplication  [7]  — 0 pendant warmup (P_SLA non atteint)
+		- GAIN     : popularityScore normalisé   [7]  — 0.0 query 0, 1.0 à P_SLA (query 200+)
 		"""
 		latency  = float(state[0])
 		budget   = float(state[1])
@@ -353,10 +353,10 @@ class CloudSimQLearningEnv(CloudSimEnv):
 		else:
 			net = 2
 
-		# GAIN — encode la condition de popularité (Algo 1 papier : pdi > P_SLA)
-		# 0 = warmup non terminé ou réplication inutile
-		# 1 = gain modéré (workload stabilisé, réplication potentiellement utile)
-		# 2 = gain élevé (réplication très bénéfique)
+		# GAIN — popularityScore [0,1] : 0 si données inconnues (query 0), 1 si P_SLA atteint
+		# 0 = données peu connues (< 0.2), l'agent apprend à ne pas répliquer
+		# 1 = popularité modérée (0.2-0.6)
+		# 2 = données bien connues (> 0.6, P_SLA proche ou atteint)
 		if gain < 0.2:
 			gain_bin = 0
 		elif gain < 0.6:

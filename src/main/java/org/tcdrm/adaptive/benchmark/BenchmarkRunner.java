@@ -176,14 +176,18 @@ public class BenchmarkRunner {
         double budgetUrgency = 1.0 + Math.max(0.0, 1.0 - budgetRatio);
         double costOverPenalty = -15.0 * budgetUrgency * Math.max(0.0, cQ_norm - 1.0);
 
-        // REPL_COST, PREMATURE_REPL, CORRECT_TRIGGER
+        // REPL_COST, LOW_POPULARITY, PREMATURE_REPL, CORRECT_TRIGGER
+        double popularityScore = sim.getPopularityScore();
         double replCostPenalty = 0.0;
+        double lowPopularityPenalty = 0.0;
         double prematureReplPenalty = 0.0;
         double correctTriggerBonus = 0.0;
         if (action == 1 && lastAssignmentSuccess) {
             double dataGb = TcdrmConstants.queryDataSizeGb(complex);
             replCostPenalty = -5.0 * (dataGb * TcdrmConstants.COST_BW_INTER_PROVIDER)
                 / Math.max(1.0, TcdrmConstants.INITIAL_BUDGET);
+
+            lowPopularityPenalty = -5.0 * (1.0 - popularityScore);
 
             double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
             prematureReplPenalty = -5.0 * slaMargin;
@@ -211,8 +215,8 @@ public class BenchmarkRunner {
         double rewardInvalidAction = lastAssignmentSuccess ? 0.0 : -2.0;
 
         return rewardWaitTime + rewardQueuePenalty + costOverPenalty
-            + replCostPenalty + prematureReplPenalty + prematureDeletePenalty + correctTriggerBonus
-            + thrashPenalty + rewardUnutilization + rewardInvalidAction;
+            + replCostPenalty + lowPopularityPenalty + prematureReplPenalty + prematureDeletePenalty
+            + correctTriggerBonus + thrashPenalty + rewardUnutilization + rewardInvalidAction;
     }
 
     private static boolean isRingThrashing(int[] ring, int count) {

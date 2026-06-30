@@ -55,15 +55,6 @@ public final class TcdrmConstants {
      */
     public static final int P_SLA = 200;
 
-    /**
-     * Fenêtre d'observation minimale avant que l'agent RL puisse agir (en nombre de requêtes).
-     * Distinct de P_SLA : c'est le minimum physiologique pour qu'il y ait des patterns à observer.
-     * Après MIN_RL_WARMUP requêtes, l'agent est libre de décider — il n'est PAS contraint
-     * au seuil TCDRM (P_SLA=200). C'est précisément là l'amélioration apportée par le RL.
-     * Valeur : 20 queries ≈ 2% du workload — assez pour observer, beaucoup moins que TCDRM.
-     */
-    public static final int MIN_RL_WARMUP = 20;
-
     // ==================================================================
     // Replica Limits (Paper Fig. 2 — img-003.png)
     // Simple: max ~6 replicas, Complex: max ~12 replicas

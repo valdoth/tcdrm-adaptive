@@ -221,6 +221,7 @@ public class TrainingServer {
         Object rThr  = p.get("rewardThrash");          if (rThr  instanceof Number n) settings.setRewardThrash(n.doubleValue());
         Object rMnt  = p.get("rewardMaintenance");    if (rMnt  instanceof Number n) settings.setRewardMaintenance(n.doubleValue());
         Object rInv  = p.get("rewardInvalid");        if (rInv  instanceof Number n) settings.setRewardInvalid(n.doubleValue());
+        Object rPop  = p.get("rewardLowPopularity");  if (rPop  instanceof Number n) settings.setRewardLowPopularity(n.doubleValue());
         Object rCorr = p.get("rewardCorrectTrigger"); if (rCorr instanceof Number n) settings.setRewardCorrectTrigger(n.doubleValue());
     }
 
@@ -313,6 +314,10 @@ class TrainingSettings {
     private double rewardThrash          =  8.0;
     private double rewardMaintenance     =  0.01; // réduit 0.05→0.01 : supprime l'incitation à détruire des réplicas
     private double rewardInvalid         =  2.0;
+    // Pénalité proportionnelle à (1 - popularityScore) lors d'une réplication.
+    // 0 quand P_SLA atteint, maximale au query 0 — enseigne à ne pas répliquer avant que
+    // les données soient connues, sans aucun seuil statique dans le code de simulation.
+    private double rewardLowPopularity  =  5.0;
     // Bonus quand l'agent réplique exactement quand l'Algorithme 1 le ferait :
     // SLA violé (temps ou coût) ET workload stabilisé (P_SLA atteint).
     private double rewardCorrectTrigger =  8.0;
@@ -339,6 +344,7 @@ class TrainingSettings {
     public double getRewardThrash()            { return rewardThrash; }
     public double getRewardMaintenance()       { return rewardMaintenance; }
     public double getRewardInvalid()           { return rewardInvalid; }
+    public double getRewardLowPopularity()     { return rewardLowPopularity; }
     public double getRewardCorrectTrigger()    { return rewardCorrectTrigger; }
 
     public void setRewardSlaOk(double v)             { rewardSlaOk           = Math.max(0, v); }
@@ -350,6 +356,7 @@ class TrainingSettings {
     public void setRewardThrash(double v)             { rewardThrash          = Math.max(0, v); }
     public void setRewardMaintenance(double v)        { rewardMaintenance     = Math.max(0, v); }
     public void setRewardInvalid(double v)            { rewardInvalid         = Math.max(0, v); }
+    public void setRewardLowPopularity(double v)      { rewardLowPopularity   = Math.max(0, v); }
     public void setRewardCorrectTrigger(double v)     { rewardCorrectTrigger  = Math.max(0, v); }
 }
 
