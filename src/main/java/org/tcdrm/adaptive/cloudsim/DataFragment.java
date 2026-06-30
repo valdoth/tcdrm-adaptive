@@ -35,6 +35,13 @@ public class DataFragment {
     // Cooldown before re-creating a replica after deletion
     private int recreateCooldown;
 
+    // Compteur d'accès total — utilisé pour le scoring de popularité SPEA2
+    private int accessCount = 0;
+
+    // Index de la dernière requête ayant accédé à ce fragment.
+    // Utilisé pour déterminer si les données sont "encore utilisées" avant toute suppression.
+    private int lastAccessedQuery = -1;
+
     public DataFragment(int id, String name, String primaryProvider, String primaryRegion) {
         this(id, name, TcdrmConstants.AVG_RELATION_SIZE_GB, primaryProvider, primaryRegion);
     }
@@ -95,10 +102,47 @@ public class DataFragment {
     }
 
     /**
-     * Retourne le provider/région du réplica le plus proche de (execProvider, execRegion) :
-     * priorité intra-DC > inter-région > inter-provider.
-     * Retourne {primaryProvider, primaryRegion} si aucun réplica.
+     * Résultat du choix de source optimal pour une requête.
+     *
+     * @param provider    provider source retenu (primaire ou réplica)
+     * @param region      région source retenue
+     * @param usingReplica true si un réplica est sélectionné (meilleur que le primaire)
+     * @param warmupEff   efficacité de warm-up du réplica sélectionné (0 si primaire)
      */
+    public record LocationChoice(String provider, String region, boolean usingReplica, double warmupEff) {}
+
+    /**
+     * Retourne la meilleure source (primaire ou réplica) pour servir la requête depuis
+     * (execProvider, execRegion). Un réplica est préféré UNIQUEMENT s'il est strictement
+     * plus proche que le primaire (rang < rang primaire).
+     *
+     * <p>Priorité : intra-DC (0) > inter-région (1) > inter-provider (2).</p>
+     */
+    public LocationChoice bestSourceLocation(String execProvider, String execRegion) {
+        int primaryRank = locationRank(primaryProvider, primaryRegion, execProvider, execRegion);
+        int bestRank = primaryRank;
+        int bestIdx  = -1;
+
+        for (int i = 0; i < replicaCount; i++) {
+            int rank = locationRank(replicaProviders[i], replicaRegions[i], execProvider, execRegion);
+            if (rank < bestRank) {
+                bestRank = rank;
+                bestIdx  = i;
+            }
+        }
+
+        if (bestIdx >= 0) {
+            double warmup = TcdrmConstants.warmupEfficiency(queriesSinceRep[bestIdx]);
+            return new LocationChoice(replicaProviders[bestIdx], replicaRegions[bestIdx], true, warmup);
+        }
+        return new LocationChoice(primaryProvider, primaryRegion, false, 0.0);
+    }
+
+    /**
+     * @deprecated Use {@link #bestSourceLocation} which also checks whether the replica
+     *             is actually closer than the primary before using it.
+     */
+    @Deprecated
     public String[] getBestReplicaLocation(String execProvider, String execRegion) {
         if (replicaCount == 0) return new String[]{primaryProvider, primaryRegion};
         int bestRank = 3;
@@ -110,7 +154,7 @@ public class DataFragment {
         return new String[]{replicaProviders[bestIdx], replicaRegions[bestIdx]};
     }
 
-    /** Queries since the last (most recent) replica was added — used for deletion gate. */
+    /** Queries since the last (most recent) replica was added — used for deletion anti-oscillation. */
     public int getQueriesSinceReplication() {
         if (replicaCount == 0) return 0;
         return queriesSinceRep[replicaCount - 1];
@@ -118,7 +162,16 @@ public class DataFragment {
 
     public boolean hasReplica()    { return replicaCount > 0; }
     public boolean canAddReplica() { return replicaCount < MAX_REPLICAS; }
-    public int     getReplicaCount() { return replicaCount; }
+
+    /** True si un réplica existe déjà à l'emplacement (provider, region) donné. */
+    public boolean hasReplicaAt(String provider, String region) {
+        for (int i = 0; i < replicaCount; i++) {
+            if (provider.equals(replicaProviders[i]) && region.equals(replicaRegions[i])) return true;
+        }
+        return false;
+    }
+
+    public int    getReplicaCount()  { return replicaCount; }
 
     // Backward-compat: slot 0
     public String getReplicaProvider() { return replicaCount > 0 ? replicaProviders[0] : null; }
@@ -136,6 +189,43 @@ public class DataFragment {
     public String getPrimaryProvider() { return primaryProvider; }
     public String getPrimaryRegion()   { return primaryRegion; }
     public int    getRecreateCooldown(){ return recreateCooldown; }
+
+    /**
+     * Enregistre un accès à ce fragment (requête l'utilisant).
+     * Met à jour le compteur total et l'index de dernière utilisation.
+     *
+     * @param queryIndex index global de la requête courante (pour la fenêtre de popularité)
+     */
+    public void recordAccess(int queryIndex) {
+        accessCount++;
+        lastAccessedQuery = queryIndex;
+    }
+
+    /** Rétro-compatibilité — préférer {@link #recordAccess(int)} avec l'index de requête. */
+    public void recordAccess() { accessCount++; }
+
+    /** Nombre total d'accès depuis la création de cet épisode. */
+    public int getAccessCount() { return accessCount; }
+
+    /** Index de la requête lors du dernier accès (-1 si jamais accédé). */
+    public int getLastAccessedQuery() { return lastAccessedQuery; }
+
+    /**
+     * Retourne vrai si ce fragment a été accédé dans la fenêtre glissante
+     * {@code [currentQuery - window, currentQuery]}.
+     *
+     * Utilisé avant toute suppression de réplica : on ne supprime pas un réplica
+     * dont les données sont encore activement utilisées.
+     */
+    public boolean isStillPopular(int currentQuery, int window) {
+        return lastAccessedQuery >= 0 && (currentQuery - lastAccessedQuery) <= window;
+    }
+
+    /** Réinitialise les compteurs d'accès pour un nouvel épisode. */
+    public void resetAccessStats() {
+        this.accessCount = 0;
+        this.lastAccessedQuery = -1;
+    }
 
     // 0 = intra-DC, 1 = inter-region, 2 = inter-provider
     private static int locationRank(String sp, String sr, String ep, String er) {

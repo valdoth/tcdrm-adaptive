@@ -25,16 +25,15 @@ class CloudSimEnv(gym.Env):
 		1: REPLICATE - Créer un réplica
 		2: DELETE - Supprimer un réplica
     
-	Observations (9 dimensions, aligné TcdrmSimulation.buildRLState):
-		0: latency - Latence normalisée
-		1: budget - Budget restant normalisé
-		2: replicas - Réplicas normalisés
-		3: popularity - Popularité EMA normalisée
-		4: cost - Coût total normalisé
-		5: t_sla_violation
-		6: c_sla_violation
-		7: progress - Progression des requêtes / MAX_QUERIES
-		8: p_sla_progress - Indice requête / P_SLA (papier, seuil 200)
+	Observations (8 dimensions, aligné TcdrmSimulation.buildRLState):
+		0: latency           - Latence normalisée (latency / T_SLA)
+		1: budget            - Budget restant normalisé
+		2: replicas          - Réplicas normalisés
+		3: cost              - Coût total normalisé
+		4: t_sla_violation
+		5: c_sla_violation
+		6: progress          - Progression des requêtes / MAX_QUERIES
+		7: replication_gain  - Gain estimé si réplication [0,1]
 	"""
     
 	metadata = {"render_modes": ["human"]}
@@ -62,8 +61,8 @@ class CloudSimEnv(gym.Env):
 		# Espaces d'action et d'observation
 		self.action_space = spaces.Discrete(3)  # NOOP, REPLICATE, DELETE
 		self.observation_space = spaces.Box(
-			low=np.zeros(9, dtype=np.float32),
-			high=np.array([5.0, 5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+			low=np.zeros(8, dtype=np.float32),
+			high=np.array([5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
 			dtype=np.float32,
 		)
         
@@ -281,34 +280,39 @@ class CloudSimEnv(gym.Env):
 class CloudSimQLearningEnv(CloudSimEnv):
 	"""
 	Environnement CloudSim avec états discrets pour Q-Learning.
-    
-	L'état continu (8 dimensions) est discrétisé en 243 états (3^5).
+
+	L'état continu (8 dimensions) est discrétisé en 729 états (3^6).
+	Dimensions : RT, COST, PROGRESS, BUD, NET, GAIN.
+
+	GAIN (replicationGain, dim 7) encode directement la condition de popularité
+	de l'Algorithme 1 du papier : 0 pendant le warmup (P_SLA non atteint),
+	> 0 quand le workload est stabilisé et la réplication serait bénéfique.
 	"""
-    
+
 	def __init__(self, port: int = 25335, complex: bool = False, seed: int = None, config: dict | None = None):
 		super().__init__(port=port, complex=complex, seed=seed, config=config)
-        
-		# Espace d'observation discret pour Q-Learning
-		self.observation_space = spaces.Discrete(243)
-    
+
+		# Espace d'observation discret pour Q-Learning : 3^6 = 729 états
+		self.observation_space = spaces.Discrete(729)
+
 	def _discretize_state(self, state: np.ndarray) -> int:
 		"""
-		Discrétise l'état continu en index (0-242).
-        
-		Dimensions:
-		- RT: temps de réponse (0=bon, 1=moyen, 2=mauvais)
-		- COST: coût (0=faible, 1=moyen, 2=élevé)
-		- POP: popularité (0=faible, 1=moyenne, 2=haute)
-		- BUD: budget (0=confortable, 1=tendu, 2=critique)
-		- NET: réseau/réplicas (0=local, 1=mixte, 2=distant)
+		Discrétise l'état continu (8 dims) en index (0-728).
+
+		- RT       : latence normalisée          [0]
+		- COST     : coût normalisé              [3]
+		- PROGRESS : avancement épisode          [6]
+		- BUD      : budget restant              [1]
+		- NET      : taux réplicas actifs        [2]
+		- GAIN     : gain estimé si réplication  [7]  — 0 pendant warmup (P_SLA non atteint)
 		"""
-		latency = state[0]
-		budget = state[1]
-		replicas = state[2]
-		p_sla = float(state[8]) if len(state) > 8 else 0.0
-		popularity = max(float(state[3]), p_sla)
-		cost = state[4]
-        
+		latency  = float(state[0])
+		budget   = float(state[1])
+		replicas = float(state[2])
+		cost     = float(state[3])
+		progress = float(state[6]) if len(state) > 6 else 0.0
+		gain     = float(state[7]) if len(state) > 7 else 0.0
+
 		# RT
 		if latency < 0.4:
 			rt = 0
@@ -316,7 +320,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 			rt = 1
 		else:
 			rt = 2
-        
+
 		# COST
 		if cost < 0.4:
 			cost_bin = 0
@@ -324,15 +328,15 @@ class CloudSimQLearningEnv(CloudSimEnv):
 			cost_bin = 1
 		else:
 			cost_bin = 2
-        
-		# POP
-		if popularity < 0.33:
-			pop_bin = 0
-		elif popularity < 0.67:
-			pop_bin = 1
+
+		# PROGRESS : tiers de l'épisode (début / milieu / fin)
+		if progress < 0.33:
+			prog_bin = 0
+		elif progress < 0.67:
+			prog_bin = 1
 		else:
-			pop_bin = 2
-        
+			prog_bin = 2
+
 		# BUD
 		if budget >= 0.6:
 			bud = 0
@@ -340,7 +344,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 			bud = 1
 		else:
 			bud = 2
-        
+
 		# NET
 		if replicas >= 0.5:
 			net = 0
@@ -348,8 +352,19 @@ class CloudSimQLearningEnv(CloudSimEnv):
 			net = 1
 		else:
 			net = 2
-        
-		return rt * 81 + cost_bin * 27 + pop_bin * 9 + bud * 3 + net
+
+		# GAIN — encode la condition de popularité (Algo 1 papier : pdi > P_SLA)
+		# 0 = warmup non terminé ou réplication inutile
+		# 1 = gain modéré (workload stabilisé, réplication potentiellement utile)
+		# 2 = gain élevé (réplication très bénéfique)
+		if gain < 0.2:
+			gain_bin = 0
+		elif gain < 0.6:
+			gain_bin = 1
+		else:
+			gain_bin = 2
+
+		return rt * 243 + cost_bin * 81 + prog_bin * 27 + bud * 9 + net * 3 + gain_bin
     
 	def reset(self, seed=None, options=None):
 		"""Reset et retourne l'état discret."""

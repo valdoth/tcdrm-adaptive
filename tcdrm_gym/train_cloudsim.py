@@ -14,7 +14,7 @@ import yaml
 
 from envs.cloudsim_env import CloudSimEnv, CloudSimQLearningEnv
 from agents.simple_qlearning_agent import SimpleQLearningAgent
-from agents.dqn_agent import DQNAgent
+from agents.rainbow_dqn_agent import RainbowDQNAgent
 
 
 def load_config(config_path):
@@ -99,7 +99,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	print("=" * 70)
     
 	agent = SimpleQLearningAgent(
-		n_states=243,
+		n_states=729,
 		n_actions=3,
 		learning_rate=float(os.environ.get('TCDRM_Q_LR', 0.08)),
 		discount_factor=float(os.environ.get('TCDRM_Q_GAMMA', 0.99)),
@@ -199,7 +199,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 					f"Budget: {last_info.get('budget_remaining','?')}"
 				)
 			# Ajouter pourcentage d'exploration
-			exploration_pct = stats['states_explored'] / 243 * 100
+			exploration_pct = stats['states_explored'] / 729 * 100
 			print(
 				f"Episode {episode:4d}/{episodes} | Reward: {episode_reward:8.2f} | Avg(10): {avg_reward:8.2f} | "
 				f"ε: {stats['epsilon']:.3f} | States: {stats['states_explored']} ({exploration_pct:.1f}%){metrics_tail}"
@@ -234,55 +234,68 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	print("TRAINING COMPLETE")
 	print(f"  Best avg reward: {best_reward:.2f}")
 	print(f"  Final epsilon: {agent.epsilon:.4f}")
-	print(f"  States explored: {stats['states_explored']}/243")
+	print(f"  States explored: {stats['states_explored']}/729")
 	print(f"  Model saved to: {save_path}")
 	print("=" * 70)
     
 	return agent, rewards_history
 
 
-def train_dqn(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 42, agent: DQNAgent = None):
+def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 42, agent: RainbowDQNAgent = None):
+	"""
+	Entraîne un agent Rainbow DQN complet (6/6 composants Rainbow) :
+	  Double DQN + Dueling + PER + N-step(3) + NoisyLinear + C51 Distributional.
+
+	NoisyLinear remplace epsilon-greedy : l'agent explore via son bruit appris (sigma).
+	C51 modélise la distribution complète des retours → meilleure politique sous incertitude.
+	"""
 	print("=" * 70)
-	print("DQN TRAINING with CloudSimPlus")
+	print("RAINBOW DQN TRAINING with CloudSimPlus")
+	print("  Components: Double DQN + Dueling + PER + N-step + Noisy + C51")
 	print("=" * 70)
-    
+
 	if agent is None:
-		agent = DQNAgent(
-			state_dim=9,
+		agent = RainbowDQNAgent(
+			state_dim=8,
 			action_dim=3,
-			learning_rate=0.001,
+			hidden_dims=[128, 128],
+			learning_rate=0.0001,
 			discount_factor=0.99,
-			epsilon=1.0,
-			epsilon_min=0.05,
-			epsilon_decay_lambda=0.001,
-			buffer_capacity=50000,
-			batch_size=64,
-			use_double_dqn=True,
-			use_dueling=True,
+			buffer_capacity=100000,
+			batch_size=32,
+			tau=0.005,
+			gradient_clip=10.0,
+			lr_scheduler='cosine',
+			scheduler_params={'T_max': 20000, 'eta_min': 1e-6},
 			n_step=3,
-			min_buffer_size=1000,
+			min_buffer_size=1500,
 			normalize_rewards=True,
+			sigma_init=0.65,
+			use_distributional=True,
+			n_atoms=51,
+			v_min=-15.0,
+			v_max=6.0,
 		)
 
 	best_reward = float('-inf')
 	rewards_history = []
-	log_dir = ensure_log_dir('dqn')
+	log_dir = ensure_log_dir('rainbow')
 	csv_logger = CSVLogger(
 		os.path.join(log_dir, 'progress.csv'),
 		[
-			'episode','reward','avg10','epsilon','buffer',
-			'sla_violations','cumulative_cost','replica_count','budget_remaining',
-			'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action','avg_loss'
+			'episode', 'reward', 'avg10', 'buffer', 'avg_noisy_sigma',
+			'sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
+			'reward_wait_time', 'reward_unutilization', 'reward_queue_penalty',
+			'reward_invalid_action', 'avg_loss'
 		]
 	)
-	# Optional TensorBoard
 	tb_writer = None
 	try:
-		from torch.utils.tensorboard import SummaryWriter  # type: ignore
+		from torch.utils.tensorboard import SummaryWriter
 		tb_writer = SummaryWriter(log_dir=log_dir)
 	except Exception:
-		tb_writer = None
-    
+		pass
+
 	for episode in range(episodes):
 		state, info = env.reset(seed=seed_base + episode)
 		episode_reward = 0
@@ -302,47 +315,42 @@ def train_dqn(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 
 			state = next_state
 			episode_reward += reward
 			last_info = info
-        
+
+		# NoisyLinear gère l'exploration — decay_epsilon() est un no-op mais on l'appelle par cohérence
 		agent.decay_epsilon()
 		rewards_history.append(episode_reward)
-        
 		avg_reward = np.mean(rewards_history[-10:])
-        
-		# CSV log every episode
+
 		net_stats = agent.get_network_stats()
 		row = {
 			'episode': episode,
 			'reward': episode_reward,
 			'avg10': avg_reward,
-			'epsilon': agent.epsilon,
 			'buffer': len(agent.replay_buffer),
+			'avg_noisy_sigma': net_stats.get('avg_noisy_sigma', 0),
 			'avg_loss': net_stats.get('avg_loss', 0)
 		}
 		if isinstance(last_info, dict):
-			for k in ['sla_violations','cumulative_cost','replica_count','budget_remaining',
-					  'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action']:
+			for k in ['sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
+					  'reward_wait_time', 'reward_unutilization', 'reward_queue_penalty', 'reward_invalid_action']:
 				if k in last_info:
 					row[k] = last_info[k]
 		csv_logger.log(to_builtin(row))
 
-		# TensorBoard scalars
 		if tb_writer is not None:
 			tb_writer.add_scalar('reward/episode', episode_reward, episode)
 			tb_writer.add_scalar('reward/avg10', float(avg_reward), episode)
-			tb_writer.add_scalar('exploration/epsilon', float(agent.epsilon), episode)
-			tb_writer.add_scalar('replay/buffer', float(len(agent.replay_buffer)), episode)
+			tb_writer.add_scalar('rainbow/buffer', float(len(agent.replay_buffer)), episode)
+			tb_writer.add_scalar('rainbow/avg_loss', float(net_stats.get('avg_loss', 0)), episode)
+			if 'avg_noisy_sigma' in net_stats:
+				tb_writer.add_scalar('rainbow/noisy_sigma', float(net_stats['avg_noisy_sigma']), episode)
 			if isinstance(last_info, dict):
-				for k in ['sla_violations','cumulative_cost','replica_count','budget_remaining',
-						  'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action']:
+				for k in ['sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining']:
 					if k in last_info:
 						try:
 							tb_writer.add_scalar(f'metrics/{k}', float(last_info[k]), episode)
 						except Exception:
 							pass
-			tb_writer.add_scalar('loss/avg100', float(net_stats.get('avg_loss', 0)), episode)
-			if 'reward_mean' in net_stats:
-				tb_writer.add_scalar('reward_norm/mean', float(net_stats['reward_mean']), episode)
-				tb_writer.add_scalar('reward_norm/std',  float(net_stats['reward_std']),  episode)
 
 		if episode % 10 == 0 or episode == episodes - 1:
 			metrics_tail = ""
@@ -353,29 +361,30 @@ def train_dqn(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 
 					f"Replicas: {last_info.get('replica_count','?')} | "
 					f"Budget: {last_info.get('budget_remaining','?')}"
 				)
+			sigma_str = f" | σ: {net_stats.get('avg_noisy_sigma', 0):.4f}" if 'avg_noisy_sigma' in net_stats else ""
 			print(
-				f"Episode {episode:4d}/{episodes} | Reward: {episode_reward:8.2f} | Avg(10): {avg_reward:8.2f} | "
-				f"ε: {agent.epsilon:.3f} | Buffer: {len(agent.replay_buffer)}{metrics_tail}"
+				f"Episode {episode:4d}/{episodes} | Reward: {episode_reward:8.2f} | "
+				f"Avg(10): {avg_reward:8.2f} | Buffer: {len(agent.replay_buffer)}"
+				f"{sigma_str}{metrics_tail}"
 			)
-        
+
 		if avg_reward > best_reward and episode >= 10:
 			best_reward = avg_reward
 			agent.save(save_path)
 			best_meta = to_builtin({
 				'episode': episode,
 				'best_avg10_reward': best_reward,
-				'epsilon': agent.epsilon,
 				'buffer': len(agent.replay_buffer),
 				'network': net_stats,
 				'metrics_tail': last_info if isinstance(last_info, dict) else {}
 			})
 			with open(os.path.join(log_dir, 'best_meta.json'), 'w') as f:
 				json.dump(best_meta, f, indent=2)
-			print(f"  💾 New best model saved (avg reward: {best_reward:.2f}) → {save_path}")
-    
+			print(f"  New best model saved (avg reward: {best_reward:.2f}) -> {save_path}")
+
 	final_path = save_path.replace('.pt', '_final.pt')
 	agent.save(final_path)
-    
+
 	csv_logger.close()
 	if tb_writer is not None:
 		try:
@@ -384,19 +393,19 @@ def train_dqn(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 
 			pass
 	print()
 	print("=" * 70)
-	print("TRAINING COMPLETE")
+	print("RAINBOW TRAINING COMPLETE")
 	print(f"  Best avg reward: {best_reward:.2f}")
-	print(f"  Final epsilon: {agent.epsilon:.4f}")
+	print(f"  Mode: {net_stats.get('mode', 'rainbow')}")
 	print(f"  Model saved to: {save_path}")
 	print("=" * 70)
-    
+
 	return agent, rewards_history
 
 
 def main():
 	parser = argparse.ArgumentParser(description='Train RL agents with CloudSimPlus')
-	parser.add_argument('--agent', type=str, choices=['qlearning', 'dqn', 'ddqn'], 
-					   default='qlearning', help='Agent type')
+	parser.add_argument('--agent', type=str, choices=['qlearning', 'rainbow'],
+					   default='qlearning', help='Agent type: qlearning (Double Q-Learning) ou rainbow (Rainbow DQN complet)')
 	parser.add_argument('--episodes', type=int, default=100, 
 					   help='Number of training episodes')
 	parser.add_argument('--complex', action='store_true', 
@@ -414,21 +423,14 @@ def main():
 					   help='Warmup strategy: random|tcdrm|norep')
 	parser.add_argument('--warmup-random-prob', type=float, default=0.2,
 					   help='Random warmup probability for replicate/delete actions (0..1)')
-	# Popularity strategy (server-side Java)
-	parser.add_argument('--popularity-strategy', type=str, default='EMA',
-				   choices=['EMA','TINYLFU','EMA_TINYLFU'], help='Popularity estimation strategy in Java')
-	parser.add_argument('--tinylfu-width', type=int, default=2048, help='TinyLFU Count-Min Sketch width')
-	parser.add_argument('--tinylfu-depth', type=int, default=4, help='TinyLFU Count-Min Sketch depth')
-	parser.add_argument('--tinylfu-aging', type=int, default=200, help='TinyLFU aging period (ops)')
-	parser.add_argument('--tinylfu-tau-hi', type=float, default=0.6, help='TinyLFU replicate threshold (0..1)')
-	parser.add_argument('--tinylfu-tau-lo', type=float, default=0.3, help='TinyLFU delete threshold (0..1)')
 	parser.add_argument('--seed-base', type=int, default=42,
 					   help='Base seed; episode seed = seed_base + episode (decorrelate agents)')
     
 	args = parser.parse_args()
 	os.makedirs('models', exist_ok=True)
 	if args.output is None:
-		args.output = 'models/qlearning_cloudsim.pkl' if args.agent == 'qlearning' else 'models/dqn_cloudsim.pt'
+		args.output = ('models/qlearning_cloudsim.pkl' if args.agent == 'qlearning'
+		               else 'models/rainbow_cloudsim.pt')
     
 	print()
 	print("🎓 TCDRM RL Training with CloudSimPlus")
@@ -447,44 +449,12 @@ def main():
 		cfg['warmupQueries'] = int(max(0, args.warmup_queries))
 		cfg['warmupStrategy'] = str(args.warmup_strategy)
 		cfg['warmupRandomProb'] = float(max(0.0, min(1.0, args.warmup_random_prob)))
-		# Popularity strategy (TinyLFU/EMA)
-		cfg['popularityStrategy'] = str(args.popularity_strategy)
-		cfg['tinyLfuWidth'] = int(max(256, args.tinylfu_width))
-		cfg['tinyLfuDepth'] = int(max(2, args.tinylfu_depth))
-		cfg['tinyLfuAgingPeriod'] = int(max(32, args.tinylfu_aging))
-		cfg['tinyLfuTauHi'] = float(max(0.0, min(1.0, args.tinylfu_tau_hi)))
-		cfg['tinyLfuTauLo'] = float(max(0.0, min(1.0, args.tinylfu_tau_lo)))
 		if args.agent == 'qlearning':
 			env = CloudSimQLearningEnv(port=args.port, complex=args.complex, config=cfg)
 			train_qlearning(env, args.episodes, args.output, seed_base=args.seed_base)
-		elif args.agent == 'ddqn':
+		else:  # rainbow
 			env = CloudSimEnv(port=args.port, complex=args.complex, config=cfg)
-			# Double DQN with Dueling, cosine LR and linear epsilon schedule
-			ddqn_agent = DQNAgent(
-				state_dim=9,
-				action_dim=3,
-				learning_rate=0.001,
-				discount_factor=0.99,
-				epsilon=1.0,
-				epsilon_min=0.05,
-				epsilon_decay_lambda=0.001,
-				buffer_capacity=50000,
-				batch_size=64,
-				use_double_dqn=True,
-				use_dueling=True,
-				lr_scheduler='cosine',
-				scheduler_params={'T_max': 5000, 'eta_min': 1e-5},
-				epsilon_schedule='linear',
-				epsilon_linear_steps=5000,
-				n_step=3,
-				min_buffer_size=1000,
-				normalize_rewards=True,
-			)
-			train_dqn(env, args.episodes, args.output or 'models/ddqn_cloudsim.pt',
-			          seed_base=args.seed_base, agent=ddqn_agent)
-		else:
-			env = CloudSimEnv(port=args.port, complex=args.complex, config=cfg)
-			train_dqn(env, args.episodes, args.output, seed_base=args.seed_base)
+			train_rainbow(env, args.episodes, args.output, seed_base=args.seed_base)
 		env.close()
 	except ConnectionError as e:
 		print(f"\n❌ {e}")

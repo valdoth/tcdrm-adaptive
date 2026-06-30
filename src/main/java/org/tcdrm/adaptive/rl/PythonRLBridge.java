@@ -14,30 +14,30 @@ public interface PythonRLBridge {
     /** Select action using Q-Learning (online learning). */
     int selectActionQLearning(double[] state);
     
-    /** Select action using DQN (online learning). */
-    int selectActionDQN(double[] state);
-    
-    /** 
+    /** Select action using Rainbow DQN (online learning). */
+    int selectActionRainbow(double[] state);
+
+    /**
      * Update Q-Learning agent with reward from last action.
      * Called after each query to enable online learning.
-     * 
+     *
      * @param reward The reward signal (positive = good, negative = bad)
      * @param nextState The new state after action execution
      * @param done True if episode is finished
      */
     void updateQLearning(double reward, double[] nextState, boolean done);
-    
+
     /**
-     * Update DQN agent with reward from last action.
+     * Update Rainbow DQN agent with reward from last action.
      * Called after each query to enable online learning.
      */
-    void updateDQN(double reward, double[] nextState, boolean done);
-    
+    void updateRainbow(double reward, double[] nextState, boolean done);
+
     /** Check if Q-Learning model is ready. */
     boolean isQLearningReady();
-    
-    /** Check if DQN model is ready. */
-    boolean isDQNReady();
+
+    /** Check if Rainbow DQN model is ready. */
+    boolean isRainbowReady();
     
     /** Return info about loaded models. */
     String getModelInfo();

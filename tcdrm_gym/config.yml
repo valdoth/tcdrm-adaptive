@@ -5,3 +5,33 @@ qlearning:
 dqn:
   episodes: 20
   save_path: models/dqn_cloudsim.pt
+
+# Rainbow DQN complet (6 composants) — Double DQN + Dueling + PER + N-step + NoisyLinear + C51
+rainbow:
+  episodes: 50
+  save_path: models/rainbow_cloudsim.pt
+  state_dim: 8
+  action_dim: 3
+  hidden_dims: [128, 128]
+  learning_rate: 0.0001
+  discount_factor: 0.99
+  buffer_capacity: 100000
+  batch_size: 32
+  tau: 0.005
+  gradient_clip: 10.0
+  lr_scheduler: cosine
+  scheduler_params:
+    T_max: 20000
+    eta_min: 1.0e-6
+  n_step: 3
+  min_buffer_size: 2000
+  normalize_rewards: true
+  use_double_dqn: true
+  use_dueling: true
+  use_prioritized_replay: true
+  use_noisy: true
+  sigma_init: 0.5
+  use_distributional: true
+  n_atoms: 51
+  v_min: -15.0
+  v_max: 6.0

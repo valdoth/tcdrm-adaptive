@@ -45,22 +45,12 @@ public class QueryCloudlet {
         bwInterRegionGb = 0;
 
         for (DataFragment fragment : fragments) {
-            String srcProvider;
-            String srcRegion;
-            boolean usingReplica = false;
-            double warmupEff = 0.0;
-
-            if (fragment.hasReplica()) {
-                // Pick the closest replica to minimize transfer cost
-                String[] best = fragment.getBestReplicaLocation(execProvider, execRegion);
-                srcProvider = best[0];
-                srcRegion   = best[1];
-                usingReplica = true;
-                warmupEff = fragment.getWarmupEfficiency();
-            } else {
-                srcProvider = fragment.getPrimaryProvider();
-                srcRegion = fragment.getPrimaryRegion();
-            }
+            // Prefer replica only when it is strictly closer than the primary
+            DataFragment.LocationChoice loc = fragment.bestSourceLocation(execProvider, execRegion);
+            String srcProvider  = loc.provider();
+            String srcRegion    = loc.region();
+            boolean usingReplica = loc.usingReplica();
+            double warmupEff    = loc.warmupEff();
 
             double effectiveDataGb = fragment.getSizeGb() * TcdrmConstants.QUERY_SELECTIVITY;
 
@@ -92,13 +82,12 @@ public class QueryCloudlet {
 
         double joinFactor = nJoins * (nJoins + 1) / 2.0;
 
-        // Count fragments where the best replica is intra-DC (same provider + region)
+        // Count fragments where the best source is intra-DC (same provider + region)
         final String ep = execProvider, er = execRegion;
         long localFragments = fragments.stream()
             .filter(f -> {
-                if (!f.hasReplica()) return false;
-                String[] best = f.getBestReplicaLocation(ep, er);
-                return best[0].equals(ep) && best[1].equals(er);
+                DataFragment.LocationChoice lc = f.bestSourceLocation(ep, er);
+                return lc.usingReplica() && lc.provider().equals(ep) && lc.region().equals(er);
             })
             .count();
         double localFraction = (double) localFragments / nRelations;

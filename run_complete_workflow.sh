@@ -42,7 +42,7 @@ cleanup_initial() {
     if [ "$SKIP_TRAINING" = false ]; then
         echo "   Removing old models (retraining planned)..."
             rm -f "$PYTHON_DIR/models/qlearning_cloudsim.pkl" 2>/dev/null || true
-            rm -f "$PYTHON_DIR/models/dqn_cloudsim.pt" 2>/dev/null || true
+            rm -f "$PYTHON_DIR/models/rainbow_cloudsim.pt" 2>/dev/null || true
     else
         echo "   Keeping existing models..."
     fi
@@ -150,11 +150,9 @@ if [ "$SKIP_TRAINING" = false ]; then
     echo "  This ensures training and inference use the same environment."
     echo ""
     
-    # Ensure shaded JAR exists (needed to run specific main reliably)
-    if ! ls "$PROJECT_ROOT/target"/*-with-dependencies.jar >/dev/null 2>&1; then
-        echo ">>> Building shaded JAR for TrainingServer..."
-        mvn -q -DskipTests package || { echo -e "${RED}❌ Maven build failed${NC}"; exit 1; }
-    fi
+    # Always rebuild the shaded JAR so the server runs the latest Java code
+    echo ">>> Building shaded JAR for TrainingServer..."
+    mvn -q -DskipTests package || { echo -e "${RED}❌ Maven build failed${NC}"; exit 1; }
 
     # Start Java Training Server from shaded JAR to avoid exec:java mainClass override issues
     echo ">>> Starting Java TrainingServer..."
@@ -200,19 +198,19 @@ if [ "$SKIP_TRAINING" = false ]; then
     echo -e "${GREEN}✅ Q-Learning trained: $QLEARNING_MODEL${NC}"
     echo ""
     
-    # DQN training with CloudSimPlus
-    echo ">>> 1.2 Training DQN ($N_EPISODES episodes)..."
+    # Rainbow DQN training with CloudSimPlus
+    echo ">>> 1.2 Training Rainbow DQN ($N_EPISODES episodes)..."
     echo "    Using CloudSimPlus for simulations"
     echo ""
-    
+
     uv run python train_cloudsim.py \
-        --agent dqn \
+        --agent rainbow \
         --episodes $N_EPISODES \
         --port "$TRAIN_PORT" \
-        --output models/dqn_cloudsim.pt
-    
-    DQN_MODEL="$PYTHON_DIR/models/dqn_cloudsim.pt"
-    echo -e "${GREEN}✅ DQN trained: $DQN_MODEL${NC}"
+        --output models/rainbow_cloudsim.pt
+
+    DQN_MODEL="$PYTHON_DIR/models/rainbow_cloudsim.pt"
+    echo -e "${GREEN}✅ Rainbow DQN trained: $DQN_MODEL${NC}"
     echo ""
     
     # Stop Training Server
@@ -224,11 +222,11 @@ if [ "$SKIP_TRAINING" = false ]; then
     cd "$PROJECT_ROOT"
 else
     QLEARNING_MODEL="$PYTHON_DIR/models/qlearning_cloudsim.pkl"
-    DQN_MODEL="$PYTHON_DIR/models/dqn_cloudsim.pt"
-    
+    DQN_MODEL="$PYTHON_DIR/models/rainbow_cloudsim.pt"
+
     echo "⏭️  Training skipped (--skip-training)"
     echo "   Q-Learning: $QLEARNING_MODEL"
-    echo "   DQN: $DQN_MODEL"
+    echo "   Rainbow DQN: $DQN_MODEL"
     echo ""
 fi
 
@@ -239,7 +237,7 @@ if [ ! -f "$QLEARNING_MODEL" ]; then
 fi
 
 if [ ! -f "$DQN_MODEL" ]; then
-    echo -e "${YELLOW}⚠️  DQN model not found: $DQN_MODEL${NC}"
+    echo -e "${YELLOW}⚠️  Rainbow DQN model not found: $DQN_MODEL${NC}"
     echo "   Will use fresh agent during simulation"
 fi
 
@@ -259,10 +257,9 @@ if [ "$SKIP_COMPILE" = false ]; then
     fi
 
     echo ">>> Maven compilation..."
-    # Si Step 1 a déjà produit le JAR, éviter 'clean' (évite double compilation)
+    # Step 1 already rebuilt the JAR if training ran — skip if redundant
     if [ "$SKIP_TRAINING" = false ] && ls "$PROJECT_ROOT/target"/*-with-dependencies.jar >/dev/null 2>&1; then
-        echo "   (JAR déjà présent depuis Step 1, compilation incrémentale)"
-        mvn package -q -DskipTests
+        echo "   (JAR already up to date from Step 1, skipping recompile)"
     else
         mvn clean package -q -DskipTests
     fi
@@ -290,7 +287,7 @@ if [ "$SKIP_SIMULATION" = false ]; then
     echo ""
     echo "    Comparison:"
     echo "    - Q-Learning (TCDRM-ADAPTIVE)"
-    echo "    - DQN (TCDRM-ADAPTIVE)"
+    echo "    - Rainbow DQN (TCDRM-ADAPTIVE)"
     echo "    - TCDRM Static"
     echo "    - NoRepLc (baseline)"
     echo ""
@@ -345,7 +342,7 @@ if [ "$SKIP_SIMULATION" = false ]; then
         if [ -f "$DQN_MODEL" ]; then
         uv run python connect_to_java.py \
             --qlearning-model "$QLEARNING_MODEL" \
-            --dqn-model "$DQN_MODEL" \
+            --rainbow-model "$DQN_MODEL" \
             --port "$GATEWAY_PORT" > /tmp/python_client.log 2>&1 &
     else
         uv run python connect_to_java.py \
@@ -417,7 +414,7 @@ echo "📊 Results:"
 echo ""
 echo "  1. Trained Models:"
 echo "     • Q-Learning: $QLEARNING_MODEL"
-[ -f "$DQN_MODEL" ] && echo "     • DQN: $DQN_MODEL"
+[ -f "$DQN_MODEL" ] && echo "     • Rainbow DQN: $DQN_MODEL"
 echo ""
 echo "  2. Generated Graphs:"
 if [ -d "images" ] && [ "$(ls -A images/*.png 2>/dev/null)" ]; then

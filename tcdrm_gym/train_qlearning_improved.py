@@ -31,7 +31,7 @@ class ImprovedQLearningTrainer:
     def create_agent(self) -> SimpleQLearningAgent:
         """Crée l'agent Q-Learning avec configuration améliorée"""
         return SimpleQLearningAgent(
-            n_states=243,
+            n_states=729,
             n_actions=3,
             learning_rate=self.qlearning_config['learning_rate'],
             discount_factor=self.qlearning_config['discount_factor'],
@@ -164,7 +164,7 @@ class ImprovedQLearningTrainer:
             
             # Monitoring détaillé
             if episode % 5 == 0 or episode == episodes - 1:
-                exploration_pct = stats['states_explored'] / 243 * 100
+                exploration_pct = stats['states_explored'] / 729 * 100
                 metrics_tail = ""
                 if last_info and isinstance(last_info, dict):
                     metrics_tail = (
@@ -201,7 +201,7 @@ class ImprovedQLearningTrainer:
         print("\n" + "=" * 70)
         print("ENTRAÎNEMENT TERMINÉ")
         print(f"  Meilleur reward moyen: {best_reward:.2f}")
-        print(f"  États explorés: {stats['states_explored']}/243 ({stats['states_explored']/243*100:.1f}%)")
+        print(f"  États explorés: {stats['states_explored']}/729 ({stats['states_explored']/729*100:.1f}%)")
         print(f"  Epsilon final: {agent.epsilon:.4f}")
         print(f"  Performance finale: {final_metrics['avg_reward']:.2f}±{final_metrics['std_reward']:.2f}")
         print(f"  Violations SLA: {final_metrics['avg_sla_violations']:.1f}")

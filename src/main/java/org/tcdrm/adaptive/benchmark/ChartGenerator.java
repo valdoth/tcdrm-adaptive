@@ -36,21 +36,21 @@ public class ChartGenerator {
      * Fig 1: Replica Factor (4 models) - 2 graphiques côte à côte
      */
     public static void generateReplicaFactor4Models(BenchmarkData norepSimple, BenchmarkData tcdrmSimple,
-                                                     BenchmarkData qlSimple, BenchmarkData dqnSimple,
+                                                     BenchmarkData qlSimple, BenchmarkData rainbowSimple,
                                                      BenchmarkData norepComplex, BenchmarkData tcdrmComplex,
-                                                     BenchmarkData qlComplex, BenchmarkData dqnComplex,
+                                                     BenchmarkData qlComplex, BenchmarkData rainbowComplex,
                                                      String filename) throws IOException {
         XYChart chartSimple = createReplicaChart("Replica Factor — Simple (4 models)", 
-            norepSimple, tcdrmSimple, qlSimple, dqnSimple);
+            norepSimple, tcdrmSimple, qlSimple, rainbowSimple);
         XYChart chartComplex = createReplicaChart("Replica Factor — Complex (4 models)", 
-            norepComplex, tcdrmComplex, qlComplex, dqnComplex);
+            norepComplex, tcdrmComplex, qlComplex, rainbowComplex);
         
         saveCombinedChart(chartSimple, chartComplex, filename, "");
         System.out.println("  [Fig 1] Replica Factor (4 models) saved");
     }
     
     private static XYChart createReplicaChart(String title, BenchmarkData norep, BenchmarkData tcdrm,
-                                               BenchmarkData ql, BenchmarkData dqn) {
+                                               BenchmarkData ql, BenchmarkData rainbow) {
         XYChart chart = new XYChartBuilder()
             .width(500).height(400)
             .title(title)
@@ -66,7 +66,7 @@ public class ChartGenerator {
         chart.addSeries("TCDRM", x, toDoubleList(tcdrm.getReplicaCount())).setLineColor(COLOR_TCDRM);
         chart.addSeries("NoRepLc", x, toDoubleList(norep.getReplicaCount())).setLineColor(COLOR_NOREP);
         chart.addSeries("Q-Learning", x, toDoubleList(ql.getReplicaCount())).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, toDoubleList(dqn.getReplicaCount())).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, toDoubleList(rainbow.getReplicaCount())).setLineColor(COLOR_DQN);
 
         return chart;
     }
@@ -96,57 +96,57 @@ public class ChartGenerator {
     }
 
     // ==== Two-model RL (Q-Learning vs DQN) ====
-    public static void generateReplicaFactor2Models(BenchmarkData ql, BenchmarkData dqn, String filename) {
+    public static void generateReplicaFactor2Models(BenchmarkData ql, BenchmarkData rainbow, String filename) {
         XYChart chart = new XYChartBuilder().width(800).height(500)
             .title("Replica Factor — RL (2 models)").xAxisTitle("Number of queries").yAxisTitle("Number of replica").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, toDoubleList(ql.getReplicaCount())).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, toDoubleList(dqn.getReplicaCount())).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, toDoubleList(rainbow.getReplicaCount())).setLineColor(COLOR_DQN);
         try { BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG); } catch (IOException e) { throw new RuntimeException(e); }
     }
 
-    public static void generateResponseTime2Models(BenchmarkData ql, BenchmarkData dqn, double tSla, String filename) {
+    public static void generateResponseTime2Models(BenchmarkData ql, BenchmarkData rainbow, double tSla, String filename) {
         XYChart chart = new XYChartBuilder().width(800).height(500)
             .title("Impact on Response Times — RL (2 models)").xAxisTitle("Number of Queries").yAxisTitle("Response time (ms)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, smooth(ql.getResponseTimeMs(), 20)).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, smooth(dqn.getResponseTimeMs(), 20)).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, smooth(rainbow.getResponseTimeMs(), 20)).setLineColor(COLOR_DQN);
         try { BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG); } catch (IOException e) { throw new RuntimeException(e); }
     }
 
-    public static void generateAvgBwPrice2Models(BenchmarkData ql, BenchmarkData dqn, String filename) {
+    public static void generateAvgBwPrice2Models(BenchmarkData ql, BenchmarkData rainbow, String filename) {
         XYChart chart = new XYChartBuilder().width(800).height(500)
             .title("Avg. BW Price — RL (2 models)").xAxisTitle("Number of Queries").yAxisTitle("Price ($)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, ql.getAvgBwPrice()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getAvgBwPrice()).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, rainbow.getAvgBwPrice()).setLineColor(COLOR_DQN);
         try { BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG); } catch (IOException e) { throw new RuntimeException(e); }
     }
 
-    public static void generateCumulativeBwPrice2Models(BenchmarkData ql, BenchmarkData dqn, String filename) {
+    public static void generateCumulativeBwPrice2Models(BenchmarkData ql, BenchmarkData rainbow, String filename) {
         XYChart chart = new XYChartBuilder().width(800).height(500)
             .title("Cumulative BW Price — RL (2 models)").xAxisTitle("Number of Queries").yAxisTitle("Price ($)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, ql.getCumulativeBwCostList()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, rainbow.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
         try { BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG); } catch (IOException e) { throw new RuntimeException(e); }
     }
 
-    public static void generateBwConsumption2Models(BenchmarkData ql, BenchmarkData dqn, String filename) {
+    public static void generateBwConsumption2Models(BenchmarkData ql, BenchmarkData rainbow, String filename) {
         CategoryChart chart = new CategoryChartBuilder().width(800).height(500)
             .title("BW Consumption — RL (2 models)").xAxisTitle("RL Models").yAxisTitle("BW (GByte)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
-        java.util.List<String> categories = java.util.Arrays.asList("Q-Learn", "DQN");
-        java.util.List<Double> interProv = java.util.Arrays.asList(ql.getTotalBwInterProviderGb(), dqn.getTotalBwInterProviderGb());
-        java.util.List<Double> interReg = java.util.Arrays.asList(ql.getTotalBwInterRegionGb(), dqn.getTotalBwInterRegionGb());
+        java.util.List<String> categories = java.util.Arrays.asList("Q-Learn", "Rainbow");
+        java.util.List<Double> interProv = java.util.Arrays.asList(ql.getTotalBwInterProviderGb(), rainbow.getTotalBwInterProviderGb());
+        java.util.List<Double> interReg = java.util.Arrays.asList(ql.getTotalBwInterRegionGb(), rainbow.getTotalBwInterRegionGb());
         chart.addSeries("interProvider", categories, interProv).setFillColor(COLOR_INTER_PROVIDER);
         chart.addSeries("interRegion", categories, interReg).setFillColor(COLOR_INTER_REGION);
         try { BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG); } catch (IOException e) { throw new RuntimeException(e); }
@@ -156,21 +156,21 @@ public class ChartGenerator {
      * Fig 2: Response Time (4 models) - 2 graphiques côte à côte
      */
     public static void generateResponseTime4Models(BenchmarkData norepSimple, BenchmarkData tcdrmSimple,
-                                                    BenchmarkData qlSimple, BenchmarkData dqnSimple,
+                                                    BenchmarkData qlSimple, BenchmarkData rainbowSimple,
                                                     BenchmarkData norepComplex, BenchmarkData tcdrmComplex,
-                                                    BenchmarkData qlComplex, BenchmarkData dqnComplex,
+                                                    BenchmarkData qlComplex, BenchmarkData rainbowComplex,
                                                     String filename) throws IOException {
         XYChart chartSimple = createTimeChart4("Impact on Response Times — Simple (4 models)", 
-            norepSimple, tcdrmSimple, qlSimple, dqnSimple);
+            norepSimple, tcdrmSimple, qlSimple, rainbowSimple);
         XYChart chartComplex = createTimeChart4("Impact on Response Times — Complex (4 models)", 
-            norepComplex, tcdrmComplex, qlComplex, dqnComplex);
+            norepComplex, tcdrmComplex, qlComplex, rainbowComplex);
         
         saveCombinedChart(chartSimple, chartComplex, filename, "");
         System.out.println("  [Fig 2] Response Time (4 models) saved");
     }
     
     private static XYChart createTimeChart4(String title, BenchmarkData norep, BenchmarkData tcdrm,
-                                             BenchmarkData ql, BenchmarkData dqn) {
+                                             BenchmarkData ql, BenchmarkData rainbow) {
         XYChart chart = new XYChartBuilder()
             .width(500).height(400)
             .title(title)
@@ -186,19 +186,19 @@ public class ChartGenerator {
         List<Double> yTcdrm = smooth(tcdrm.getResponseTimeMs(), 20);
         List<Double> yNorep = smooth(norep.getResponseTimeMs(), 20);
         List<Double> yQl = smooth(ql.getResponseTimeMs(), 20);
-        List<Double> yDqn = smooth(dqn.getResponseTimeMs(), 20);
+        List<Double> yRainbow = smooth(rainbow.getResponseTimeMs(), 20);
 
         chart.addSeries("TCDRM", x, yTcdrm).setLineColor(COLOR_TCDRM);
         chart.addSeries("NoRepLc", x, yNorep).setLineColor(COLOR_NOREP);
         chart.addSeries("Q-Learning", x, yQl).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, yDqn).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, yRainbow).setLineColor(COLOR_DQN);
 
         // Removed vertical P_SLA reference from charts per request
 
         // Mark first replica creation point for Q-Learning and DQN
         int qlStartIdx = firstReplicaIndex(ql.getReplicaCount());
         // Optional: could add micro-line to denote start; omitted due to API differences
-        int dqnStartIdx = firstReplicaIndex(dqn.getReplicaCount());
+        int rainbowStartIdx = firstReplicaIndex(rainbow.getReplicaCount());
         // Optional: could add micro-line to denote start; omitted due to API differences
 
         return chart;
@@ -277,7 +277,7 @@ public class ChartGenerator {
      * Génère les graphiques RL avec comparaison TCDRM/NoRep/QL/DQN.
      */
     public static void generateRLComparison(BenchmarkData norep, BenchmarkData tcdrm,
-                                             BenchmarkData qlearning, BenchmarkData dqn,
+                                             BenchmarkData qlearning, BenchmarkData rainbow,
                                              String prefix, boolean complex) throws IOException {
         String type = complex ? "Complex" : "Simple";
         
@@ -299,7 +299,7 @@ public class ChartGenerator {
             .setLineColor(COLOR_TCDRM);
         timeChart.addSeries("Q-Learning", x, smooth(qlearning.getResponseTimeMs(), 20))
             .setLineColor(COLOR_QLEARNING);
-        timeChart.addSeries("DQN", x, smooth(dqn.getResponseTimeMs(), 20))
+        timeChart.addSeries("Rainbow DQN", x, smooth(rainbow.getResponseTimeMs(), 20))
             .setLineColor(COLOR_DQN);
         
         BitmapEncoder.saveBitmap(timeChart, prefix + "_response_time.png", BitmapEncoder.BitmapFormat.PNG);
@@ -319,7 +319,7 @@ public class ChartGenerator {
             .setLineColor(COLOR_TCDRM);
         replicaChart.addSeries("Q-Learning", x, toDoubleList(qlearning.getReplicaCount()))
             .setLineColor(COLOR_QLEARNING);
-        replicaChart.addSeries("DQN", x, toDoubleList(dqn.getReplicaCount()))
+        replicaChart.addSeries("Rainbow DQN", x, toDoubleList(rainbow.getReplicaCount()))
             .setLineColor(COLOR_DQN);
         
         BitmapEncoder.saveBitmap(replicaChart, prefix + "_replicas.png", BitmapEncoder.BitmapFormat.PNG);
@@ -341,7 +341,7 @@ public class ChartGenerator {
             .setLineColor(COLOR_TCDRM);
         costChart.addSeries("Q-Learning", x, qlearning.getCumulativeBwCostList())
             .setLineColor(COLOR_QLEARNING);
-        costChart.addSeries("DQN", x, dqn.getCumulativeBwCostList())
+        costChart.addSeries("Rainbow DQN", x, rainbow.getCumulativeBwCostList())
             .setLineColor(COLOR_DQN);
         
         BitmapEncoder.saveBitmap(costChart, prefix + "_cost.png", BitmapEncoder.BitmapFormat.PNG);
@@ -353,14 +353,14 @@ public class ChartGenerator {
      * Fig 3: BW Consumption (4 models) - 2 graphiques côte à côte avec barres groupées
      */
     public static void generateBwConsumption4Models(BenchmarkData norepSimple, BenchmarkData tcdrmSimple,
-                                                     BenchmarkData qlSimple, BenchmarkData dqnSimple,
+                                                     BenchmarkData qlSimple, BenchmarkData rainbowSimple,
                                                      BenchmarkData norepComplex, BenchmarkData tcdrmComplex,
-                                                     BenchmarkData qlComplex, BenchmarkData dqnComplex,
+                                                     BenchmarkData qlComplex, BenchmarkData rainbowComplex,
                                                      String filename) throws IOException {
         CategoryChart chartSimple = createBwChart4("BW Consumption - Simple (4 models)", "SIMPLE QUERIES",
-            norepSimple, tcdrmSimple, qlSimple, dqnSimple);
+            norepSimple, tcdrmSimple, qlSimple, rainbowSimple);
         CategoryChart chartComplex = createBwChart4("BW Consumption - Complex (4 models)", "COMPLEX QUERIES",
-            norepComplex, tcdrmComplex, qlComplex, dqnComplex);
+            norepComplex, tcdrmComplex, qlComplex, rainbowComplex);
         
         saveCombinedCategoryChart(chartSimple, chartComplex, filename);
         System.out.println("  [Fig 3] BW Consumption (4 models) saved");
@@ -368,7 +368,7 @@ public class ChartGenerator {
     
     private static CategoryChart createBwChart4(String title, String subtitle,
                                                  BenchmarkData norep, BenchmarkData tcdrm,
-                                                 BenchmarkData ql, BenchmarkData dqn) {
+                                                 BenchmarkData ql, BenchmarkData rainbow) {
         CategoryChart chart = new CategoryChartBuilder()
             .width(500).height(400)
             .title(title)
@@ -380,14 +380,14 @@ public class ChartGenerator {
         chart.getStyler().setStacked(false); // Barres groupées, pas empilées
         chart.getStyler().setPlotGridLinesVisible(true);
 
-        List<String> categories = Arrays.asList("NoRepLc", "TCDRM", "Q-Learn", "DQN");
+        List<String> categories = Arrays.asList("NoRepLc", "TCDRM", "Q-Learn", "Rainbow");
         List<Double> interProvider = Arrays.asList(
             norep.getTotalBwInterProviderGb(), tcdrm.getTotalBwInterProviderGb(),
-            ql.getTotalBwInterProviderGb(), dqn.getTotalBwInterProviderGb()
+            ql.getTotalBwInterProviderGb(), rainbow.getTotalBwInterProviderGb()
         );
         List<Double> interRegion = Arrays.asList(
             norep.getTotalBwInterRegionGb(), tcdrm.getTotalBwInterRegionGb(),
-            ql.getTotalBwInterRegionGb(), dqn.getTotalBwInterRegionGb()
+            ql.getTotalBwInterRegionGb(), rainbow.getTotalBwInterRegionGb()
         );
 
         chart.addSeries("interProvider", categories, interProvider).setFillColor(COLOR_INTER_PROVIDER);
@@ -434,21 +434,21 @@ public class ChartGenerator {
      * Fig 4: Avg BW Price (4 models) - 2 graphiques côte à côte
      */
     public static void generateAvgBwPrice4Models(BenchmarkData norepSimple, BenchmarkData tcdrmSimple,
-                                                  BenchmarkData qlSimple, BenchmarkData dqnSimple,
+                                                  BenchmarkData qlSimple, BenchmarkData rainbowSimple,
                                                   BenchmarkData norepComplex, BenchmarkData tcdrmComplex,
-                                                  BenchmarkData qlComplex, BenchmarkData dqnComplex,
+                                                  BenchmarkData qlComplex, BenchmarkData rainbowComplex,
                                                   String filename) throws IOException {
         XYChart chartSimple = createAvgPriceChart4("Avg. BW Price — Simple (4 models)", 
-            norepSimple, tcdrmSimple, qlSimple, dqnSimple);
+            norepSimple, tcdrmSimple, qlSimple, rainbowSimple);
         XYChart chartComplex = createAvgPriceChart4("Avg. BW Price — Complex (4 models)", 
-            norepComplex, tcdrmComplex, qlComplex, dqnComplex);
+            norepComplex, tcdrmComplex, qlComplex, rainbowComplex);
         
         saveCombinedChart(chartSimple, chartComplex, filename, "");
         System.out.println("  [Fig 4] Avg BW Price (4 models) saved");
     }
     
     private static XYChart createAvgPriceChart4(String title, BenchmarkData norep, BenchmarkData tcdrm,
-                                                 BenchmarkData ql, BenchmarkData dqn) {
+                                                 BenchmarkData ql, BenchmarkData rainbow) {
         XYChart chart = new XYChartBuilder()
             .width(500).height(400)
             .title(title)
@@ -464,7 +464,7 @@ public class ChartGenerator {
         chart.addSeries("TCDRM", x, tcdrm.getAvgBwPrice()).setLineColor(COLOR_TCDRM);
         chart.addSeries("NoRepLc", x, norep.getAvgBwPrice()).setLineColor(COLOR_NOREP);
         chart.addSeries("Q-Learning", x, ql.getAvgBwPrice()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getAvgBwPrice()).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, rainbow.getAvgBwPrice()).setLineColor(COLOR_DQN);
 
         return chart;
     }
@@ -505,21 +505,21 @@ public class ChartGenerator {
      * Fig 5: Cumulative BW Price (4 models) - 2 graphiques côte à côte
      */
     public static void generateCumulativeBwPrice4Models(BenchmarkData norepSimple, BenchmarkData tcdrmSimple,
-                                                         BenchmarkData qlSimple, BenchmarkData dqnSimple,
+                                                         BenchmarkData qlSimple, BenchmarkData rainbowSimple,
                                                          BenchmarkData norepComplex, BenchmarkData tcdrmComplex,
-                                                         BenchmarkData qlComplex, BenchmarkData dqnComplex,
+                                                         BenchmarkData qlComplex, BenchmarkData rainbowComplex,
                                                          String filename) throws IOException {
         XYChart chartSimple = createCumulChart4("Cumul. BW Price - Simple (4 models)", 
-            norepSimple, tcdrmSimple, qlSimple, dqnSimple);
+            norepSimple, tcdrmSimple, qlSimple, rainbowSimple);
         XYChart chartComplex = createCumulChart4("Cumul. BW Price - Complex (4 models)", 
-            norepComplex, tcdrmComplex, qlComplex, dqnComplex);
+            norepComplex, tcdrmComplex, qlComplex, rainbowComplex);
         
         saveCombinedChart(chartSimple, chartComplex, filename, "");
         System.out.println("  [Fig 5] Cumulative BW Price (4 models) saved");
     }
     
     private static XYChart createCumulChart4(String title, BenchmarkData norep, BenchmarkData tcdrm,
-                                              BenchmarkData ql, BenchmarkData dqn) {
+                                              BenchmarkData ql, BenchmarkData rainbow) {
         XYChart chart = new XYChartBuilder()
             .width(500).height(400)
             .title(title)
@@ -536,7 +536,7 @@ public class ChartGenerator {
         chart.addSeries("TCDRM", x, tcdrm.getCumulativeBwCostList()).setLineColor(COLOR_TCDRM);
         chart.addSeries("NoRepLc", x, norep.getCumulativeBwCostList()).setLineColor(COLOR_NOREP);
         chart.addSeries("Q-Learning", x, ql.getCumulativeBwCostList()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, rainbow.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
 
         return chart;
     }
@@ -545,21 +545,21 @@ public class ChartGenerator {
      * Fig 6: Total Cost (4 models) - 2 graphiques côte à côte avec barres empilées
      */
     public static void generateTotalCost4Models(BenchmarkData norepSimple, BenchmarkData tcdrmSimple,
-                                                 BenchmarkData qlSimple, BenchmarkData dqnSimple,
+                                                 BenchmarkData qlSimple, BenchmarkData rainbowSimple,
                                                  BenchmarkData norepComplex, BenchmarkData tcdrmComplex,
-                                                 BenchmarkData qlComplex, BenchmarkData dqnComplex,
+                                                 BenchmarkData qlComplex, BenchmarkData rainbowComplex,
                                                  String filename) throws IOException {
         CategoryChart chartSimple = createTotalCostChart4("Total Cost — Simple (4 models)", 
-            norepSimple, tcdrmSimple, qlSimple, dqnSimple);
+            norepSimple, tcdrmSimple, qlSimple, rainbowSimple);
         CategoryChart chartComplex = createTotalCostChart4("Total Cost — Complex (4 models)", 
-            norepComplex, tcdrmComplex, qlComplex, dqnComplex);
+            norepComplex, tcdrmComplex, qlComplex, rainbowComplex);
         
         saveCombinedCategoryChart(chartSimple, chartComplex, filename);
         System.out.println("  [Fig 6] Total Cost (4 models) saved");
     }
     
     private static CategoryChart createTotalCostChart4(String title, BenchmarkData norep, BenchmarkData tcdrm,
-                                                        BenchmarkData ql, BenchmarkData dqn) {
+                                                        BenchmarkData ql, BenchmarkData rainbow) {
         CategoryChart chart = new CategoryChartBuilder()
             .width(500).height(400)
             .title(title)
@@ -571,18 +571,18 @@ public class ChartGenerator {
         chart.getStyler().setStacked(true);
         chart.getStyler().setPlotGridLinesVisible(true);
 
-        List<String> categories = Arrays.asList("NoRepLc", "TCDRM", "Q-Learn", "DQN");
+        List<String> categories = Arrays.asList("NoRepLc", "TCDRM", "Q-Learn", "Rainbow");
         List<Double> cpuCost = Arrays.asList(
             norep.getTotalCpuCost(), tcdrm.getTotalCpuCost(),
-            ql.getTotalCpuCost(), dqn.getTotalCpuCost()
+            ql.getTotalCpuCost(), rainbow.getTotalCpuCost()
         );
         List<Double> bwCost = Arrays.asList(
             norep.getTotalBwCost(), tcdrm.getTotalBwCost(),
-            ql.getTotalBwCost(), dqn.getTotalBwCost()
+            ql.getTotalBwCost(), rainbow.getTotalBwCost()
         );
         List<Double> replicaCost = Arrays.asList(
             norep.getTotalReplicaCost(), tcdrm.getTotalReplicaCost(),
-            ql.getTotalReplicaCost(), dqn.getTotalReplicaCost()
+            ql.getTotalReplicaCost(), rainbow.getTotalReplicaCost()
         );
 
         chart.addSeries("CPU", categories, cpuCost).setFillColor(COLOR_CPU);
@@ -634,7 +634,7 @@ public class ChartGenerator {
      * RL-4: BW Consumption (4 models)
      */
     public static void generateRLBwConsumption(BenchmarkData norep, BenchmarkData tcdrm,
-                                                BenchmarkData qlearning, BenchmarkData dqn,
+                                                BenchmarkData qlearning, BenchmarkData rainbow,
                                                 String filename, boolean complex) throws IOException {
         String type = complex ? "Complex" : "Simple";
         CategoryChart chart = new CategoryChartBuilder()
@@ -647,14 +647,14 @@ public class ChartGenerator {
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setStacked(true);
 
-        List<String> categories = Arrays.asList("NoRepLc", "TCDRM", "Q-Learning", "DQN");
+        List<String> categories = Arrays.asList("NoRepLc", "TCDRM", "Q-Learning", "Rainbow DQN");
         List<Double> interProvider = Arrays.asList(
             norep.getTotalBwInterProviderGb(), tcdrm.getTotalBwInterProviderGb(),
-            qlearning.getTotalBwInterProviderGb(), dqn.getTotalBwInterProviderGb()
+            qlearning.getTotalBwInterProviderGb(), rainbow.getTotalBwInterProviderGb()
         );
         List<Double> interRegion = Arrays.asList(
             norep.getTotalBwInterRegionGb(), tcdrm.getTotalBwInterRegionGb(),
-            qlearning.getTotalBwInterRegionGb(), dqn.getTotalBwInterRegionGb()
+            qlearning.getTotalBwInterRegionGb(), rainbow.getTotalBwInterRegionGb()
         );
 
         chart.addSeries("Inter-Provider", categories, interProvider).setFillColor(COLOR_INTER_PROVIDER);
@@ -668,7 +668,7 @@ public class ChartGenerator {
      * RL-5: Avg BW Price (4 models)
      */
     public static void generateRLAvgBwPrice(BenchmarkData norep, BenchmarkData tcdrm,
-                                             BenchmarkData qlearning, BenchmarkData dqn,
+                                             BenchmarkData qlearning, BenchmarkData rainbow,
                                              String filename, boolean complex) throws IOException {
         String type = complex ? "Complex" : "Simple";
         XYChart chart = new XYChartBuilder()
@@ -685,7 +685,7 @@ public class ChartGenerator {
         chart.addSeries("NoRepLc", x, norep.getAvgBwPrice()).setLineColor(COLOR_NOREP);
         chart.addSeries("TCDRM", x, tcdrm.getAvgBwPrice()).setLineColor(COLOR_TCDRM);
         chart.addSeries("Q-Learning", x, qlearning.getAvgBwPrice()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getAvgBwPrice()).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, rainbow.getAvgBwPrice()).setLineColor(COLOR_DQN);
 
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
         System.out.println("  [RL-5] Avg BW Price " + type + " saved");
@@ -695,7 +695,7 @@ public class ChartGenerator {
      * RL-7: Total Cost Breakdown (4 models)
      */
     public static void generateRLTotalCost(BenchmarkData norep, BenchmarkData tcdrm,
-                                            BenchmarkData qlearning, BenchmarkData dqn,
+                                            BenchmarkData qlearning, BenchmarkData rainbow,
                                             String filename, boolean complex) throws IOException {
         String type = complex ? "Complex" : "Simple";
         CategoryChart chart = new CategoryChartBuilder()
@@ -708,18 +708,18 @@ public class ChartGenerator {
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setStacked(true);
 
-        List<String> categories = Arrays.asList("NoRepLc", "TCDRM", "Q-Learning", "DQN");
+        List<String> categories = Arrays.asList("NoRepLc", "TCDRM", "Q-Learning", "Rainbow DQN");
         List<Double> cpuCost = Arrays.asList(
             norep.getTotalCpuCost(), tcdrm.getTotalCpuCost(),
-            qlearning.getTotalCpuCost(), dqn.getTotalCpuCost()
+            qlearning.getTotalCpuCost(), rainbow.getTotalCpuCost()
         );
         List<Double> bwCost = Arrays.asList(
             norep.getTotalBwCost(), tcdrm.getTotalBwCost(),
-            qlearning.getTotalBwCost(), dqn.getTotalBwCost()
+            qlearning.getTotalBwCost(), rainbow.getTotalBwCost()
         );
         List<Double> replicaCost = Arrays.asList(
             norep.getTotalReplicaCost(), tcdrm.getTotalReplicaCost(),
-            qlearning.getTotalReplicaCost(), dqn.getTotalReplicaCost()
+            qlearning.getTotalReplicaCost(), rainbow.getTotalReplicaCost()
         );
 
         chart.addSeries("CPU", categories, cpuCost).setFillColor(COLOR_CPU);
@@ -735,7 +735,7 @@ public class ChartGenerator {
     // =========================
 
     /** Response time comparison (2 models). */
-    public static void generateRL2ResponseTime(BenchmarkData ql, BenchmarkData dqn,
+    public static void generateRL2ResponseTime(BenchmarkData ql, BenchmarkData rainbow,
                                                String filename, boolean complex) throws IOException {
         double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
         XYChart chart = new XYChartBuilder()
@@ -746,13 +746,13 @@ public class ChartGenerator {
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, smooth(ql.getResponseTimeMs(), 20)).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, smooth(dqn.getResponseTimeMs(), 20)).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, smooth(rainbow.getResponseTimeMs(), 20)).setLineColor(COLOR_DQN);
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
         System.out.println("  [RL-2] Response Time (2 models) saved");
     }
 
     /** Replica count comparison (2 models). */
-    public static void generateRL2Replicas(BenchmarkData ql, BenchmarkData dqn,
+    public static void generateRL2Replicas(BenchmarkData ql, BenchmarkData rainbow,
                                            String filename) throws IOException {
         XYChart chart = new XYChartBuilder()
             .width(800).height(500)
@@ -762,13 +762,13 @@ public class ChartGenerator {
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, toDoubleList(ql.getReplicaCount())).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, toDoubleList(dqn.getReplicaCount())).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, toDoubleList(rainbow.getReplicaCount())).setLineColor(COLOR_DQN);
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
         System.out.println("  [RL-2] Replicas (2 models) saved");
     }
 
     /** Cumulative BW cost comparison (2 models). */
-    public static void generateRL2CumulativeCost(BenchmarkData ql, BenchmarkData dqn,
+    public static void generateRL2CumulativeCost(BenchmarkData ql, BenchmarkData rainbow,
                                                  String filename) throws IOException {
         XYChart chart = new XYChartBuilder()
             .width(800).height(500)
@@ -778,13 +778,13 @@ public class ChartGenerator {
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, ql.getCumulativeBwCostList()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, rainbow.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
         System.out.println("  [RL-2] Cumulative BW Cost (2 models) saved");
     }
 
     /** Avg BW price over time (2 models). */
-    public static void generateRL2AvgBwPrice(BenchmarkData ql, BenchmarkData dqn,
+    public static void generateRL2AvgBwPrice(BenchmarkData ql, BenchmarkData rainbow,
                                              String filename) throws IOException {
         XYChart chart = new XYChartBuilder()
             .width(800).height(500)
@@ -794,7 +794,7 @@ public class ChartGenerator {
         chart.getStyler().setMarkerSize(0);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, ql.getAvgBwPrice()).setLineColor(COLOR_QLEARNING);
-        chart.addSeries("DQN", x, dqn.getAvgBwPrice()).setLineColor(COLOR_DQN);
+        chart.addSeries("Rainbow DQN", x, rainbow.getAvgBwPrice()).setLineColor(COLOR_DQN);
         BitmapEncoder.saveBitmap(chart, filename, BitmapEncoder.BitmapFormat.PNG);
         System.out.println("  [RL-2] Avg BW Price (2 models) saved");
     }
@@ -865,7 +865,8 @@ public class ChartGenerator {
      */
     public static void generatePopularityAnalysis(BenchmarkData data, String filename, boolean complex) throws IOException {
         double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
-        double pSla = TcdrmConstants.POPULARITY_THRESHOLD;
+        // Normalisation par le nombre total de requêtes (le seuil de popularité est désormais dynamique)
+        double pSla = TcdrmConstants.MAX_QUERIES;
         List<Integer> x = data.getQueryNumbers();
         int width = 1600, height = 900;
         
