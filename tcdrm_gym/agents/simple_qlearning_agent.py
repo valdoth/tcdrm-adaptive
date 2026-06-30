@@ -77,10 +77,7 @@ class SimpleQLearningAgent:
 		# Statistiques
 		self.training_steps = 0
 		self.episodes_completed = 0
-		self.recent_rewards = []  # Pour adaptive learning rate
-        
-		# Buffer pour Prioritized Experience Replay
-		self.replay_buffer = PrioritizedReplayBuffer(capacity=10000)
+		self.recent_rewards = []
 
 	def start_episode(self):
 		if self.traces is not None:
@@ -119,24 +116,31 @@ class SimpleQLearningAgent:
 		else:
 			alpha = self.alpha
 
-		# If using eligibility traces, switch to single-table Q(λ)
+		# If using eligibility traces — Q(λ) avec support Double-Q cohérent
 		if self.lambda_trace > 0.0 and self.traces is not None:
 			# Accumulating traces
 			self.traces[state, action] += 1.0
-			# TD error with max over next_state
+			# TD error — utilise la moyenne des deux tables pour le calcul de la cible
 			if done:
 				target_q = reward
 			else:
 				if self.use_double_q:
-					# For simplicity under traces, use single-table perspective for next max
-					max_next = np.max(self.q_table[next_state]) if hasattr(self, 'q_table') else np.max((self.q_table_a[next_state] + self.q_table_b[next_state]) / 2.0)
+					max_next = np.max((self.q_table_a[next_state] + self.q_table_b[next_state]) / 2.0)
 				else:
 					max_next = np.max(self.q_table[next_state])
 				target_q = reward + self.gamma * max_next
-			current_q = self.q_table[state, action] if hasattr(self, 'q_table') else ((self.q_table_a + self.q_table_b) / 2.0)[state, action]
+			if self.use_double_q:
+				current_q = (self.q_table_a[state, action] + self.q_table_b[state, action]) / 2.0
+			else:
+				current_q = self.q_table[state, action]
 			delta = target_q - current_q
-			# Update all state-actions
-			self.q_table += alpha * delta * self.traces
+			# Appliquer les traces aux DEUX tables pour rester cohérent avec select_action
+			if self.use_double_q:
+				self.q_table_a += alpha * delta * self.traces
+				self.q_table_b += alpha * delta * self.traces
+				self.q_table = (self.q_table_a + self.q_table_b) / 2.0
+			else:
+				self.q_table += alpha * delta * self.traces
 			# Decay traces
 			self.traces *= self.gamma * self.lambda_trace
 		else:
@@ -173,12 +177,8 @@ class SimpleQLearningAgent:
 		self.recent_rewards.append(reward)
 		if len(self.recent_rewards) > 100:
 			self.recent_rewards.pop(0)
-        
+
 		self.training_steps += 1
-        
-		# Ajout dans le buffer pour Prioritized Experience Replay
-		if done:
-			self.replay_buffer.push(state, action, reward, next_state, done)
     
 	def decay_epsilon(self):
 		if self.epsilon_schedule == 'exp':
@@ -280,30 +280,3 @@ class SimpleQLearningAgent:
 
 
 __all__ = ['SimpleQLearningAgent']
-
-
-class PrioritizedReplayBuffer:
-    def __init__(self, capacity=10000, alpha=0.6):
-        self.capacity = capacity
-        self.alpha = alpha
-        self.buffer = []
-        self.priorities = []
-
-    def push(self, state, action, reward, next_state, done):
-        max_priority = max(self.priorities, default=1.0)
-        self.buffer.append((state, action, reward, next_state, done))
-        self.priorities.append(max_priority)
-        if len(self.buffer) > self.capacity:
-            self.buffer.pop(0)
-            self.priorities.pop(0)
-
-    def sample(self, batch_size):
-        scaled_priorities = [p ** self.alpha for p in self.priorities]
-        sample_probs = [p / sum(scaled_priorities) for p in scaled_priorities]
-        indices = np.random.choice(len(self.buffer), batch_size, p=sample_probs)
-        samples = [self.buffer[i] for i in indices]
-        return samples, indices
-
-    def update_priorities(self, indices, priorities):
-        for idx, priority in zip(indices, priorities):
-            self.priorities[idx] = priority

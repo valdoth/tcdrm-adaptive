@@ -126,7 +126,25 @@ public class TrainingServer {
         TrainingEnvironment env = complex ? complexEnv : simpleEnv;
         return env != null ? env.getReplicaChanges() : 0;
     }
-    
+
+    /**
+     * Poids courants de l'optimiseur de placement [w_lat, w_cost, w_pop, w_sat] (Sujet 2).
+     * Permet au script Python de monitorer l'évolution des poids entre épisodes.
+     */
+    public double[] getPlacementWeights(boolean complex) {
+        TrainingEnvironment env = complex ? complexEnv : simpleEnv;
+        return env != null ? env.getPlacementWeights() : new double[]{0.45, 0.45, 0.10};
+    }
+
+    /**
+     * État adaptatif courant (Sujet 1) : CONSERVATIVE / BALANCED / AGGRESSIVE.
+     */
+    public String getReplicationState(boolean complex) {
+        TrainingEnvironment env = complex ? complexEnv : simpleEnv;
+        return env != null ? env.getReplicationState() : "BALANCED";
+    }
+
+
     /**
      * Point d'entrée pour démarrer le serveur d'entraînement.
      */
@@ -193,18 +211,17 @@ public class TrainingServer {
         if (ws instanceof String s) settings.setWarmupStrategy(s);
         Object wrp = p.get("warmupRandomProb");
         if (wrp instanceof Number n) settings.setWarmupRandomProb(n.doubleValue());
-        Object ps = p.get("popularityStrategy");
-        if (ps instanceof String s) try { settings.getClass().getMethod("setPopularityStrategy", String.class).invoke(settings, s); } catch (Exception ignore) {}
-        Object w = p.get("tinyLfuWidth");
-        if (w instanceof Number n) try { settings.getClass().getMethod("setTinyLfuWidth", int.class).invoke(settings, n.intValue()); } catch (Exception ignore) {}
-        Object d = p.get("tinyLfuDepth");
-        if (d instanceof Number n) try { settings.getClass().getMethod("setTinyLfuDepth", int.class).invoke(settings, n.intValue()); } catch (Exception ignore) {}
-        Object ap = p.get("tinyLfuAgingPeriod");
-        if (ap instanceof Number n) try { settings.getClass().getMethod("setTinyLfuAgingPeriod", int.class).invoke(settings, n.intValue()); } catch (Exception ignore) {}
-        Object th = p.get("tinyLfuTauHi");
-        if (th instanceof Number n) try { settings.getClass().getMethod("setTinyLfuTauHi", double.class).invoke(settings, n.doubleValue()); } catch (Exception ignore) {}
-        Object tl = p.get("tinyLfuTauLo");
-        if (tl instanceof Number n) try { settings.getClass().getMethod("setTinyLfuTauLo", double.class).invoke(settings, n.doubleValue()); } catch (Exception ignore) {}
+        // Poids de la fonction de récompense (Sujet 1 — configurables depuis Python)
+        Object rOk   = p.get("rewardSlaOk");         if (rOk   instanceof Number n) settings.setRewardSlaOk(n.doubleValue());
+        Object rViol = p.get("rewardSlaViol");        if (rViol instanceof Number n) settings.setRewardSlaViol(n.doubleValue());
+        Object rCost = p.get("rewardCostOver");       if (rCost instanceof Number n) settings.setRewardCostOver(n.doubleValue());
+        Object rRepl = p.get("rewardReplCost");       if (rRepl instanceof Number n) settings.setRewardReplCost(n.doubleValue());
+        Object rPrem = p.get("rewardPrematureRepl");   if (rPrem instanceof Number n) settings.setRewardPrematureRepl(n.doubleValue());
+        Object rDel  = p.get("rewardPrematureDelete"); if (rDel  instanceof Number n) settings.setRewardPrematureDelete(n.doubleValue());
+        Object rThr  = p.get("rewardThrash");          if (rThr  instanceof Number n) settings.setRewardThrash(n.doubleValue());
+        Object rMnt  = p.get("rewardMaintenance");    if (rMnt  instanceof Number n) settings.setRewardMaintenance(n.doubleValue());
+        Object rInv  = p.get("rewardInvalid");        if (rInv  instanceof Number n) settings.setRewardInvalid(n.doubleValue());
+        Object rCorr = p.get("rewardCorrectTrigger"); if (rCorr instanceof Number n) settings.setRewardCorrectTrigger(n.doubleValue());
     }
 
     /** Reset structuré (retourne un objet avec state + info). */
@@ -281,6 +298,25 @@ class TrainingSettings {
     private String warmupStrategy = "random"; // random | tcdrm | norep
     private double warmupRandomProb = 0.2;   // probability for replicate/delete in random mode
 
+    // Sujet 1 : poids de la fonction de récompense — configurables depuis Python
+    // R = r_slaOk × SLA_OK − r_slaViol × SLA_VIOL − r_costOver × COST_OVER
+    //     − r_replCost × REPL_COST − r_premature × PREMATURE_REPL
+    //     − r_thrash × THRASH − r_maint × replicas − r_invalid × INVALID
+    private double rewardSlaOk        = 10.0;
+    private double rewardSlaViol      = 20.0;
+    private double rewardCostOver     = 15.0;
+    private double rewardReplCost     =  5.0;
+    // Pénalités symétriques REPLICATE/DELETE prématurés : dissuadent d'agir sans pression SLA.
+    // slaMargin ∈ [0,1] : 1 = loin de la violation (très prématuré), 0 = SLA violé (justifié).
+    private double rewardPrematureRepl   = 5.0;
+    private double rewardPrematureDelete = 5.0;  // symétrique : pénalise DELETE inutile quand SLA OK
+    private double rewardThrash          =  8.0;
+    private double rewardMaintenance     =  0.01; // réduit 0.05→0.01 : supprime l'incitation à détruire des réplicas
+    private double rewardInvalid         =  2.0;
+    // Bonus quand l'agent réplique exactement quand l'Algorithme 1 le ferait :
+    // SLA violé (temps ou coût) ET workload stabilisé (P_SLA atteint).
+    private double rewardCorrectTrigger =  8.0;
+
     public int getMaxEpisodeLength() { return maxEpisodeLength; }
     public void setMaxEpisodeLength(int v) { this.maxEpisodeLength = v; }
     public double getTSlaSimpleMs() { return tSlaSimpleMs; }
@@ -293,6 +329,28 @@ class TrainingSettings {
     public void setWarmupStrategy(String s) { this.warmupStrategy = (s == null ? "random" : s); }
     public double getWarmupRandomProb() { return warmupRandomProb; }
     public void setWarmupRandomProb(double p) { this.warmupRandomProb = Math.max(0.0, Math.min(1.0, p)); }
+
+    public double getRewardSlaOk()             { return rewardSlaOk; }
+    public double getRewardSlaViol()           { return rewardSlaViol; }
+    public double getRewardCostOver()          { return rewardCostOver; }
+    public double getRewardReplCost()          { return rewardReplCost; }
+    public double getRewardPrematureRepl()     { return rewardPrematureRepl; }
+    public double getRewardPrematureDelete()   { return rewardPrematureDelete; }
+    public double getRewardThrash()            { return rewardThrash; }
+    public double getRewardMaintenance()       { return rewardMaintenance; }
+    public double getRewardInvalid()           { return rewardInvalid; }
+    public double getRewardCorrectTrigger()    { return rewardCorrectTrigger; }
+
+    public void setRewardSlaOk(double v)             { rewardSlaOk           = Math.max(0, v); }
+    public void setRewardSlaViol(double v)            { rewardSlaViol         = Math.max(0, v); }
+    public void setRewardCostOver(double v)           { rewardCostOver        = Math.max(0, v); }
+    public void setRewardReplCost(double v)           { rewardReplCost        = Math.max(0, v); }
+    public void setRewardPrematureRepl(double v)      { rewardPrematureRepl   = Math.max(0, v); }
+    public void setRewardPrematureDelete(double v)    { rewardPrematureDelete = Math.max(0, v); }
+    public void setRewardThrash(double v)             { rewardThrash          = Math.max(0, v); }
+    public void setRewardMaintenance(double v)        { rewardMaintenance     = Math.max(0, v); }
+    public void setRewardInvalid(double v)            { rewardInvalid         = Math.max(0, v); }
+    public void setRewardCorrectTrigger(double v)     { rewardCorrectTrigger  = Math.max(0, v); }
 }
 
 /** Info renvoyée à chaque reset/step (horodatage simple). */

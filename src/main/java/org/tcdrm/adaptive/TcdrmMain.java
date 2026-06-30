@@ -11,6 +11,7 @@ import org.cloudsimplus.util.Log;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Locale;
 
 // Suppression de l'import incorrect
 // import giu.edu.cspg.ObservationState;
@@ -31,6 +32,7 @@ public class TcdrmMain {
     private static Py4JGateway gateway;
 
     public static void main(String[] args) throws IOException, InterruptedException {
+        Locale.setDefault(Locale.US);
         TcdrmMainArgs opts = TcdrmMainArgs.parse(args);
         if (opts.help) {
             TcdrmMainArgs.printHelp();
@@ -117,7 +119,7 @@ public class TcdrmMain {
         }
 
         // Phase 2: RL extensions
-        System.out.println("\n━━━ PHASE 2: RL Extensions (Q-Learning + DQN) ━━━");
+        System.out.println("\n━━━ PHASE 2: RL Extensions (Q-Learning + Rainbow DQN) ━━━");
         System.out.println("  Hint: dans un autre terminal — cd tcdrm_gym && uv run python connect_to_java.py --port 25333");
 
         gateway = new Py4JGateway();
@@ -135,32 +137,32 @@ public class TcdrmMain {
             BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
 
             bridge.resetCounters();
-            BenchmarkData dqnSimple = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Simple", false, 2000L);
+            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 2000L);
 
             bridge.resetCounters();
             BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
 
             bridge.resetCounters();
-            BenchmarkData dqnComplex = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Complex", true, 4000L);
+            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 4000L);
             
             qlSimple.printSummary();
-            dqnSimple.printSummary();
+            rainbowSimple.printSummary();
             qlComplex.printSummary();
-            dqnComplex.printSummary();
+            rainbowComplex.printSummary();
 
             // Export RL CSV metrics
             BenchmarkExporter.exportPerQueryCsv(qlSimple, "metrics/rl_qlearning_simple.csv");
-            BenchmarkExporter.exportPerQueryCsv(dqnSimple, "metrics/rl_dqn_simple.csv");
+            BenchmarkExporter.exportPerQueryCsv(rainbowSimple, "metrics/rl_rainbow_simple.csv");
             BenchmarkExporter.exportPerQueryCsv(qlComplex, "metrics/rl_qlearning_complex.csv");
-            BenchmarkExporter.exportPerQueryCsv(dqnComplex, "metrics/rl_dqn_complex.csv");
+            BenchmarkExporter.exportPerQueryCsv(rainbowComplex, "metrics/rl_rainbow_complex.csv");
             BenchmarkExporter.exportOvertimeAverages(qlSimple, "metrics/log_overtime.csv", 100);
-            BenchmarkExporter.exportOvertimeAverages(dqnSimple, "metrics/log_overtime.csv", 100);
+            BenchmarkExporter.exportOvertimeAverages(rainbowSimple, "metrics/log_overtime.csv", 100);
             BenchmarkExporter.exportOvertimeAverages(qlComplex, "metrics/log_overtime.csv", 100);
-            BenchmarkExporter.exportOvertimeAverages(dqnComplex, "metrics/log_overtime.csv", 100);
+            BenchmarkExporter.exportOvertimeAverages(rainbowComplex, "metrics/log_overtime.csv", 100);
 
             // Global summary for Phase 2 (RL)
             java.util.List<BenchmarkData> phase2Models = java.util.Arrays.asList(
-                qlSimple, dqnSimple, qlComplex, dqnComplex
+                qlSimple, rainbowSimple, qlComplex, rainbowComplex
             );
             BenchmarkExporter.exportSummaryCsv(phase2Models, "metrics/summary_phase2_rl.csv");
             
@@ -169,49 +171,49 @@ public class TcdrmMain {
             
             // Fig 1: Replica Factor (4 models)
             ChartGenerator.generateReplicaFactor4Models(
-                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                 "images/fig1_replica_factor_4models.png");
             
             // Fig 2: Response Time (4 models)
             ChartGenerator.generateResponseTime4Models(
-                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                 "images/fig2_response_time_4models.png");
             
             // Fig 3: BW Consumption (4 models)
             ChartGenerator.generateBwConsumption4Models(
-                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                 "images/fig3_bw_consumption_4models.png");
             
             // Fig 4: Avg BW Price (4 models)
             ChartGenerator.generateAvgBwPrice4Models(
-                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                 "images/fig4_avg_bw_price_4models.png");
             
             // Fig 5: Cumulative BW Price (4 models)
             ChartGenerator.generateCumulativeBwPrice4Models(
-                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                 "images/fig5_cumulative_bw_price_4models.png");
             
             // Fig 6: Total Cost (4 models)
             ChartGenerator.generateTotalCost4Models(
-                norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                 "images/fig6_total_cost_4models.png");
             
-            // Métriques détaillées RL (Q-Learning, DQN)
+            // Métriques détaillées RL (Q-Learning, Rainbow DQN)
             System.out.println("\n  Generating RL model metrics...");
             ChartGenerator.generateModelMetrics(qlSimple, "images/metrics_qlearning_simple.png", false);
-            ChartGenerator.generateModelMetrics(dqnSimple, "images/metrics_dqn_simple.png", false);
+            ChartGenerator.generateModelMetrics(rainbowSimple, "images/metrics_rainbow_simple.png", false);
             
             // Analyse de la popularité RL
             System.out.println("\n  Generating RL popularity analysis...");
             ChartGenerator.generatePopularityAnalysis(qlSimple, "images/popularity_qlearning_simple.png", false);
-            ChartGenerator.generatePopularityAnalysis(dqnSimple, "images/popularity_dqn_simple.png", false);
+            ChartGenerator.generatePopularityAnalysis(rainbowSimple, "images/popularity_rainbow_simple.png", false);
             
             System.out.println("\n✅ Phase 2 complete: RL extension graphs generated (RL-2 to RL-7 + Metrics + Popularity)");
         } else {
@@ -228,8 +230,8 @@ public class TcdrmMain {
             + (int)(TcdrmConstants.AVG_RELATION_SIZE_GB * 1000) + " MB");
         System.out.println("  Complex: " + TcdrmConstants.RELATIONS_COMPLEX + " relations x " 
             + (int)(TcdrmConstants.AVG_RELATION_SIZE_GB * 1000) + " MB");
-        System.out.println("  Queries: " + TcdrmConstants.MAX_QUERIES 
-            + ", Popularity threshold: " + TcdrmConstants.POPULARITY_THRESHOLD);
+        System.out.println("  Queries: " + TcdrmConstants.MAX_QUERIES
+            + ", P_SLA=" + TcdrmConstants.P_SLA + " (Paper Table 1)");
         System.out.println("  Options: headlessCharts=" + opts.headlessCharts
             + ", phase1Only=" + opts.phase1Only
             + ", pyTimeout=" + opts.pythonConnectTimeoutSec + "s"

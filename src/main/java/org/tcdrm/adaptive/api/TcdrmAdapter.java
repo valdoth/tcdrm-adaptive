@@ -79,9 +79,9 @@ public final class TcdrmAdapter {
     /** Run Q-Learning on complex workload only. */
     public static void runQlearningComplex(int gatewayTimeoutSec) { runSingleRL("qlearning", true, 3000L, gatewayTimeoutSec); }
     /** Run DQN on simple workload only. */
-    public static void runDqnSimple(int gatewayTimeoutSec) { runSingleRL("dqn", false, 2000L, gatewayTimeoutSec); }
+    public static void runRainbowSimple(int gatewayTimeoutSec) { runSingleRL("rainbow", false, 2000L, gatewayTimeoutSec); }
     /** Run DQN on complex workload only. */
-    public static void runDqnComplex(int gatewayTimeoutSec) { runSingleRL("dqn", true, 4000L, gatewayTimeoutSec); }
+    public static void runRainbowComplex(int gatewayTimeoutSec) { runSingleRL("rainbow", true, 4000L, gatewayTimeoutSec); }
 
     /** Run Q-Learning on simple then complex workloads within a single Python session. */
     public static void runQlearningBoth(int gatewayTimeoutSec) {
@@ -132,7 +132,7 @@ public final class TcdrmAdapter {
     }
 
     /** Run DQN on simple then complex workloads within a single Python session. */
-    public static void runDqnBoth(int gatewayTimeoutSec) {
+    public static void runRainbowBoth(int gatewayTimeoutSec) {
         System.setProperty("java.awt.headless", "true");
         new File("images").mkdirs();
         new File("metrics").mkdirs();
@@ -146,34 +146,34 @@ public final class TcdrmAdapter {
         try {
             PythonRLBridge bridge = waitForPython(gateway, Math.max(5, gatewayTimeoutSec));
             if (bridge == null) throw new IllegalStateException("Python client not connected within timeout");
-            if (!bridge.isDQNReady()) throw new IllegalStateException("Python DQN model not loaded. Aborting run.");
+            if (!bridge.isRainbowReady()) throw new IllegalStateException("Python Rainbow DQN model not loaded. Aborting run.");
 
             bridge.resetCounters();
-            BenchmarkData dqnSimple = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Simple", false, 2000L);
+            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 2000L);
             try {
-                BenchmarkExporter.exportPerQueryCsv(dqnSimple, "metrics/rl_dqn_simple.csv");
-                BenchmarkExporter.exportOvertimeAverages(dqnSimple, "metrics/log_overtime.csv", 100);
-                ChartGenerator.generateModelMetrics(dqnSimple, "images/metrics_dqn_simple.png", false);
-                ChartGenerator.generatePopularityAnalysis(dqnSimple, "images/popularity_dqn_simple.png", false);
+                BenchmarkExporter.exportPerQueryCsv(rainbowSimple, "metrics/rl_rainbow_simple.csv");
+                BenchmarkExporter.exportOvertimeAverages(rainbowSimple, "metrics/log_overtime.csv", 100);
+                ChartGenerator.generateModelMetrics(rainbowSimple, "images/metrics_rainbow_simple.png", false);
+                ChartGenerator.generatePopularityAnalysis(rainbowSimple, "images/popularity_rainbow_simple.png", false);
             } catch (IOException ioe) {
-                throw new RuntimeException("Failed to export DQN simple outputs", ioe);
+                throw new RuntimeException("Failed to export Rainbow DQN simple outputs", ioe);
             }
 
             bridge.resetCounters();
-            BenchmarkData dqnComplex = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Complex", true, 4000L);
+            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 4000L);
             try {
-                BenchmarkExporter.exportPerQueryCsv(dqnComplex, "metrics/rl_dqn_complex.csv");
-                BenchmarkExporter.exportOvertimeAverages(dqnComplex, "metrics/log_overtime.csv", 100);
-                ChartGenerator.generateModelMetrics(dqnComplex, "images/metrics_dqn_complex.png", true);
-                ChartGenerator.generatePopularityAnalysis(dqnComplex, "images/popularity_dqn_complex.png", true);
+                BenchmarkExporter.exportPerQueryCsv(rainbowComplex, "metrics/rl_rainbow_complex.csv");
+                BenchmarkExporter.exportOvertimeAverages(rainbowComplex, "metrics/log_overtime.csv", 100);
+                ChartGenerator.generateModelMetrics(rainbowComplex, "images/metrics_rainbow_complex.png", true);
+                ChartGenerator.generatePopularityAnalysis(rainbowComplex, "images/popularity_rainbow_complex.png", true);
                 BenchmarkExporter.exportSummaryCsv(
-                    java.util.Arrays.asList(dqnSimple, dqnComplex),
-                    "metrics/summary_dqn.csv");
+                    java.util.Arrays.asList(rainbowSimple, rainbowComplex),
+                    "metrics/summary_rainbow.csv");
             } catch (IOException ioe) {
-                throw new RuntimeException("Failed to export DQN complex outputs", ioe);
+                throw new RuntimeException("Failed to export Rainbow DQN complex outputs", ioe);
             }
 
-            System.out.println("\n[RL] DQN simple+complex complete → see images/ and metrics/\n");
+            System.out.println("\n[RL] Rainbow DQN simple+complex complete → see images/ and metrics/\n");
         } finally {
             gateway.stop();
         }
@@ -201,14 +201,14 @@ public final class TcdrmAdapter {
             if ("qlearning".equals(model) && !bridge.isQLearningReady()) {
                 throw new IllegalStateException("Python Q-Learning model not loaded. Aborting run.");
             }
-            if ("dqn".equals(model) && !bridge.isDQNReady()) {
-                throw new IllegalStateException("Python DQN model not loaded. Aborting run.");
+            if ("rainbow".equals(model) && !bridge.isRainbowReady()) {
+                throw new IllegalStateException("Python Rainbow DQN model not loaded. Aborting run.");
             }
-            String name = ("qlearning".equals(model) ? "QLearning_" : "DQN_") + (complex ? "Complex" : "Simple");
+            String name = ("qlearning".equals(model) ? "QLearning_" : "Rainbow_") + (complex ? "Complex" : "Simple");
             BenchmarkData data = BenchmarkRunner.runRL(bridge, model, name, complex, seed);
 
             // Export CSV metrics
-            String csvName = "metrics/rl_" + ("qlearning".equals(model) ? "qlearning" : "dqn") + (complex ? "_complex.csv" : "_simple.csv");
+            String csvName = "metrics/rl_" + ("qlearning".equals(model) ? "qlearning" : "rainbow") + (complex ? "_complex.csv" : "_simple.csv");
             try {
                 BenchmarkExporter.exportPerQueryCsv(data, csvName);
                 BenchmarkExporter.exportOvertimeAverages(data, "metrics/log_overtime.csv", 100);
@@ -217,8 +217,8 @@ public final class TcdrmAdapter {
             }
 
             // Export per-model figures only (no combined charts)
-            String metricsPng = "images/metrics_" + ("qlearning".equals(model) ? "qlearning" : "dqn") + (complex ? "_complex.png" : "_simple.png");
-            String popPng = "images/popularity_" + ("qlearning".equals(model) ? "qlearning" : "dqn") + (complex ? "_complex.png" : "_simple.png");
+            String metricsPng = "images/metrics_" + ("qlearning".equals(model) ? "qlearning" : "rainbow") + (complex ? "_complex.png" : "_simple.png");
+            String popPng = "images/popularity_" + ("qlearning".equals(model) ? "qlearning" : "rainbow") + (complex ? "_complex.png" : "_simple.png");
             try {
                 ChartGenerator.generateModelMetrics(data, metricsPng, complex);
                 ChartGenerator.generatePopularityAnalysis(data, popPng, complex);
@@ -233,11 +233,11 @@ public final class TcdrmAdapter {
     }
 
     // === Two-model comparison helpers ===
-    public static void runQlearningVsDqnSimple(int gatewayTimeoutSec) { runTwoModels(false, gatewayTimeoutSec); }
-    public static void runQlearningVsDqnComplex(int gatewayTimeoutSec) { runTwoModels(true, gatewayTimeoutSec); }
+    public static void runQlearningVsRainbowSimple(int gatewayTimeoutSec) { runTwoModels(false, gatewayTimeoutSec); }
+    public static void runQlearningVsRainbowComplex(int gatewayTimeoutSec) { runTwoModels(true, gatewayTimeoutSec); }
 
     /** Run Q-Learning vs DQN for simple then complex workloads within a single Python session. */
-    public static void runQlearningVsDqnBoth(int gatewayTimeoutSec) {
+    public static void runQlearningVsRainbowBoth(int gatewayTimeoutSec) {
         System.setProperty("java.awt.headless", "true");
         new File("images").mkdirs();
         new File("metrics").mkdirs();
@@ -257,19 +257,19 @@ public final class TcdrmAdapter {
             if (!bridge.isQLearningReady()) throw new IllegalStateException("Python Q-Learning model not loaded.");
             BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
             bridge.resetCounters();
-            if (!bridge.isDQNReady()) throw new IllegalStateException("Python DQN model not loaded.");
-            BenchmarkData dqnSimple = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Simple", false, 2000L);
+            if (!bridge.isRainbowReady()) throw new IllegalStateException("Python Rainbow DQN model not loaded.");
+            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 2000L);
             try {
                 BenchmarkExporter.exportPerQueryCsv(qlSimple, "metrics/rl_qlearning_simple.csv");
-                BenchmarkExporter.exportPerQueryCsv(dqnSimple, "metrics/rl_dqn_simple.csv");
+                BenchmarkExporter.exportPerQueryCsv(rainbowSimple, "metrics/rl_rainbow_simple.csv");
                 BenchmarkExporter.exportOvertimeAverages(qlSimple, "metrics/log_overtime.csv", 100);
-                BenchmarkExporter.exportOvertimeAverages(dqnSimple, "metrics/log_overtime.csv", 100);
+                BenchmarkExporter.exportOvertimeAverages(rainbowSimple, "metrics/log_overtime.csv", 100);
                 double tSlaS = org.tcdrm.adaptive.core.TcdrmConstants.TSLA_SIMPLE_MS;
-                ChartGenerator.generateReplicaFactor2Models(qlSimple, dqnSimple, "images/rl2_replica_factor_simple.png");
-                ChartGenerator.generateResponseTime2Models(qlSimple, dqnSimple, tSlaS, "images/rl2_response_time_simple.png");
-                ChartGenerator.generateAvgBwPrice2Models(qlSimple, dqnSimple, "images/rl2_avg_bw_price_simple.png");
-                ChartGenerator.generateCumulativeBwPrice2Models(qlSimple, dqnSimple, "images/rl2_cumulative_bw_price_simple.png");
-                ChartGenerator.generateBwConsumption2Models(qlSimple, dqnSimple, "images/rl2_bw_consumption_simple.png");
+                ChartGenerator.generateReplicaFactor2Models(qlSimple, rainbowSimple, "images/rl2_replica_factor_simple.png");
+                ChartGenerator.generateResponseTime2Models(qlSimple, rainbowSimple, tSlaS, "images/rl2_response_time_simple.png");
+                ChartGenerator.generateAvgBwPrice2Models(qlSimple, rainbowSimple, "images/rl2_avg_bw_price_simple.png");
+                ChartGenerator.generateCumulativeBwPrice2Models(qlSimple, rainbowSimple, "images/rl2_cumulative_bw_price_simple.png");
+                ChartGenerator.generateBwConsumption2Models(qlSimple, rainbowSimple, "images/rl2_bw_consumption_simple.png");
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export simple comparison outputs", ioe);
             }
@@ -278,18 +278,18 @@ public final class TcdrmAdapter {
             bridge.resetCounters();
             BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
             bridge.resetCounters();
-            BenchmarkData dqnComplex = BenchmarkRunner.runRL(bridge, "dqn", "DQN_Complex", true, 4000L);
+            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 4000L);
             try {
                 BenchmarkExporter.exportPerQueryCsv(qlComplex, "metrics/rl_qlearning_complex.csv");
-                BenchmarkExporter.exportPerQueryCsv(dqnComplex, "metrics/rl_dqn_complex.csv");
+                BenchmarkExporter.exportPerQueryCsv(rainbowComplex, "metrics/rl_rainbow_complex.csv");
                 BenchmarkExporter.exportOvertimeAverages(qlComplex, "metrics/log_overtime.csv", 100);
-                BenchmarkExporter.exportOvertimeAverages(dqnComplex, "metrics/log_overtime.csv", 100);
+                BenchmarkExporter.exportOvertimeAverages(rainbowComplex, "metrics/log_overtime.csv", 100);
                 double tSlaC = org.tcdrm.adaptive.core.TcdrmConstants.TSLA_COMPLEX_MS;
-                ChartGenerator.generateReplicaFactor2Models(qlComplex, dqnComplex, "images/rl2_replica_factor_complex.png");
-                ChartGenerator.generateResponseTime2Models(qlComplex, dqnComplex, tSlaC, "images/rl2_response_time_complex.png");
-                ChartGenerator.generateAvgBwPrice2Models(qlComplex, dqnComplex, "images/rl2_avg_bw_price_complex.png");
-                ChartGenerator.generateCumulativeBwPrice2Models(qlComplex, dqnComplex, "images/rl2_cumulative_bw_price_complex.png");
-                ChartGenerator.generateBwConsumption2Models(qlComplex, dqnComplex, "images/rl2_bw_consumption_complex.png");
+                ChartGenerator.generateReplicaFactor2Models(qlComplex, rainbowComplex, "images/rl2_replica_factor_complex.png");
+                ChartGenerator.generateResponseTime2Models(qlComplex, rainbowComplex, tSlaC, "images/rl2_response_time_complex.png");
+                ChartGenerator.generateAvgBwPrice2Models(qlComplex, rainbowComplex, "images/rl2_avg_bw_price_complex.png");
+                ChartGenerator.generateCumulativeBwPrice2Models(qlComplex, rainbowComplex, "images/rl2_cumulative_bw_price_complex.png");
+                ChartGenerator.generateBwConsumption2Models(qlComplex, rainbowComplex, "images/rl2_bw_consumption_complex.png");
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export complex comparison outputs", ioe);
             }
@@ -322,28 +322,28 @@ public final class TcdrmAdapter {
             BenchmarkData ql = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_" + (complex?"Complex":"Simple"), complex, complex?3000L:1000L);
 
             bridge.resetCounters();
-            if (!bridge.isDQNReady()) {
-                throw new IllegalStateException("Python DQN model not loaded. Aborting two-model run.");
+            if (!bridge.isRainbowReady()) {
+                throw new IllegalStateException("Python Rainbow DQN model not loaded. Aborting two-model run.");
             }
-            BenchmarkData dqn = BenchmarkRunner.runRL(bridge, "dqn", "DQN_" + (complex?"Complex":"Simple"), complex, complex?4000L:2000L);
+            BenchmarkData rainbow = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_" + (complex?"Complex":"Simple"), complex, complex?4000L:2000L);
 
             // Export CSVs
             try {
                 BenchmarkExporter.exportPerQueryCsv(ql, "metrics/rl_qlearning_" + (complex?"complex":"simple") + ".csv");
-                BenchmarkExporter.exportPerQueryCsv(dqn, "metrics/rl_dqn_" + (complex?"complex":"simple") + ".csv");
+                BenchmarkExporter.exportPerQueryCsv(rainbow, "metrics/rl_rainbow_" + (complex?"complex":"simple") + ".csv");
                 BenchmarkExporter.exportOvertimeAverages(ql, "metrics/log_overtime.csv", 100);
-                BenchmarkExporter.exportOvertimeAverages(dqn, "metrics/log_overtime.csv", 100);
+                BenchmarkExporter.exportOvertimeAverages(rainbow, "metrics/log_overtime.csv", 100);
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export CSV metrics", ioe);
             }
 
             double tSla = complex ? org.tcdrm.adaptive.core.TcdrmConstants.TSLA_COMPLEX_MS : org.tcdrm.adaptive.core.TcdrmConstants.TSLA_SIMPLE_MS;
             // Two-model comparisons (methods handle IO internally)
-            ChartGenerator.generateReplicaFactor2Models(ql, dqn, "images/rl2_replica_factor_" + (complex?"complex":"simple") + ".png");
-            ChartGenerator.generateResponseTime2Models(ql, dqn, tSla, "images/rl2_response_time_" + (complex?"complex":"simple") + ".png");
-            ChartGenerator.generateAvgBwPrice2Models(ql, dqn, "images/rl2_avg_bw_price_" + (complex?"complex":"simple") + ".png");
-            ChartGenerator.generateCumulativeBwPrice2Models(ql, dqn, "images/rl2_cumulative_bw_price_" + (complex?"complex":"simple") + ".png");
-            ChartGenerator.generateBwConsumption2Models(ql, dqn, "images/rl2_bw_consumption_" + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateReplicaFactor2Models(ql, rainbow, "images/rl2_replica_factor_" + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateResponseTime2Models(ql, rainbow, tSla, "images/rl2_response_time_" + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateAvgBwPrice2Models(ql, rainbow, "images/rl2_avg_bw_price_" + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateCumulativeBwPrice2Models(ql, rainbow, "images/rl2_cumulative_bw_price_" + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateBwConsumption2Models(ql, rainbow, "images/rl2_bw_consumption_" + (complex?"complex":"simple") + ".png");
 
             System.out.println("\n[RL] Two-model comparison complete → see images/ and metrics/\n");
         } finally {
@@ -390,69 +390,69 @@ public final class TcdrmAdapter {
             PythonRLBridge bridge = waitForPython(gateway, Math.max(5, gatewayTimeoutSec));
             if (bridge == null) throw new IllegalStateException("Python client not connected within timeout");
             if (!bridge.isQLearningReady()) throw new IllegalStateException("Python Q-Learning model not loaded.");
-            if (!bridge.isDQNReady())       throw new IllegalStateException("Python DQN model not loaded.");
+            if (!bridge.isRainbowReady())       throw new IllegalStateException("Python Rainbow DQN model not loaded.");
 
-            System.out.println("\n[4-model] Running Q-Learning and DQN (simple)...");
+            System.out.println("\n[4-model] Running Q-Learning and Rainbow DQN (simple)...");
             bridge.resetCounters();
             BenchmarkData qlSimple  = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
             bridge.resetCounters();
-            BenchmarkData dqnSimple = BenchmarkRunner.runRL(bridge, "dqn",       "DQN_Simple",       false, 2000L);
+            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow",       "Rainbow_Simple",       false, 2000L);
 
-            System.out.println("\n[4-model] Running Q-Learning and DQN (complex)...");
+            System.out.println("\n[4-model] Running Q-Learning and Rainbow DQN (complex)...");
             bridge.resetCounters();
             BenchmarkData qlComplex  = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
             bridge.resetCounters();
-            BenchmarkData dqnComplex = BenchmarkRunner.runRL(bridge, "dqn",       "DQN_Complex",       true, 4000L);
+            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow",       "Rainbow_Complex",       true, 4000L);
 
             try {
                 // Per-query CSVs
                 BenchmarkExporter.exportPerQueryCsv(qlSimple,   "metrics/rl_qlearning_simple.csv");
-                BenchmarkExporter.exportPerQueryCsv(dqnSimple,  "metrics/rl_dqn_simple.csv");
+                BenchmarkExporter.exportPerQueryCsv(rainbowSimple,  "metrics/rl_rainbow_simple.csv");
                 BenchmarkExporter.exportPerQueryCsv(qlComplex,  "metrics/rl_qlearning_complex.csv");
-                BenchmarkExporter.exportPerQueryCsv(dqnComplex, "metrics/rl_dqn_complex.csv");
+                BenchmarkExporter.exportPerQueryCsv(rainbowComplex, "metrics/rl_rainbow_complex.csv");
                 BenchmarkExporter.exportOvertimeAverages(qlSimple,   "metrics/log_overtime.csv", 100);
-                BenchmarkExporter.exportOvertimeAverages(dqnSimple,  "metrics/log_overtime.csv", 100);
+                BenchmarkExporter.exportOvertimeAverages(rainbowSimple,  "metrics/log_overtime.csv", 100);
                 BenchmarkExporter.exportOvertimeAverages(qlComplex,  "metrics/log_overtime.csv", 100);
-                BenchmarkExporter.exportOvertimeAverages(dqnComplex, "metrics/log_overtime.csv", 100);
+                BenchmarkExporter.exportOvertimeAverages(rainbowComplex, "metrics/log_overtime.csv", 100);
 
                 // Summary CSV (all 8 runs)
                 java.util.List<BenchmarkData> allModels = java.util.Arrays.asList(
-                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                    norepComplex, tcdrmComplex, qlComplex, dqnComplex
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex
                 );
                 BenchmarkExporter.exportSummaryCsv(allModels, "metrics/summary_phase2_rl.csv");
 
                 // 4-model paper figures
                 ChartGenerator.generateReplicaFactor4Models(
-                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                     "images/fig1_replica_factor_4models.png");
                 ChartGenerator.generateResponseTime4Models(
-                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                     "images/fig2_response_time_4models.png");
                 ChartGenerator.generateBwConsumption4Models(
-                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                     "images/fig3_bw_consumption_4models.png");
                 ChartGenerator.generateAvgBwPrice4Models(
-                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                     "images/fig4_avg_bw_price_4models.png");
                 ChartGenerator.generateCumulativeBwPrice4Models(
-                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                     "images/fig5_cumulative_bw_price_4models.png");
                 ChartGenerator.generateTotalCost4Models(
-                    norepSimple, tcdrmSimple, qlSimple, dqnSimple,
-                    norepComplex, tcdrmComplex, qlComplex, dqnComplex,
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
                     "images/fig6_total_cost_4models.png");
 
                 // Per-workload RL comparison figures (response_time, replicas, cost)
                 ChartGenerator.generateRLComparison(
-                    norepSimple, tcdrmSimple, qlSimple, dqnSimple, "images/rl4_simple", false);
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple, "images/rl4_simple", false);
                 ChartGenerator.generateRLComparison(
-                    norepComplex, tcdrmComplex, qlComplex, dqnComplex, "images/rl4_complex", true);
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex, "images/rl4_complex", true);
 
             } catch (java.io.IOException ioe) {
                 throw new RuntimeException("Failed to export 4-model outputs", ioe);

@@ -40,14 +40,29 @@ public final class TcdrmConstants {
     // ==================================================================
     /** T_SLA for simple queries (ms) */
     public static final double TSLA_SIMPLE_MS = 200.0;
-    /** C_SLA for simple queries ($ per query) — from original: CSLA = 0.01 */
-    public static final double CSLA_SIMPLE = 0.010;
+    /** C_SLA for simple queries ($ per query) — Paper Table 1: 0.015 */
+    public static final double CSLA_SIMPLE = 0.015;
     /** T_SLA for complex queries (ms) */
     public static final double TSLA_COMPLEX_MS = 400.0;
     /** C_SLA for complex queries ($ per query) */
     public static final double CSLA_COMPLEX = 0.040;
-    /** P_SLA — popularity threshold (Paper: P_SEUIL = 200) */
-    public static final int POPULARITY_THRESHOLD = 200;
+    /**
+     * Seuil de popularité P_SLA (Paper Table 1 : 200).
+     * Un fragment est "populaire" quand son accessCount ≥ P_SLA.
+     * Avec 1000 requêtes accédant tous les fragments, la condition est atteinte au query 200.
+     * Reproduit le comportement visible en Fig. 2 du papier : réplication démarre après ~200 requêtes.
+     * Utilisé par TCDRM uniquement.
+     */
+    public static final int P_SLA = 200;
+
+    /**
+     * Fenêtre d'observation minimale avant que l'agent RL puisse agir (en nombre de requêtes).
+     * Distinct de P_SLA : c'est le minimum physiologique pour qu'il y ait des patterns à observer.
+     * Après MIN_RL_WARMUP requêtes, l'agent est libre de décider — il n'est PAS contraint
+     * au seuil TCDRM (P_SLA=200). C'est précisément là l'amélioration apportée par le RL.
+     * Valeur : 20 queries ≈ 2% du workload — assez pour observer, beaucoup moins que TCDRM.
+     */
+    public static final int MIN_RL_WARMUP = 20;
 
     // ==================================================================
     // Replica Limits (Paper Fig. 2 — img-003.png)
@@ -83,10 +98,13 @@ public final class TcdrmConstants {
     public static final double IO_COST_PER_GB = 0.008;
     /** Storage cost: $/GB/month (Paper: ~0.02) */
     public static final double STORAGE_COST_PER_GB_PER_MONTH = 0.02;
-    /** Replica maintenance cost per replica per query: storage amortized + write I/O overhead.
-     *  Each replica incurs write amplification (sync writes) + storage cost.
-     *  Paper Eq 2 includes C_IO for replicas. This makes replica cost visible in Fig 7. */
-    public static final double REPLICA_MAINTENANCE_COST_PER_QUERY = 0.002;
+    /**
+     * Coût de maintenance par réplica par requête.
+     * Paper Eq. 2 : C_Q = C_CPU + C_IO + C_bandwidth uniquement.
+     * Le stockage est implicitement capturé dans C_IO lors de la création.
+     * Valeur 0.0 pour rester fidèle au modèle économique du papier.
+     */
+    public static final double REPLICA_MAINTENANCE_COST_PER_QUERY = 0.0;
 
     // ==================================================================
     // Network Parameters
@@ -107,8 +125,8 @@ public final class TcdrmConstants {
     // ==================================================================
     // Simulation (Paper Section 4.1)
     // ==================================================================
-    /** Number of queries per experiment (Paper: 1000, WhatsApp: 3000) */
-    public static final int MAX_QUERIES = 3000;
+    /** Number of queries per experiment (Paper Section 4.1: 1000) */
+    public static final int MAX_QUERIES = 1000;
     /**
      * Budget initial du locataire ($).
      * Calibré à 2× le coût total attendu sous CSLA (simple: 3000×0.010×2 = 60$).
@@ -117,34 +135,10 @@ public final class TcdrmConstants {
     public static final double INITIAL_BUDGET = 60.0;
     
     // ==================================================================
-    // Popularité pour la réplication (EMA avec décroissance exponentielle)
-    // Basé sur Redis LFU et algorithmes de ranking avec time decay
+    // Popularité (Paper Table 2)
     // ==================================================================
-    /** Ratio lecture/écriture pour workload OLAP (beaucoup de lectures) */
-    public static final double READ_WRITE_RATIO = 0.9; // 90% lectures, 10% écritures
-    /** Fenêtre temporelle pour calculer la fréquence (nombre de requêtes) */
-    public static final int POPULARITY_WINDOW = 50;
-    
-    // === EMA (Exponential Moving Average) pour popularité réaliste ===
-    // Formule: popularity(t) = α × access_score + (1-α) × popularity(t-1)
-    // où α = 1 - e^(-1/half_life) pour une demi-vie de half_life requêtes
-    
-    /** Half-life en nombre de requêtes (après N requêtes, la popularité décroît de 50%) */
-    public static final int POPULARITY_HALF_LIFE = 20; // plus réactif
-    /** Facteur de lissage EMA calculé à partir de half-life: α = 1 - e^(-ln(2)/half_life) */
-    public static final double EMA_ALPHA = 1.0 - Math.exp(-Math.log(2) / POPULARITY_HALF_LIFE);
-    /** Score d'accès de base par requête (avant normalisation) */
-    public static final double ACCESS_SCORE_BASE = 1.0;
-    /** Bonus de score pour les lectures (favorise la réplication pour workloads read-heavy) */
-    public static final double READ_BONUS_FACTOR = 1.5;
-    /** Pénalité de score pour les écritures (coût de synchronisation) */
-    public static final double WRITE_PENALTY_FACTOR = 0.3;
-    /** Seuil de popularité EMA pour déclencher la première réplication (0.0-1.0) */
-    public static final double EMA_REPLICATION_THRESHOLD = 0.4; // retour à la valeur originale
-    /** Seuil de popularité sous lequel une suppression devient envisageable (hystérésis) */
-    public static final double EMA_DELETE_THRESHOLD = 0.30; // suppression un peu plus réactive
-    /** Facteur de décroissance par requête sans accès (simule le refroidissement) */
-    public static final double DECAY_PER_QUERY = 0.998;
+    /** Ratio lecture/écriture pour workload OLAP (90% lectures). */
+    public static final double READ_WRITE_RATIO = 0.9;
 
     // ==================================================================
     // Warm-up / Gradual Replica Effectiveness
@@ -162,9 +156,15 @@ public final class TcdrmConstants {
     // une durée de vie minimale avant suppression.
     // ==================================================================
     /** Nombre minimal de requêtes avant qu'un réplica puisse être supprimé */
-    public static final int MIN_REPLICA_LIFETIME_QUERIES = 30; // ajuste plus tôt sans oscillations
+    public static final int MIN_REPLICA_LIFETIME_QUERIES = 30;
     /** Cooldown de re-création après une suppression pour éviter re-création immédiate */
     public static final int REPLICA_RECREATE_COOLDOWN_QUERIES = 80;
+    /**
+     * Fenêtre glissante de popularité. Un fragment accédé dans les dernières
+     * POPULARITY_WINDOW_QUERIES requêtes est "encore utilisé" : son réplica est protégé
+     * contre la suppression tant que les données restent populaires.
+     */
+    public static final int POPULARITY_WINDOW_QUERIES = 50;
 
     // ==================================================================
     // Query Execution Model

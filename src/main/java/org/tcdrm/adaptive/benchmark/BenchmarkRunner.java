@@ -105,14 +105,11 @@ public class BenchmarkRunner {
             if ("qlearning".equals(modelType)) {
                 action = bridge.selectActionQLearning(state);
             } else {
-                action = bridge.selectActionDQN(state);
+                action = bridge.selectActionRainbow(state);
             }
 
-            // DELETE silencieux si popularité dépasse le seuil PSLA dynamique de la simulation
-            boolean deleteSilentlyBlocked = (action == 2 && canDelete
-                && sim.getEmaPopularity() >= sim.getDynamicPSlaLo());
             boolean lastAssignmentSuccess = !((action == 1 && !canReplicate)
-                || (action == 2 && !canDelete) || deleteSilentlyBlocked);
+                || (action == 2 && !canDelete));
 
             // Execute the query
             TcdrmSimulation.QueryResult result = sim.executeRLQuery(action);
@@ -128,7 +125,7 @@ public class BenchmarkRunner {
             if (ringCount < 10) ringCount++;
 
             double reward = calculateReward(result, tSla, effectiveCsla, action,
-                lastAssignmentSuccess, complex, actionRing, ringCount);
+                lastAssignmentSuccess, complex, actionRing, ringCount, sim, cSlaRef);
             // Next-state CSLA (budget already decremented by executeRLQuery)
             int remainingNext = Math.max(1, maxQ - q - 1);
             double effectiveCslaNext = Math.min(cSlaRef,
@@ -139,7 +136,7 @@ public class BenchmarkRunner {
             if ("qlearning".equals(modelType)) {
                 bridge.updateQLearning(reward, nextState, done);
             } else {
-                bridge.updateDQN(reward, nextState, done);
+                bridge.updateRainbow(reward, nextState, done);
             }
 
             data.addQueryResult(
@@ -154,12 +151,14 @@ public class BenchmarkRunner {
     }
 
     /**
-     * Reward aligned with TrainingEnvironment.calculateReward() (DQN_TCDRM_v2.md spec):
-     *   R = r1·SLA_OK − r2·SLA_VIOL − r3·COST_OVER − r4·REPL_COST − r5·THRASH
+     * Reward mirroring TrainingEnvironment.calculateReward() exactly — prevents train/eval divergence.
+     *   R = r1·SLA_OK − r2·SLA_VIOL − r3·COST_OVER(budgetUrgency) − r4·REPL_COST
+     *       − r5·PREMATURE_REPL + r6·CORRECT_TRIGGER − r7·THRASH − r8·MAINT − r9·INVALID
      */
     private static double calculateReward(TcdrmSimulation.QueryResult result, double tSla, double cSla,
                                            int action, boolean lastAssignmentSuccess, boolean complex,
-                                           int[] actionRing, int ringCount) {
+                                           int[] actionRing, int ringCount,
+                                           TcdrmSimulation sim, double cSlaFull) {
         double latency = result.queryTimeMs();
         int replicas = result.replicaCount();
 
@@ -172,28 +171,48 @@ public class BenchmarkRunner {
         // SLA_VIOL: proportional penalty when latency exceeds tSla (r2=20)
         double rewardQueuePenalty = -20.0 * Math.max(0.0, tQ_norm - 1.0);
 
-        // COST_OVER: penalty when per-query cost exceeds C_SLA (r3=15)
-        double costOverPenalty = -15.0 * Math.max(0.0, cQ_norm - 1.0);
+        // COST_OVER: budget-urgency-scaled penalty (r3=15, urgency 1.0→2.0 as budget depletes)
+        double budgetRatio = sim.getCurrentBudget() / TcdrmConstants.INITIAL_BUDGET;
+        double budgetUrgency = 1.0 + Math.max(0.0, 1.0 - budgetRatio);
+        double costOverPenalty = -15.0 * budgetUrgency * Math.max(0.0, cQ_norm - 1.0);
 
-        // REPL_COST: actual bandwidth cost of creating a replica, normalized (r4=5)
+        // REPL_COST, PREMATURE_REPL, CORRECT_TRIGGER
         double replCostPenalty = 0.0;
+        double prematureReplPenalty = 0.0;
+        double correctTriggerBonus = 0.0;
         if (action == 1 && lastAssignmentSuccess) {
             double dataGb = TcdrmConstants.queryDataSizeGb(complex);
             replCostPenalty = -5.0 * (dataGb * TcdrmConstants.COST_BW_INTER_PROVIDER)
                 / Math.max(1.0, TcdrmConstants.INITIAL_BUDGET);
+
+            double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
+            prematureReplPenalty = -5.0 * slaMargin;
+
+            boolean slaViolated = latency > tSla || result.totalCost() > cSlaFull;
+            if (slaViolated && sim.isWorkloadStabilized()) {
+                correctTriggerBonus = 8.0;
+            }
+        }
+
+        // PREMATURE_DELETE: symmetric penalty — prevents thrashing by penalising DELETE when SLA OK
+        double prematureDeletePenalty = 0.0;
+        if (action == 2 && lastAssignmentSuccess) {
+            double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
+            prematureDeletePenalty = -5.0 * slaMargin;
         }
 
         // THRASH: penalise rapid alternation of REPLICATE/DELETE (r5=8)
         double thrashPenalty = isRingThrashing(actionRing, ringCount) ? -8.0 : 0.0;
 
-        // Light maintenance cost per active replica (encourages parsimony)
-        double rewardUnutilization = -0.05 * replicas;
+        // Light maintenance cost per active replica (reduced 0.05→0.01 to match training)
+        double rewardUnutilization = -0.01 * replicas;
 
         // Invalid action signal
         double rewardInvalidAction = lastAssignmentSuccess ? 0.0 : -2.0;
 
         return rewardWaitTime + rewardQueuePenalty + costOverPenalty
-            + replCostPenalty + thrashPenalty + rewardUnutilization + rewardInvalidAction;
+            + replCostPenalty + prematureReplPenalty + prematureDeletePenalty + correctTriggerBonus
+            + thrashPenalty + rewardUnutilization + rewardInvalidAction;
     }
 
     private static boolean isRingThrashing(int[] ring, int count) {
