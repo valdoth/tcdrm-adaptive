@@ -133,17 +133,19 @@ public class TcdrmMain {
         
         PythonRLBridge bridge = waitForPythonConnection(opts.pythonConnectTimeoutSec);
         if (bridge != null) {
+            // Même seed 42L que norep/tcdrm : garantit que la phase pré-réplication
+            // produit un bruit réseau identique, rendant la comparaison équitable.
             bridge.resetCounters();
-            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
+            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 42L);
 
             bridge.resetCounters();
-            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 2000L);
+            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 42L);
 
             bridge.resetCounters();
-            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
+            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 42L);
 
             bridge.resetCounters();
-            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 4000L);
+            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 42L);
             
             qlSimple.printSummary();
             rainbowSimple.printSummary();

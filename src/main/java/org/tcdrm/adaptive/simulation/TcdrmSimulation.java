@@ -24,7 +24,7 @@ public class TcdrmSimulation {
     private final Random rnd;
     private final boolean complex;
 
-    private final String execProvider;
+    private String execProvider;
     private String execRegion;
 
     private int currentReplicaCount;
@@ -154,6 +154,9 @@ public class TcdrmSimulation {
 
         // Choisir le meilleur site d'exécution (primaires + réplicas déjà créés)
         String[] optSite = findOptimalExecSite(active);
+        this.execProvider = optSite[0];
+        this.execRegion = optSite[1];
+        placementOptimizer.recordExecution(optSite[0], optSite[1]);
         QueryCloudlet query = new QueryCloudlet(queryCount, complex, active);
         query.execute(infrastructure, optSite[0], optSite[1], rnd);
 
@@ -220,6 +223,9 @@ public class TcdrmSimulation {
         // Évaluer tous les sites d'exécution possibles (provider × région) et choisir
         // celui qui minimise le temps de transfert analytique pour CES fragments.
         String[] optSite = findOptimalExecSite(active);
+        this.execProvider = optSite[0];
+        this.execRegion = optSite[1];
+        placementOptimizer.recordExecution(optSite[0], optSite[1]);
         QueryCloudlet query = new QueryCloudlet(queryCount, complex, active);
         query.execute(infrastructure, optSite[0], optSite[1], rnd);
 
@@ -340,13 +346,18 @@ public class TcdrmSimulation {
             DataFragment f = fragments.get(i);
             if (!f.hasReplica()) continue;
             if (f.getQueriesSinceReplication() < TcdrmConstants.MIN_REPLICA_LIFETIME_QUERIES) continue;
-            // Protéger les données encore activement utilisées
             if (f.isStillPopular(queryCount, TcdrmConstants.POPULARITY_WINDOW_QUERIES)) continue;
 
-            // Parmi les éligibles, préférer le moins récemment accédé
+            // Score deletion candidates: prefer falling trend + oldest access
+            // trend: -1=falling (prefer delete), 0=stable, +1=rising (avoid delete)
+            int trend = f.getPopularityTrend();
+            if (trend > 0) continue;  // never delete rising-popularity replicas
+
             int lastAccess = f.getLastAccessedQuery();
-            if (lastAccess < oldestAccess) {
-                oldestAccess = lastAccess;
+            // Encode: falling trend = very old access score, stable = normal
+            int effectiveAge = trend < 0 ? (lastAccess - 10000) : lastAccess;
+            if (effectiveAge < oldestAccess) {
+                oldestAccess = effectiveAge;
                 bestIdx = i;
             }
         }
