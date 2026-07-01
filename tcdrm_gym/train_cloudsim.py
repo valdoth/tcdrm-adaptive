@@ -222,7 +222,8 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
     
 	final_path = save_path.replace('.pkl', '_final.pkl')
 	agent.save(final_path)
-    
+	agent.save(save_path)  # also save under the canonical path expected by the benchmark
+
 	csv_logger.close()
 	if tb_writer is not None:
 		try:
@@ -384,6 +385,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 
 	final_path = save_path.replace('.pt', '_final.pt')
 	agent.save(final_path)
+	agent.save(save_path)  # also save under the canonical path expected by the benchmark
 
 	csv_logger.close()
 	if tb_writer is not None:

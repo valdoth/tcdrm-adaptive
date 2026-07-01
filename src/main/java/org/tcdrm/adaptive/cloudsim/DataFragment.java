@@ -42,6 +42,12 @@ public class DataFragment {
     // Utilisé pour déterminer si les données sont "encore utilisées" avant toute suppression.
     private int lastAccessedQuery = -1;
 
+    // Sliding window for access rate trending (two half-windows: recent vs older)
+    private static final int TREND_WINDOW = 100;  // queries per half-window
+    private int recentHalfCount = 0;   // accesses in last TREND_WINDOW queries
+    private int olderHalfCount  = 0;   // accesses in previous TREND_WINDOW queries
+    private int halfWindowStart = 0;   // query index when current half started
+
     public DataFragment(int id, String name, String primaryProvider, String primaryRegion) {
         this(id, name, TcdrmConstants.AVG_RELATION_SIZE_GB, primaryProvider, primaryRegion);
     }
@@ -199,6 +205,13 @@ public class DataFragment {
     public void recordAccess(int queryIndex) {
         accessCount++;
         lastAccessedQuery = queryIndex;
+        // Advance the half-window if TREND_WINDOW queries have elapsed
+        if (queryIndex - halfWindowStart >= TREND_WINDOW) {
+            olderHalfCount = recentHalfCount;
+            recentHalfCount = 0;
+            halfWindowStart = queryIndex;
+        }
+        recentHalfCount++;
     }
 
     /** Rétro-compatibilité — préférer {@link #recordAccess(int)} avec l'index de requête. */
@@ -225,7 +238,24 @@ public class DataFragment {
     public void resetAccessStats() {
         this.accessCount = 0;
         this.lastAccessedQuery = -1;
+        this.recentHalfCount = 0;
+        this.olderHalfCount = 0;
+        this.halfWindowStart = 0;
     }
+
+    /**
+     * Returns popularity trend: +1 rising, 0 stable, -1 falling.
+     * Inspired by first-order differential equation approach (IRE 2019 paper).
+     */
+    public int getPopularityTrend() {
+        if (olderHalfCount == 0) return 0;  // not enough history
+        double ratio = (double) recentHalfCount / olderHalfCount;
+        if (ratio > 1.3) return +1;   // 30%+ increase → rising
+        if (ratio < 0.7) return -1;   // 30%+ decrease → falling
+        return 0;
+    }
+
+    public int getRecentAccessCount() { return recentHalfCount; }
 
     // 0 = intra-DC, 1 = inter-region, 2 = inter-provider
     private static int locationRank(String sp, String sr, String ep, String er) {

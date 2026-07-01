@@ -151,11 +151,13 @@ public class TrainingEnvironment {
      */
     public StepResult step(int action) {
         // Déterminer validité de l'action (action masking — miroir de getActionMask)
-        // Sujet 1 : l'agent RL décide librement de répliquer ou supprimer ; la reward function
-        // lui enseigne quand c'est profitable — pas de gate statique sur la popularité.
         int maxEp = settings.getMaxEpisodeLength() > 0 ? settings.getMaxEpisodeLength() : TcdrmConstants.MAX_QUERIES;
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-        boolean canReplicate = lastReplicaCount < maxReplicas && simulation.getCurrentBudget() > 0;
+        // Popularity gate: block REPLICATE until MIN_POPULARITY_TO_REPLICATE so training
+        // matches evaluation and the pre-replication phase aligns with NoRepLC/TCDRM.
+        boolean popularityGateOpen = simulation.getPopularityScore() >= TcdrmConstants.MIN_POPULARITY_TO_REPLICATE;
+        if (action == 1 && !popularityGateOpen) action = 0;
+        boolean canReplicate = popularityGateOpen && lastReplicaCount < maxReplicas && simulation.getCurrentBudget() > 0;
         boolean canDelete = lastReplicaCount > 0;
         lastInvalidAction = (action == 1 && !canReplicate) || (action == 2 && !canDelete);
         lastAssignmentSuccess = !lastInvalidAction;
@@ -274,15 +276,22 @@ public class TrainingEnvironment {
             // LOW_POPULARITY : pénalité maximale au query 0, nulle à partir de P_SLA.
             lowPopularityPenalty = -settings.getRewardLowPopularity() * (1.0 - popularityScore);
 
-            // PREMATURE_REPL : pénalité si on réplique sans pression SLA réelle.
-            // slaMargin ∈ [0,1] : 1=latence nulle (très prématuré), 0=SLA violé (justifié).
+            // PREMATURE_REPL : pénalité si on réplique quand les données ne sont pas encore connues.
             double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
-            prematureReplPenalty = -settings.getRewardPrematureRepl() * slaMargin;
+            // After stabilization data is fully popular: no premature penalty so the agent
+            // can freely add replicas beyond the first batch without being penalised when
+            // latency happens to be below T_SLA.
+            double effectiveMargin = simulation.isWorkloadStabilized()
+                ? 0.0
+                : Math.max(slaMargin, 1.0 - popularityScore);
+            prematureReplPenalty = -settings.getRewardPrematureRepl() * effectiveMargin;
 
-            // CORRECT_TRIGGER : bonus quand l'agent réplique exactement selon l'Algorithme 1 :
-            // (T_SLA violé OU C_SLA violé) ET workload stabilisé (condition popularité P_SLA).
+            // CORRECT_TRIGGER : bonus quand l'agent réplique alors que SLA est violé et données
+            // suffisamment connues. Seuil aligné sur MIN_POPULARITY_TO_REPLICATE (gate = 0.3)
+            // pour couvrir les queries 60-100 (nouvelle zone morte post-gate).
             boolean slaViolated = latency > tSla || result.totalCost() > cSla;
-            if (slaViolated && simulation.isWorkloadStabilized()) {
+            if (slaViolated && (simulation.isWorkloadStabilized()
+                    || popularityScore >= TcdrmConstants.MIN_POPULARITY_TO_REPLICATE)) {
                 correctTriggerBonus = settings.getRewardCorrectTrigger();
             }
         }
@@ -368,7 +377,8 @@ public class TrainingEnvironment {
     /** Masque d'actions valides: [noop, replicate, delete] */
     public boolean[] getActionMask() {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-        boolean canReplicate = lastReplicaCount < maxReplicas && simulation.getCurrentBudget() > 0;
+        boolean popularityGateOpen = simulation.getPopularityScore() >= TcdrmConstants.MIN_POPULARITY_TO_REPLICATE;
+        boolean canReplicate = popularityGateOpen && lastReplicaCount < maxReplicas && simulation.getCurrentBudget() > 0;
         boolean canDelete = lastReplicaCount > 0;
         return new boolean[] { true, canReplicate, canDelete };
     }

@@ -97,16 +97,22 @@ public class BenchmarkRunner {
 
             // Determine action validity (mirrors TrainingEnvironment.step() / getActionMask())
             int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-            boolean canReplicate = lastReplicaCount < maxReplicas && sim.getCurrentBudget() > 0;
+            // Popularity gate: block REPLICATE until data reaches MIN_POPULARITY_TO_REPLICATE.
+            // Aligns the pre-replication phase with NoRepLC/TCDRM (same seed → same jitter)
+            // so the comparison is fair. Agent decides freely above the threshold.
+            boolean popularityGateOpen = sim.getPopularityScore() >= TcdrmConstants.MIN_POPULARITY_TO_REPLICATE;
+            boolean canReplicate = popularityGateOpen && lastReplicaCount < maxReplicas && sim.getCurrentBudget() > 0;
             boolean canDelete = lastReplicaCount > 0;
 
-            // Get action from Python RL bridge (no policy assist override)
+            // Get action from Python RL bridge
             int action;
             if ("qlearning".equals(modelType)) {
                 action = bridge.selectActionQLearning(state);
             } else {
                 action = bridge.selectActionRainbow(state);
             }
+            // Enforce popularity gate: downgrade REPLICATE to NOOP when gate is closed
+            if (action == 1 && !popularityGateOpen) action = 0;
 
             boolean lastAssignmentSuccess = !((action == 1 && !canReplicate)
                 || (action == 2 && !canDelete));
@@ -190,10 +196,20 @@ public class BenchmarkRunner {
             lowPopularityPenalty = -5.0 * (1.0 - popularityScore);
 
             double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
-            prematureReplPenalty = -5.0 * slaMargin;
+            // After stabilization data is fully popular: no premature penalty so the agent
+            // can freely add replicas beyond the first batch without being penalised when
+            // latency happens to be below T_SLA.
+            double effectiveMargin = sim.isWorkloadStabilized()
+                ? 0.0
+                : Math.max(slaMargin, 1.0 - popularityScore);
+            prematureReplPenalty = -5.0 * effectiveMargin;
 
             boolean slaViolated = latency > tSla || result.totalCost() > cSlaFull;
-            if (slaViolated && sim.isWorkloadStabilized()) {
+            // Threshold aligned with MIN_POPULARITY_TO_REPLICATE (gate opens at 0.3)
+            // so the bonus fires as soon as the agent is allowed to replicate (query 60),
+            // not only from query 100 (0.5 × P_SLA) — closes the post-gate dead zone.
+            if (slaViolated && (sim.isWorkloadStabilized()
+                    || popularityScore >= TcdrmConstants.MIN_POPULARITY_TO_REPLICATE)) {
                 correctTriggerBonus = 8.0;
             }
         }

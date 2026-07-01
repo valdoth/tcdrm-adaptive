@@ -75,13 +75,13 @@ public final class TcdrmAdapter {
     // =========================
 
     /** Run Q-Learning on simple workload only. Outputs go to images/ and metrics/. */
-    public static void runQlearningSimple(int gatewayTimeoutSec) { runSingleRL("qlearning", false, 1000L, gatewayTimeoutSec); }
+    public static void runQlearningSimple(int gatewayTimeoutSec) { runSingleRL("qlearning", false, 42L, gatewayTimeoutSec); }
     /** Run Q-Learning on complex workload only. */
-    public static void runQlearningComplex(int gatewayTimeoutSec) { runSingleRL("qlearning", true, 3000L, gatewayTimeoutSec); }
+    public static void runQlearningComplex(int gatewayTimeoutSec) { runSingleRL("qlearning", true, 42L, gatewayTimeoutSec); }
     /** Run DQN on simple workload only. */
-    public static void runRainbowSimple(int gatewayTimeoutSec) { runSingleRL("rainbow", false, 2000L, gatewayTimeoutSec); }
+    public static void runRainbowSimple(int gatewayTimeoutSec) { runSingleRL("rainbow", false, 42L, gatewayTimeoutSec); }
     /** Run DQN on complex workload only. */
-    public static void runRainbowComplex(int gatewayTimeoutSec) { runSingleRL("rainbow", true, 4000L, gatewayTimeoutSec); }
+    public static void runRainbowComplex(int gatewayTimeoutSec) { runSingleRL("rainbow", true, 42L, gatewayTimeoutSec); }
 
     /** Run Q-Learning on simple then complex workloads within a single Python session. */
     public static void runQlearningBoth(int gatewayTimeoutSec) {
@@ -101,7 +101,7 @@ public final class TcdrmAdapter {
             if (!bridge.isQLearningReady()) throw new IllegalStateException("Python Q-Learning model not loaded. Aborting run.");
 
             bridge.resetCounters();
-            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
+            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 42L);
             try {
                 BenchmarkExporter.exportPerQueryCsv(qlSimple, "metrics/rl_qlearning_simple.csv");
                 BenchmarkExporter.exportOvertimeAverages(qlSimple, "metrics/log_overtime.csv", 100);
@@ -112,7 +112,7 @@ public final class TcdrmAdapter {
             }
 
             bridge.resetCounters();
-            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
+            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 42L);
             try {
                 BenchmarkExporter.exportPerQueryCsv(qlComplex, "metrics/rl_qlearning_complex.csv");
                 BenchmarkExporter.exportOvertimeAverages(qlComplex, "metrics/log_overtime.csv", 100);
@@ -149,7 +149,7 @@ public final class TcdrmAdapter {
             if (!bridge.isRainbowReady()) throw new IllegalStateException("Python Rainbow DQN model not loaded. Aborting run.");
 
             bridge.resetCounters();
-            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 2000L);
+            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 42L);
             try {
                 BenchmarkExporter.exportPerQueryCsv(rainbowSimple, "metrics/rl_rainbow_simple.csv");
                 BenchmarkExporter.exportOvertimeAverages(rainbowSimple, "metrics/log_overtime.csv", 100);
@@ -160,7 +160,7 @@ public final class TcdrmAdapter {
             }
 
             bridge.resetCounters();
-            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 4000L);
+            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 42L);
             try {
                 BenchmarkExporter.exportPerQueryCsv(rainbowComplex, "metrics/rl_rainbow_complex.csv");
                 BenchmarkExporter.exportOvertimeAverages(rainbowComplex, "metrics/log_overtime.csv", 100);
@@ -255,10 +255,10 @@ public final class TcdrmAdapter {
             // Simple
             bridge.resetCounters();
             if (!bridge.isQLearningReady()) throw new IllegalStateException("Python Q-Learning model not loaded.");
-            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
+            BenchmarkData qlSimple = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 42L);
             bridge.resetCounters();
             if (!bridge.isRainbowReady()) throw new IllegalStateException("Python Rainbow DQN model not loaded.");
-            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 2000L);
+            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Simple", false, 42L);
             try {
                 BenchmarkExporter.exportPerQueryCsv(qlSimple, "metrics/rl_qlearning_simple.csv");
                 BenchmarkExporter.exportPerQueryCsv(rainbowSimple, "metrics/rl_rainbow_simple.csv");
@@ -276,9 +276,9 @@ public final class TcdrmAdapter {
 
             // Complex
             bridge.resetCounters();
-            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
+            BenchmarkData qlComplex = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 42L);
             bridge.resetCounters();
-            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 4000L);
+            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_Complex", true, 42L);
             try {
                 BenchmarkExporter.exportPerQueryCsv(qlComplex, "metrics/rl_qlearning_complex.csv");
                 BenchmarkExporter.exportPerQueryCsv(rainbowComplex, "metrics/rl_rainbow_complex.csv");
@@ -319,13 +319,13 @@ public final class TcdrmAdapter {
             if (!bridge.isQLearningReady()) {
                 throw new IllegalStateException("Python Q-Learning model not loaded. Aborting two-model run.");
             }
-            BenchmarkData ql = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_" + (complex?"Complex":"Simple"), complex, complex?3000L:1000L);
+            BenchmarkData ql = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_" + (complex?"Complex":"Simple"), complex, 42L);
 
             bridge.resetCounters();
             if (!bridge.isRainbowReady()) {
                 throw new IllegalStateException("Python Rainbow DQN model not loaded. Aborting two-model run.");
             }
-            BenchmarkData rainbow = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_" + (complex?"Complex":"Simple"), complex, complex?4000L:2000L);
+            BenchmarkData rainbow = BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_" + (complex?"Complex":"Simple"), complex, 42L);
 
             // Export CSVs
             try {
@@ -366,10 +366,10 @@ public final class TcdrmAdapter {
         new File("metrics").mkdirs();
 
         System.out.println("\n[4-model] Running NoRepLc and TCDRM baselines...");
-        BenchmarkData norepSimple  = BenchmarkRunner.runNoRep(1000L, false, "NoRepLc_Simple");
-        BenchmarkData tcdrmSimple  = BenchmarkRunner.runTcdrm(1000L, false, "TCDRM_Simple");
-        BenchmarkData norepComplex = BenchmarkRunner.runNoRep(3000L, true,  "NoRepLc_Complex");
-        BenchmarkData tcdrmComplex = BenchmarkRunner.runTcdrm(3000L, true,  "TCDRM_Complex");
+        BenchmarkData norepSimple  = BenchmarkRunner.runNoRep(42L, false, "NoRepLc_Simple");
+        BenchmarkData tcdrmSimple  = BenchmarkRunner.runTcdrm(42L, false, "TCDRM_Simple");
+        BenchmarkData norepComplex = BenchmarkRunner.runNoRep(42L, true,  "NoRepLc_Complex");
+        BenchmarkData tcdrmComplex = BenchmarkRunner.runTcdrm(42L, true,  "TCDRM_Complex");
 
         try {
             BenchmarkExporter.exportPerQueryCsv(norepSimple,  "metrics/baseline_norep_simple.csv");
@@ -394,15 +394,15 @@ public final class TcdrmAdapter {
 
             System.out.println("\n[4-model] Running Q-Learning and Rainbow DQN (simple)...");
             bridge.resetCounters();
-            BenchmarkData qlSimple  = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 1000L);
+            BenchmarkData qlSimple  = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Simple", false, 42L);
             bridge.resetCounters();
-            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow",       "Rainbow_Simple",       false, 2000L);
+            BenchmarkData rainbowSimple = BenchmarkRunner.runRL(bridge, "rainbow",       "Rainbow_Simple",       false, 42L);
 
             System.out.println("\n[4-model] Running Q-Learning and Rainbow DQN (complex)...");
             bridge.resetCounters();
-            BenchmarkData qlComplex  = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 3000L);
+            BenchmarkData qlComplex  = BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_Complex", true, 42L);
             bridge.resetCounters();
-            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow",       "Rainbow_Complex",       true, 4000L);
+            BenchmarkData rainbowComplex = BenchmarkRunner.runRL(bridge, "rainbow",       "Rainbow_Complex",       true, 42L);
 
             try {
                 // Per-query CSVs

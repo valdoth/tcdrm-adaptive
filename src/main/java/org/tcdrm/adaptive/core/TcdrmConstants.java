@@ -63,6 +63,13 @@ public final class TcdrmConstants {
     public static final int MAX_REPLICAS_SIMPLE = 6;
     /** Max replicas for complex queries (Fig 2: blue line stabilizes at 12) */
     public static final int MAX_REPLICAS_COMPLEX = 12;
+    /**
+     * Minimum popularityScore (accessCount/P_SLA) before the RL agent is allowed to replicate.
+     * = 0.3 → gate opens at query 60 (30% of P_SLA).
+     * Aligns the pre-replication phase with NoRepLC/TCDRM so the initial states are identical,
+     * making the comparison fair. Agent decides freely above this threshold.
+     */
+    public static final double MIN_POPULARITY_TO_REPLICATE = 0.3;
 
     // ==================================================================∏
     // Bandwidth Costs (Paper Table 1 — img-001.png, averages)
