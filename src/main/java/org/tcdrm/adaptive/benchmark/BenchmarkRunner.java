@@ -75,10 +75,14 @@ public class BenchmarkRunner {
         double cumulCost = 0;
         double lastLatency = 0;
         double lastCost = 0;
-        // TSLA adaptatif : utilise la valeur dynamique de la simulation (Axe 4)
-        double tSla = sim.getDynamicTSla();
         // CSLA de référence (budget total / nombre de requêtes) — le budget total est statique
         double cSlaRef = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
+        // TSLA et P_SLA (gate popularité) adaptatifs (Axe 4) : miroir exact de la méta-adaptation
+        // par fenêtre glissante de TrainingEnvironment, pour que l'évaluation applique la même
+        // logique que l'entraînement au lieu d'un seuil figé au contrat.
+        double contractTSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
+        AdaptiveThresholds thresholds = new AdaptiveThresholds(
+            contractTSla, TcdrmConstants.MIN_POPULARITY_TO_REPLICATE, cSlaRef);
         int lastReplicaCount = 0;
 
         // Ring buffer for thrash detection (mirrors TrainingEnvironment)
@@ -97,10 +101,10 @@ public class BenchmarkRunner {
 
             // Determine action validity (mirrors TrainingEnvironment.step() / getActionMask())
             int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-            // Popularity gate: block REPLICATE until data reaches MIN_POPULARITY_TO_REPLICATE.
+            // Popularity gate: block REPLICATE until data reaches the adaptive P_SLA gate.
             // Aligns the pre-replication phase with NoRepLC/TCDRM (same seed → same jitter)
             // so the comparison is fair. Agent decides freely above the threshold.
-            boolean popularityGateOpen = sim.getPopularityScore() >= TcdrmConstants.MIN_POPULARITY_TO_REPLICATE;
+            boolean popularityGateOpen = sim.getPopularityScore() >= thresholds.getDynamicMinPopularity();
             boolean canReplicate = popularityGateOpen && lastReplicaCount < maxReplicas && sim.getCurrentBudget() > 0;
             boolean canDelete = lastReplicaCount > 0;
 
@@ -124,6 +128,12 @@ public class BenchmarkRunner {
             lastLatency = result.queryTimeMs();
             lastCost = result.totalCost();
             lastReplicaCount = result.replicaCount();
+
+            // Alimente la fenêtre glissante de méta-adaptation TSLA/P_SLA (Axe 4) et propage
+            // immédiatement le seuil vivant à la simulation (normalisation de l'état RL).
+            thresholds.recordQuery(lastLatency, lastCost);
+            sim.setDynamicThresholds(thresholds.getDynamicTSla());
+            double tSla = thresholds.getDynamicTSla();
 
             // Record action for thrash detection then compute reward
             actionRing[ringPos % 10] = action;
@@ -151,6 +161,7 @@ public class BenchmarkRunner {
                 result.cpuCost(), 0, tSla
             );
         }
+        thresholds.flush();
 
         System.out.println("      " + modelType.toUpperCase() + " terminé (adaptive online)");
         return data;
@@ -243,5 +254,118 @@ public class BenchmarkRunner {
             else if (a == 2) deletes++;
         }
         return replicates >= 2 && deletes >= 2;
+    }
+
+    /**
+     * Miroir exact de la méta-adaptation TSLA/P_SLA de TrainingEnvironment (fenêtre glissante,
+     * Sujet 1) — garantit que l'évaluation (runRL, passe unique de maxQ requêtes) applique la
+     * même logique d'adaptation que l'entraînement au lieu d'un seuil figé au contrat. Le stress
+     * (violations/coût) est mesuré sur une fenêtre glissante de CHECK_INTERVAL requêtes plutôt
+     * que sur l'ensemble de la passe : la phase de démarrage (avant que les réplicas ne
+     * stabilisent le système) est naturellement en forte violation SLA, un signal qui serait
+     * dilué et invisible sur une moyenne complète (ex: 1000 requêtes).
+     */
+    private static final class AdaptiveThresholds {
+        private static final int CHECK_INTERVAL = 100;
+
+        private enum State { CONSERVATIVE, BALANCED, AGGRESSIVE }
+
+        private final double contractTSla;
+        private final double contractMinPopularity;
+        private final double cslaRef;
+
+        private double dynamicTSla;
+        private double dynamicMinPopularity;
+        private State state = State.BALANCED;
+        private int consecutiveViolationWindows = 0;
+        private int consecutiveCostOverWindows  = 0;
+
+        private int windowViolations = 0;
+        private double windowCost = 0.0;
+        private int windowQueries = 0;
+
+        AdaptiveThresholds(double contractTSla, double contractMinPopularity, double cslaRef) {
+            this.contractTSla = contractTSla;
+            this.contractMinPopularity = contractMinPopularity;
+            this.cslaRef = cslaRef;
+            this.dynamicTSla = contractTSla;
+            this.dynamicMinPopularity = contractMinPopularity;
+        }
+
+        void recordQuery(double latency, double cost) {
+            windowQueries++;
+            if (latency > dynamicTSla) windowViolations++;
+            windowCost += cost;
+            if (windowQueries >= CHECK_INTERVAL) flush();
+        }
+
+        void flush() {
+            if (windowQueries <= 0) return;
+            double violationRate = (double) windowViolations / windowQueries;
+            double avgCostRatio  = (windowCost / windowQueries) / Math.max(1e-9, cslaRef);
+            adapt(violationRate, avgCostRatio);
+            windowViolations = 0;
+            windowCost = 0.0;
+            windowQueries = 0;
+        }
+
+        private void adapt(double violationRate, double avgCostRatio) {
+            boolean highViolation = violationRate > 0.20;
+            boolean highCost      = avgCostRatio   > 1.20;
+
+            consecutiveViolationWindows = highViolation ? consecutiveViolationWindows + 1 : 0;
+            consecutiveCostOverWindows  = highCost      ? consecutiveCostOverWindows  + 1 : 0;
+
+            // Réagit dès la première fenêtre en stress (miroir de TrainingEnvironment) : le stress
+            // réel de démarrage est concentré sur une seule fenêtre et déjà résorbé à la suivante.
+            boolean evtHighViolation = consecutiveViolationWindows >= 1;
+            boolean evtHighCost      = consecutiveCostOverWindows  >= 1;
+            boolean evtStable        = violationRate < 0.05 && avgCostRatio < 0.80;
+
+            State prev = state;
+            switch (state) {
+                case BALANCED:
+                    if      (evtHighCost)      state = State.CONSERVATIVE;
+                    else if (evtHighViolation) state = State.AGGRESSIVE;
+                    break;
+                case AGGRESSIVE:
+                    if (evtHighCost || evtStable) state = State.BALANCED;
+                    break;
+                case CONSERVATIVE:
+                    if (evtHighViolation || evtStable) state = State.BALANCED;
+                    break;
+            }
+            if (state != prev) {
+                consecutiveViolationWindows = 0;
+                consecutiveCostOverWindows  = 0;
+            }
+
+            double tStep = contractTSla * 0.05;
+            switch (state) {
+                case AGGRESSIVE:   dynamicTSla = Math.max(contractTSla * 0.60, dynamicTSla - tStep); break;
+                case CONSERVATIVE: dynamicTSla = Math.min(contractTSla, dynamicTSla + tStep * 0.5); break;
+                case BALANCED:     dynamicTSla = Math.min(contractTSla, dynamicTSla + tStep * 0.3); break;
+            }
+
+            double pStep = contractMinPopularity * 0.05;
+            switch (state) {
+                case AGGRESSIVE:
+                    dynamicMinPopularity = Math.max(contractMinPopularity * 0.50, dynamicMinPopularity - pStep);
+                    break;
+                case CONSERVATIVE:
+                    dynamicMinPopularity = Math.min(contractMinPopularity * 1.50, dynamicMinPopularity + pStep * 0.5);
+                    break;
+                case BALANCED:
+                    if (dynamicMinPopularity < contractMinPopularity) {
+                        dynamicMinPopularity = Math.min(contractMinPopularity, dynamicMinPopularity + pStep * 0.3);
+                    } else if (dynamicMinPopularity > contractMinPopularity) {
+                        dynamicMinPopularity = Math.max(contractMinPopularity, dynamicMinPopularity - pStep * 0.3);
+                    }
+                    break;
+            }
+        }
+
+        double getDynamicTSla() { return dynamicTSla; }
+        double getDynamicMinPopularity() { return dynamicMinPopularity; }
     }
 }

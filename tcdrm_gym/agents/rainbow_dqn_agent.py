@@ -288,7 +288,7 @@ class RainbowDQNAgent:
     """
     def __init__(
         self,
-        state_dim:          int   = 8,
+        state_dim:          int   = 9,
         action_dim:         int   = 3,
         hidden_dims:        list  = None,
         learning_rate:      float = 0.0001,
@@ -352,7 +352,11 @@ class RainbowDQNAgent:
         self.replay_buffer = PrioritizedReplayBuffer(
             buffer_capacity, beta_frames=max(buffer_capacity, 100000))
         self._nstep_buf    = NStepBuffer(self.n_step, self.discount_factor)
-        self._reward_stats = RunningMeanStd() if normalize_rewards else None
+        # Normalisation de récompense séparée par régime (simple=0, complex=1) : les échelles
+        # naturelles diffèrent (CSLA_COMPLEX ≈ 2.7× CSLA_SIMPLE, coûts/latences plus élevés en
+        # complex), donc un normalisateur unique partagé dilue le signal d'apprentissage de
+        # chaque régime dans les statistiques de l'autre.
+        self._reward_stats = {0: RunningMeanStd(), 1: RunningMeanStd()} if normalize_rewards else None
 
     # -----------------------------------------------------------------------
     # Scheduler
@@ -403,8 +407,10 @@ class RainbowDQNAgent:
 
     def update(self, state, action, reward, next_state, done):
         if self._reward_stats is not None:
-            self._reward_stats.update(reward)
-            reward = self._reward_stats.normalize(reward)
+            regime = 1 if len(state) > 8 and state[8] >= 0.5 else 0
+            stats = self._reward_stats[regime]
+            stats.update(reward)
+            reward = stats.normalize(reward)
 
         for transition in self._nstep_buf.push(state, action, reward, next_state, done):
             self.replay_buffer.push(*transition)
@@ -555,8 +561,10 @@ class RainbowDQNAgent:
             'avg_loss':         float(np.mean(self.losses[-100:])) if self.losses else 0.0,
         }
         if self._reward_stats is not None:
-            stats['reward_mean'] = float(self._reward_stats.mean)
-            stats['reward_std']  = float(np.sqrt(max(self._reward_stats.var, 0)))
+            stats['reward_mean_simple']   = float(self._reward_stats[0].mean)
+            stats['reward_std_simple']    = float(np.sqrt(max(self._reward_stats[0].var, 0)))
+            stats['reward_mean_complex']  = float(self._reward_stats[1].mean)
+            stats['reward_std_complex']   = float(np.sqrt(max(self._reward_stats[1].var, 0)))
         if sigmas:
             stats['avg_noisy_sigma'] = float(np.mean(sigmas))
         return stats
@@ -577,9 +585,11 @@ class RainbowDQNAgent:
             'v_max':             self.v_max,
             'n_step':            self.n_step,
             'reward_stats': {
-                'mean':  float(self._reward_stats.mean),
-                'var':   float(self._reward_stats.var),
-                'count': float(self._reward_stats.count),
+                regime: {
+                    'mean':  float(rs.mean),
+                    'var':   float(rs.var),
+                    'count': float(rs.count),
+                } for regime, rs in self._reward_stats.items()
             } if self._reward_stats is not None else None,
         }, path)
 
@@ -617,6 +627,16 @@ class RainbowDQNAgent:
         self.n_step             = ckpt.get('n_step', 3)
         rs = ckpt.get('reward_stats')
         if rs is not None and self._reward_stats is not None:
-            self._reward_stats.mean  = rs['mean']
-            self._reward_stats.var   = rs['var']
-            self._reward_stats.count = rs['count']
+            if 'mean' in rs:
+                # Ancien format (un seul normalisateur partagé) : réutilisé pour les deux régimes
+                for regime_stats in self._reward_stats.values():
+                    regime_stats.mean  = rs['mean']
+                    regime_stats.var   = rs['var']
+                    regime_stats.count = rs['count']
+            else:
+                for regime, regime_rs in rs.items():
+                    key = int(regime)
+                    if key in self._reward_stats:
+                        self._reward_stats[key].mean  = regime_rs['mean']
+                        self._reward_stats[key].var   = regime_rs['var']
+                        self._reward_stats[key].count = regime_rs['count']
