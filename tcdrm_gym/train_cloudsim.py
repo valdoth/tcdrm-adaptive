@@ -93,13 +93,23 @@ def to_builtin(obj):
 	return obj
 
 
-def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, seed_base: int = 42):
+def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, seed_base: int = 42,
+                     env_complex: CloudSimQLearningEnv = None):
+	"""
+	Entraîne un agent Q-Learning unique sur un mélange de requêtes simples et complexes :
+	les épisodes pairs utilisent `env` (simple), les impairs `env_complex` (si fourni).
+	Le même agent (même Q-table) accumule l'apprentissage des deux régimes — la dimension
+	is_complex de l'état (buildRLState[8]) lui permet de conditionner sa politique dessus,
+	au lieu d'entraîner un modèle par régime.
+	"""
 	print("=" * 70)
 	print("Q-LEARNING TRAINING with CloudSimPlus")
+	if env_complex is not None:
+		print("  Mixed training: simple + complex queries (single adaptive model)")
 	print("=" * 70)
-    
+
 	agent = SimpleQLearningAgent(
-		n_states=729,
+		n_states=1458,
 		n_actions=3,
 		learning_rate=float(os.environ.get('TCDRM_Q_LR', 0.08)),
 		discount_factor=float(os.environ.get('TCDRM_Q_GAMMA', 0.99)),
@@ -122,7 +132,8 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 		[
 			'episode','reward','avg10','epsilon','states_explored',
 			'sla_violations','cumulative_cost','replica_count','budget_remaining',
-			'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action'
+			'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action',
+			'dynamic_tsla','dynamic_min_popularity','replication_state'
 		]
 	)
 	# Optional TensorBoard
@@ -134,7 +145,9 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 		tb_writer = None
     
 	for episode in range(episodes):
-		state, info = env.reset(seed=seed_base + episode)
+		use_complex = (env_complex is not None) and (episode % 2 == 1)
+		active_env = env_complex if use_complex else env
+		state, info = active_env.reset(seed=seed_base + episode)
 		agent.start_episode()
 		episode_reward = 0
 		done = False
@@ -148,7 +161,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 				except Exception:
 					valid_actions = None
 			action = agent.select_action(state, valid_actions=valid_actions, training=True)
-			next_state, reward, done, truncated, info = env.step(action)
+			next_state, reward, done, truncated, info = active_env.step(action)
 			agent.update(state, action, reward, next_state, done)
 			state = next_state
 			episode_reward += reward
@@ -170,7 +183,8 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 		}
 		if isinstance(last_info, dict):
 			for k in ['sla_violations','cumulative_cost','replica_count','budget_remaining',
-					  'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action']:
+					  'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action',
+					  'dynamic_tsla','dynamic_min_popularity','replication_state']:
 				if k in last_info:
 					row[k] = last_info[k]
 		csv_logger.log(to_builtin(row))
@@ -182,7 +196,8 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 			tb_writer.add_scalar('exploration/epsilon', float(stats['epsilon']), episode)
 			if isinstance(last_info, dict):
 				for k in ['sla_violations','cumulative_cost','replica_count','budget_remaining',
-						  'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action']:
+						  'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action',
+						  'dynamic_tsla','dynamic_min_popularity']:
 					if k in last_info:
 						try:
 							tb_writer.add_scalar(f'metrics/{k}', float(last_info[k]), episode)
@@ -199,7 +214,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 					f"Budget: {last_info.get('budget_remaining','?')}"
 				)
 			# Ajouter pourcentage d'exploration
-			exploration_pct = stats['states_explored'] / 729 * 100
+			exploration_pct = stats['states_explored'] / agent.n_states * 100
 			print(
 				f"Episode {episode:4d}/{episodes} | Reward: {episode_reward:8.2f} | Avg(10): {avg_reward:8.2f} | "
 				f"ε: {stats['epsilon']:.3f} | States: {stats['states_explored']} ({exploration_pct:.1f}%){metrics_tail}"
@@ -235,39 +250,55 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	print("TRAINING COMPLETE")
 	print(f"  Best avg reward: {best_reward:.2f}")
 	print(f"  Final epsilon: {agent.epsilon:.4f}")
-	print(f"  States explored: {stats['states_explored']}/729")
+	print(f"  States explored: {stats['states_explored']}/{agent.n_states}")
 	print(f"  Model saved to: {save_path}")
 	print("=" * 70)
     
 	return agent, rewards_history
 
 
-def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 42, agent: RainbowDQNAgent = None):
+def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 42, agent: RainbowDQNAgent = None,
+                   env_complex: CloudSimEnv = None, max_episode_length: int = 1000):
 	"""
 	Entraîne un agent Rainbow DQN complet (6/6 composants Rainbow) :
 	  Double DQN + Dueling + PER + N-step(3) + NoisyLinear + C51 Distributional.
 
 	NoisyLinear remplace epsilon-greedy : l'agent explore via son bruit appris (sigma).
 	C51 modélise la distribution complète des retours → meilleure politique sous incertitude.
+
+	Entraîné sur un mélange de requêtes simples et complexes (épisodes pairs/impairs) : le même
+	réseau apprend les deux régimes, la dimension is_complex de l'état (buildRLState[8]) lui
+	permettant de conditionner sa politique dessus au lieu d'un modèle séparé par régime.
 	"""
 	print("=" * 70)
 	print("RAINBOW DQN TRAINING with CloudSimPlus")
 	print("  Components: Double DQN + Dueling + PER + N-step + Noisy + C51")
+	if env_complex is not None:
+		print("  Mixed training: simple + complex queries (single adaptive model)")
 	print("=" * 70)
 
 	if agent is None:
+		# Le scheduler cosinus doit décroître sur toute la durée réelle de l'entraînement,
+		# sinon le LR tombe à eta_min bien avant la fin et les derniers épisodes n'apprennent
+		# quasiment plus (observé avec T_max=20000 fixe : déjà atteint vers l'épisode ~20-21
+		# alors qu'un Rainbow DQN avec C51+PER+NoisyNet a besoin de bien plus d'épisodes pour
+		# converger sur un état 9D face au Q-learning tabulaire).
+		total_steps_estimate = max(20000, episodes * max_episode_length)
 		agent = RainbowDQNAgent(
-			state_dim=8,
+			state_dim=9,
 			action_dim=3,
-			hidden_dims=[128, 128],
+			# Capacité augmentée (128→256) : le réseau doit maintenant distinguer deux régimes
+			# (simple/complex, via la dimension is_complex) au lieu d'un seul, ce qui demande
+			# plus de capacité pour affiner la politique au-delà du plateau observé à 128.
+			hidden_dims=[256, 256],
 			learning_rate=0.0001,
 			discount_factor=0.99,
 			buffer_capacity=100000,
-			batch_size=32,
+			batch_size=64,
 			tau=0.005,
 			gradient_clip=10.0,
 			lr_scheduler='cosine',
-			scheduler_params={'T_max': 20000, 'eta_min': 1e-6},
+			scheduler_params={'T_max': total_steps_estimate, 'eta_min': 1e-6},
 			n_step=3,
 			min_buffer_size=1500,
 			normalize_rewards=True,
@@ -287,7 +318,8 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			'episode', 'reward', 'avg10', 'buffer', 'avg_noisy_sigma',
 			'sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
 			'reward_wait_time', 'reward_unutilization', 'reward_queue_penalty',
-			'reward_invalid_action', 'avg_loss'
+			'reward_invalid_action', 'avg_loss',
+			'dynamic_tsla', 'dynamic_min_popularity', 'replication_state'
 		]
 	)
 	tb_writer = None
@@ -298,7 +330,9 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 		pass
 
 	for episode in range(episodes):
-		state, info = env.reset(seed=seed_base + episode)
+		use_complex = (env_complex is not None) and (episode % 2 == 1)
+		active_env = env_complex if use_complex else env
+		state, info = active_env.reset(seed=seed_base + episode)
 		episode_reward = 0
 		done = False
 		last_info = info
@@ -311,7 +345,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 				except Exception:
 					action_mask = None
 			action = agent.select_action(state, training=True, action_mask=action_mask)
-			next_state, reward, done, truncated, info = env.step(action)
+			next_state, reward, done, truncated, info = active_env.step(action)
 			agent.update(state, action, reward, next_state, done)
 			state = next_state
 			episode_reward += reward
@@ -333,7 +367,8 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 		}
 		if isinstance(last_info, dict):
 			for k in ['sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
-					  'reward_wait_time', 'reward_unutilization', 'reward_queue_penalty', 'reward_invalid_action']:
+					  'reward_wait_time', 'reward_unutilization', 'reward_queue_penalty', 'reward_invalid_action',
+					  'dynamic_tsla', 'dynamic_min_popularity', 'replication_state']:
 				if k in last_info:
 					row[k] = last_info[k]
 		csv_logger.log(to_builtin(row))
@@ -346,7 +381,8 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			if 'avg_noisy_sigma' in net_stats:
 				tb_writer.add_scalar('rainbow/noisy_sigma', float(net_stats['avg_noisy_sigma']), episode)
 			if isinstance(last_info, dict):
-				for k in ['sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining']:
+				for k in ['sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
+						  'dynamic_tsla', 'dynamic_min_popularity']:
 					if k in last_info:
 						try:
 							tb_writer.add_scalar(f'metrics/{k}', float(last_info[k]), episode)
@@ -410,8 +446,8 @@ def main():
 					   default='qlearning', help='Agent type: qlearning (Double Q-Learning) ou rainbow (Rainbow DQN complet)')
 	parser.add_argument('--episodes', type=int, default=100, 
 					   help='Number of training episodes')
-	parser.add_argument('--complex', action='store_true', 
-					   help='Use complex queries')
+	parser.add_argument('--complex', action='store_true',
+					   help='(Ignoré) L\'entraînement mélange toujours simple + complex pour produire un modèle unique adaptatif')
 	default_port = int(os.environ.get('TCDRM_TRAIN_PORT', '25335'))
 	parser.add_argument('--port', type=int, default=default_port, 
 					   help='Java TrainingServer port')
@@ -427,6 +463,8 @@ def main():
 					   help='Random warmup probability for replicate/delete actions (0..1)')
 	parser.add_argument('--seed-base', type=int, default=42,
 					   help='Base seed; episode seed = seed_base + episode (decorrelate agents)')
+	parser.add_argument('--reward-cost-over', type=float, default=None,
+					   help='Override rewardCostOver weight (default Java: 15.0) — plus élevé pénalise davantage le coût récurrent, encourage plus de réplication')
     
 	args = parser.parse_args()
 	os.makedirs('models', exist_ok=True)
@@ -438,11 +476,11 @@ def main():
 	print("🎓 TCDRM RL Training with CloudSimPlus")
 	print(f"   Agent: {args.agent.upper()}")
 	print(f"   Episodes: {args.episodes}")
-	print(f"   Query type: {'complex' if args.complex else 'simple'}")
+	print(f"   Query type: mixed (simple + complex, single adaptive model)")
 	print(f"   Server port: {args.port}")
 	print(f"   Output: {args.output}")
 	print()
-    
+
 	try:
 		cfg = {}
 		if args.max_episode_length is not None:
@@ -451,13 +489,19 @@ def main():
 		cfg['warmupQueries'] = int(max(0, args.warmup_queries))
 		cfg['warmupStrategy'] = str(args.warmup_strategy)
 		cfg['warmupRandomProb'] = float(max(0.0, min(1.0, args.warmup_random_prob)))
+		if args.reward_cost_over is not None:
+			cfg['rewardCostOver'] = float(args.reward_cost_over)
 		if args.agent == 'qlearning':
-			env = CloudSimQLearningEnv(port=args.port, complex=args.complex, config=cfg)
-			train_qlearning(env, args.episodes, args.output, seed_base=args.seed_base)
+			env = CloudSimQLearningEnv(port=args.port, complex=False, config=cfg)
+			env_complex = CloudSimQLearningEnv(port=args.port, complex=True, config=cfg)
+			train_qlearning(env, args.episodes, args.output, seed_base=args.seed_base, env_complex=env_complex)
 		else:  # rainbow
-			env = CloudSimEnv(port=args.port, complex=args.complex, config=cfg)
-			train_rainbow(env, args.episodes, args.output, seed_base=args.seed_base)
+			env = CloudSimEnv(port=args.port, complex=False, config=cfg)
+			env_complex = CloudSimEnv(port=args.port, complex=True, config=cfg)
+			train_rainbow(env, args.episodes, args.output, seed_base=args.seed_base, env_complex=env_complex,
+			              max_episode_length=int(args.max_episode_length or 1000))
 		env.close()
+		env_complex.close()
 	except ConnectionError as e:
 		print(f"\n❌ {e}")
 		print("\nMake sure to start the Java TrainingServer first:")

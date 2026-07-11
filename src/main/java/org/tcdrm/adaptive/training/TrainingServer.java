@@ -144,6 +144,18 @@ public class TrainingServer {
         return env != null ? env.getReplicationState() : "BALANCED";
     }
 
+    /** Seuil T_SLA adaptatif courant (ms), pour monitoring Python (Sujet 1). */
+    public double getDynamicTSla(boolean complex) {
+        TrainingEnvironment env = complex ? complexEnv : simpleEnv;
+        return env != null ? env.getDynamicTSla() : 0.0;
+    }
+
+    /** Gate de popularité adaptatif courant (équivalent P_SLA), pour monitoring Python (Sujet 1). */
+    public double getDynamicMinPopularity(boolean complex) {
+        TrainingEnvironment env = complex ? complexEnv : simpleEnv;
+        return env != null ? env.getDynamicMinPopularity() : 0.0;
+    }
+
 
     /**
      * Point d'entrée pour démarrer le serveur d'entraînement.
@@ -228,8 +240,12 @@ public class TrainingServer {
     /** Reset structuré (retourne un objet avec state + info). */
     public TrainingResetResult resetStructured(boolean complex, long seed) {
         TrainingEnvironment env = complex ? complexEnv : simpleEnv;
-        if (env == null || env.isDifferentSeedOrSettings(seed, settings)) {
+        if (env == null || env.isDifferentSettings(settings)) {
             env = createEnvironment(seed, complex);
+        } else {
+            // Changer la seed sans recréer l'environnement : préserve la méta-adaptation
+            // TSLA/PSLA (dynamicTSla, dynamicMinPopularity, replicationState) entre épisodes.
+            env.setSeed(seed);
         }
         double[] state = env.reset();
         TrainingStepInfo info = new TrainingStepInfo(

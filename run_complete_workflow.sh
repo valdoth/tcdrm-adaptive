@@ -207,6 +207,7 @@ if [ "$SKIP_TRAINING" = false ]; then
         --agent rainbow \
         --episodes $N_EPISODES \
         --port "$TRAIN_PORT" \
+        --reward-cost-over 25 \
         --output models/rainbow_cloudsim.pt
 
     DQN_MODEL="$PYTHON_DIR/models/rainbow_cloudsim.pt"

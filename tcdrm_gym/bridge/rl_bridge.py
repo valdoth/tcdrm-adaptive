@@ -19,7 +19,7 @@ class PythonRLBridge:
         self._rainbow_model_path = rainbow_model_path
 
         self.qlearning_agent = SimpleQLearningAgent(
-            n_states=243,
+            n_states=1458,
             n_actions=3,
             learning_rate=0.15,
             discount_factor=0.95,
@@ -34,13 +34,14 @@ class PythonRLBridge:
             self.qlearning_agent.load(qlearning_model_path)
             self.qlearning_agent.epsilon = 0.075
             stats = self.qlearning_agent.get_stats()
-            print(f"Q-Learning loaded (states explored: {stats['states_explored']}/243)")
+            print(f"Q-Learning loaded (states explored: {stats['states_explored']}/{self.qlearning_agent.n_states})")
         else:
             print("Q-Learning: no trained model, using fresh agent")
 
         self.rainbow_agent = RainbowDQNAgent(
-            state_dim=8,
+            state_dim=9,
             action_dim=3,
+            hidden_dims=[256, 256],
             n_step=3,
             min_buffer_size=500,
             normalize_rewards=True,
@@ -142,6 +143,10 @@ class PythonRLBridge:
             print(f"Rainbow DQN saved to {self._rainbow_model_path}")
 
     def _discretize_state_for_qlearning(self, state: dict) -> int:
+        """Miroir exact de CloudSimQLearningEnv._discretize_state (cloudsim_env.py) : mêmes
+        dimensions, mêmes seuils, même encodage — sans cela, le Q-table appris à l'entraînement
+        (via TrainingServer/py4j) ne correspondrait à rien de cohérent une fois réutilisé ici
+        pour l'évaluation (BenchmarkRunner.runRL)."""
         latency = state['latency']
         if latency < 0.4:   rt = 0
         elif latency < 0.7: rt = 1
@@ -150,10 +155,10 @@ class PythonRLBridge:
         if cost < 0.4:   cost_bin = 0
         elif cost < 0.7: cost_bin = 1
         else:             cost_bin = 2
-        pop = max(state['normalized_popularity'], state.get('p_sla_progress', 0.0))
-        if pop < 0.33:   pop_bin = 0
-        elif pop < 0.67: pop_bin = 1
-        else:             pop_bin = 2
+        progress = state['query_progress']
+        if progress < 0.33:   prog_bin = 0
+        elif progress < 0.67: prog_bin = 1
+        else:                  prog_bin = 2
         budget = state['budget']
         if budget >= 0.6:  bud = 0
         elif budget >= 0.3: bud = 1
@@ -162,10 +167,15 @@ class PythonRLBridge:
         if replicas >= 0.5: net = 0
         elif replicas > 0:  net = 1
         else:               net = 2
-        return rt * 81 + cost_bin * 27 + pop_bin * 9 + bud * 3 + net
+        gain = state['normalized_popularity']
+        if gain < 0.2:   gain_bin = 0
+        elif gain < 0.6: gain_bin = 1
+        else:             gain_bin = 2
+        complex_bit = 1 if state.get('is_complex', 0.0) >= 0.5 else 0
+        return (rt * 243 + cost_bin * 81 + prog_bin * 27 + bud * 9 + net * 3 + gain_bin) + complex_bit * 729
 
     def _build_rainbow_state(self, state: dict) -> np.ndarray:
-        """Construit le vecteur d'état 8D pour Rainbow DQN (aligné buildRLState Java)."""
+        """Construit le vecteur d'état 9D pour Rainbow DQN (aligné buildRLState Java)."""
         return np.array([
             state['latency'],
             state['budget'],
@@ -174,7 +184,8 @@ class PythonRLBridge:
             state['t_sla_violation'],
             state['c_sla_violation'],
             state['query_progress'],
-            state['replication_gain'],
+            state['normalized_popularity'],
+            state['is_complex'],
         ], dtype=np.float32)
 
     def _parse_state(self, state_array):
@@ -187,10 +198,8 @@ class PythonRLBridge:
             't_sla_violation':       float(state_list[4]) if len(state_list) > 4 else 0.0,
             'c_sla_violation':       float(state_list[5]) if len(state_list) > 5 else 0.0,
             'query_progress':        float(state_list[6]) if len(state_list) > 6 else 0.0,
-            'replication_gain':      float(state_list[7]) if len(state_list) > 7 else 0.0,
-            # aliases for Q-Learning discretization
-            'normalized_popularity': float(state_list[3]) if len(state_list) > 3 else 0.0,
-            'p_sla_progress':        float(state_list[6]) if len(state_list) > 6 else 0.0,
+            'normalized_popularity': float(state_list[7]) if len(state_list) > 7 else 0.0,
+            'is_complex':            float(state_list[8]) if len(state_list) > 8 else 0.0,
         }
 
     def _is_thrashing(self, adaptive_state: AdaptiveState) -> bool:

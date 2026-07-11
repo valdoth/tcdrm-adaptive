@@ -25,7 +25,7 @@ class CloudSimEnv(gym.Env):
 		1: REPLICATE - Créer un réplica
 		2: DELETE - Supprimer un réplica
     
-	Observations (8 dimensions, aligné TcdrmSimulation.buildRLState):
+	Observations (9 dimensions, aligné TcdrmSimulation.buildRLState):
 		0: latency           - Latence normalisée (latency / T_SLA)
 		1: budget            - Budget restant normalisé
 		2: replicas          - Réplicas normalisés
@@ -34,6 +34,8 @@ class CloudSimEnv(gym.Env):
 		5: c_sla_violation
 		6: progress          - Progression des requêtes / MAX_QUERIES
 		7: popularity_score  - Popularité normalisée [0,1] : 0=query 0, 1=P_SLA atteint
+		8: is_complex        - Type de requête (0=simple, 1=complex) : permet à un modèle
+		                       RL unique de conditionner sa politique sur le régime
 	"""
     
 	metadata = {"render_modes": ["human"]}
@@ -61,8 +63,8 @@ class CloudSimEnv(gym.Env):
 		# Espaces d'action et d'observation
 		self.action_space = spaces.Discrete(3)  # NOOP, REPLICATE, DELETE
 		self.observation_space = spaces.Box(
-			low=np.zeros(8, dtype=np.float32),
-			high=np.array([5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+			low=np.zeros(9, dtype=np.float32),
+			high=np.array([5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
 			dtype=np.float32,
 		)
         
@@ -175,7 +177,14 @@ class CloudSimEnv(gym.Env):
 			info["action_mask"] = [bool(x) for x in list(mask)]
 		except Exception:
 			pass
-        
+		# Seuils adaptatifs (Sujet 1) — pour validation expérimentale du caractère dynamique
+		try:
+			info["dynamic_tsla"] = float(self._server.getDynamicTSla(bool(self.complex)))
+			info["dynamic_min_popularity"] = float(self._server.getDynamicMinPopularity(bool(self.complex)))
+			info["replication_state"] = str(self._server.getReplicationState(bool(self.complex)))
+		except Exception:
+			pass
+
 		return observation, info
     
 	def step(self, action: int):
@@ -250,7 +259,14 @@ class CloudSimEnv(gym.Env):
 			info["action_mask"] = [bool(x) for x in list(mask)]
 		except Exception:
 			pass
-        
+		# Seuils adaptatifs (Sujet 1) — pour validation expérimentale du caractère dynamique
+		try:
+			info["dynamic_tsla"] = float(self._server.getDynamicTSla(bool(self.complex)))
+			info["dynamic_min_popularity"] = float(self._server.getDynamicMinPopularity(bool(self.complex)))
+			info["replication_state"] = str(self._server.getReplicationState(bool(self.complex)))
+		except Exception:
+			pass
+
 		if done:
 			# .get() évite un KeyError si cumulative_reward est absent de l'info dict
 			self.episode_rewards.append(info.get("cumulative_reward", float(reward)))
@@ -281,23 +297,26 @@ class CloudSimQLearningEnv(CloudSimEnv):
 	"""
 	Environnement CloudSim avec états discrets pour Q-Learning.
 
-	L'état continu (8 dimensions) est discrétisé en 729 états (3^6).
-	Dimensions : RT, COST, PROGRESS, BUD, NET, GAIN.
+	L'état continu (9 dimensions) est discrétisé en 1458 états (3^6 × 2).
+	Dimensions : RT, COST, PROGRESS, BUD, NET, GAIN, COMPLEX.
 
 	GAIN (popularityScore, dim 7) encode la popularité normalisée des données [0,1].
 	0.0 au query 0 (données inconnues), 1.0 quand P_SLA atteint (query 200+).
 	L'agent apprend lui-même à ne pas répliquer quand popularityScore est faible.
+
+	COMPLEX (dim 8) permet à un modèle unique de conditionner sa politique sur le
+	régime simple/complex (max réplicas, échelle T_SLA/C_SLA différents).
 	"""
 
 	def __init__(self, port: int = 25335, complex: bool = False, seed: int = None, config: dict | None = None):
 		super().__init__(port=port, complex=complex, seed=seed, config=config)
 
-		# Espace d'observation discret pour Q-Learning : 3^6 = 729 états
-		self.observation_space = spaces.Discrete(729)
+		# Espace d'observation discret pour Q-Learning : 3^6 × 2 = 1458 états
+		self.observation_space = spaces.Discrete(1458)
 
 	def _discretize_state(self, state: np.ndarray) -> int:
 		"""
-		Discrétise l'état continu (8 dims) en index (0-728).
+		Discrétise l'état continu (9 dims) en index (0-1457).
 
 		- RT       : latence normalisée          [0]
 		- COST     : coût normalisé              [3]
@@ -305,6 +324,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 		- BUD      : budget restant              [1]
 		- NET      : taux réplicas actifs        [2]
 		- GAIN     : popularityScore normalisé   [7]  — 0.0 query 0, 1.0 à P_SLA (query 200+)
+		- COMPLEX  : type de requête             [8]  — 0=simple, 1=complex
 		"""
 		latency  = float(state[0])
 		budget   = float(state[1])
@@ -312,6 +332,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 		cost     = float(state[3])
 		progress = float(state[6]) if len(state) > 6 else 0.0
 		gain     = float(state[7]) if len(state) > 7 else 0.0
+		complex_bit = 1 if len(state) > 8 and float(state[8]) >= 0.5 else 0
 
 		# RT
 		if latency < 0.4:
@@ -364,7 +385,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 		else:
 			gain_bin = 2
 
-		return rt * 243 + cost_bin * 81 + prog_bin * 27 + bud * 9 + net * 3 + gain_bin
+		return (rt * 243 + cost_bin * 81 + prog_bin * 27 + bud * 9 + net * 3 + gain_bin) + complex_bit * 729
     
 	def reset(self, seed=None, options=None):
 		"""Reset et retourne l'état discret."""

@@ -427,7 +427,7 @@ public class TcdrmSimulation {
     }
 
     /**
-     * Construit l'état RL (8 dimensions).
+     * Construit l'état RL (9 dimensions).
      *
      * <pre>
      * [0] latency / dynamicTSla             — latence normalisée
@@ -437,8 +437,11 @@ public class TcdrmSimulation {
      * [4] latency > tSla ? 1 : 0           — violation T_SLA
      * [5] cost > cSla ? 1 : 0             — violation C_SLA
      * [6] queryCount / MAX_QUERIES          — progression globale [0,1]
-     * [7] replicationGain (clamp [0,1])     — gain latence estimé si on réplique,
-     *                                         0 pendant warm-up ou si pas de candidat
+     * [7] popularityScore (clamp [0,1])     — 0 = données inconnues (query 0),
+     *                                         1 = P_SLA atteint (query 200+)
+     * [8] complex ? 1 : 0                   — type de requête : permet à un modèle RL
+     *                                         unique de conditionner sa politique sur
+     *                                         le régime simple/complex (Axe 5)
      * </pre>
      */
     public double[] buildRLState(double lastLatency, double lastCost) {
@@ -459,9 +462,10 @@ public class TcdrmSimulation {
             lastLatency > tSla ? 1.0 : 0.0,                       // 4: violation T_SLA
             lastCost > cSla ? 1.0 : 0.0,                          // 5: violation C_SLA
             (double) queryCount / TcdrmConstants.MAX_QUERIES,      // 6: progression [0,1]
-            getPopularityScore()                                   // 7: popularité normalisée [0,1]
+            getPopularityScore(),                                  // 7: popularité normalisée [0,1]
                                                                    //    0 = données inconnues (query 0)
                                                                    //    1 = P_SLA atteint (query 200+)
+            complex ? 1.0 : 0.0                                    // 8: type de requête (0=simple, 1=complex)
         };
     }
 
