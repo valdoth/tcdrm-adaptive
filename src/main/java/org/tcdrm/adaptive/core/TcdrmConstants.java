@@ -64,14 +64,34 @@ public final class TcdrmConstants {
     /** Max replicas for complex queries (Fig 2: blue line stabilizes at 12) */
     public static final int MAX_REPLICAS_COMPLEX = 12;
     /**
-     * Minimum popularityScore (accessCount/P_SLA) before the RL agent is allowed to replicate.
-     * = 0.3 → gate opens at query 60 (30% of P_SLA).
-     * Aligns the pre-replication phase with NoRepLC/TCDRM so the initial states are identical,
-     * making the comparison fair. Agent decides freely above this threshold.
+     * Éligibilité popularité (Paper Algorithm 1 : IF pd_i > P_SLA THEN répliquer).
+     * La réplication n'est JAMAIS autorisée sur données non populaires — pour tous les
+     * modèles, RL compris. Le contrat = popularité normalisée 1.0 (accessCount ≥ P_SLA).
+     *
+     * Sujet 1 : le seuil est ajusté par un méta-contrôleur Q-learning APPRIS
+     * ({@link org.tcdrm.adaptive.rl.ThresholdMetaLearner}) — aucune règle d'ajustement
+     * codée en dur. Le seuil repart du contrat (1.0) à chaque run et ne peut évoluer
+     * que d'un pas par fenêtre de META_WINDOW_QUERIES : structurellement, aucune
+     * réplication n'est possible sur données inconnues (query 0).
      */
-    public static final double MIN_POPULARITY_TO_REPLICATE = 0.3;
+    /** Cadence de décision du méta-contrôleur de seuils (requêtes par fenêtre). */
+    public static final int META_WINDOW_QUERIES = 50;
+    /** Granularité d'ajustement du seuil de popularité par décision du méta-contrôleur. */
+    public static final double META_POPULARITY_STEP = 0.10;
+    /** Granularité d'ajustement du multiplicateur T_SLA par décision du méta-contrôleur. */
+    public static final double META_TSLA_STEP = 0.05;
+    /** Borne basse du multiplicateur T_SLA appris (fraction du contrat). */
+    public static final double META_TSLA_MIN_MULTIPLIER = 0.60;
+    /** Répertoire des Q-tables du méta-contrôleur (persistées entre entraînement et éval). */
+    public static final String META_QTABLE_DIR = "tcdrm_gym/models";
 
-    // ==================================================================∏
+    /** Fichier de Q-table du méta-contrôleur pour un seuil et un type de workload donnés. */
+    public static java.io.File metaQtableFile(String kind, boolean complex) {
+        return new java.io.File(META_QTABLE_DIR,
+            "meta_threshold_" + kind + "_" + (complex ? "complex" : "simple") + ".qtable");
+    }
+
+    // ==================================================================
     // Bandwidth Costs (Paper Table 1 — img-001.png, averages)
     // ==================================================================
     /** $/GB — Intra-datacenter (all 3 providers: 0.001 per SimulationProvidersParameters) */
@@ -126,9 +146,10 @@ public final class TcdrmConstants {
     /** Number of queries per experiment (Paper Section 4.1: 1000) */
     public static final int MAX_QUERIES = 1000;
     /**
-     * Budget initial du locataire ($).
-     * Calibré à 2× le coût total attendu sous CSLA (simple: 3000×0.010×2 = 60$).
-     * Permet que la dimension "budget" dans l'état RL soit informative (décroissance visible).
+     * Budget initial du locataire ($) — STATIQUE (contrat client, comme C_SLA).
+     * Couvre le coût contractuel max d'un run de 1000 requêtes avec marge :
+     * simple 1000×0.015 = 15$, complex 1000×0.040 = 40$ → 60$ laisse une marge
+     * tout en rendant la dimension "budget" de l'état RL informative (décroissance visible).
      */
     public static final double INITIAL_BUDGET = 60.0;
     
@@ -141,12 +162,29 @@ public final class TcdrmConstants {
     // ==================================================================
     // Warm-up / Gradual Replica Effectiveness
     // Paper Fig 3: response time drops gradually after P_SLA,
-    // not instantly — replicas need time to become fully effective.
+    // not instantly — replicas need time to become fully effective,
+    // and keeps improving until the MAX number of replicas is reached.
     // ==================================================================
     /** Queries for a new replica to reach full efficiency */
     public static final int WARMUP_QUERIES = 10;
     /** Sigmoid steepness for warmup */
     public static final double WARMUP_SIGMOID_K = 8.0;
+    /**
+     * Réduction du temps de transfert apportée par le PREMIER réplica d'un fragment
+     * (copie plus proche + moins de contention sur le primaire).
+     */
+    public static final double REPLICA_TRANSFER_GAIN_FIRST = 0.30;
+    /**
+     * Réduction ADDITIONNELLE par réplica supplémentaire du même fragment (partage de
+     * charge entre copies). Rend le gain PROGRESSIF avec le facteur de réplication,
+     * comme la Fig. 3 du papier : le temps baisse jusqu'au nombre max de réplicas.
+     */
+    public static final double REPLICA_TRANSFER_GAIN_EXTRA = 0.15;
+    /**
+     * Accélération maximale de la phase de jointure quand la couverture réplicas est
+     * complète (toutes les relations servies par des copies chaudes locales).
+     */
+    public static final double JOIN_COVERAGE_SPEEDUP = 0.6;
 
     // ==================================================================
     // Replica Lifetime / Anti-oscillation

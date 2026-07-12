@@ -58,7 +58,13 @@ public class QueryCloudlet {
                 effectiveDataGb, srcProvider, srcRegion, execProvider, execRegion, rnd);
 
             if (usingReplica) {
-                transferMs = transferMs * (1.0 - 0.3 * warmupEff);
+                // Gain PROGRESSIF avec le nombre de réplicas du fragment (partage de
+                // charge entre copies) — Paper Fig 3 : le temps de réponse continue de
+                // baisser jusqu'au nombre max de réplicas, pas seulement au premier.
+                double gain = TcdrmConstants.REPLICA_TRANSFER_GAIN_FIRST
+                    + TcdrmConstants.REPLICA_TRANSFER_GAIN_EXTRA
+                        * Math.max(0, fragment.getReplicaCount() - 1);
+                transferMs = transferMs * (1.0 - gain * warmupEff);
             }
 
             if (TcdrmConstants.PARALLEL_FETCH) {
@@ -82,21 +88,20 @@ public class QueryCloudlet {
 
         double joinFactor = nJoins * (nJoins + 1) / 2.0;
 
-        // Count fragments where the best source is intra-DC (same provider + region)
-        final String ep = execProvider, er = execRegion;
-        long localFragments = fragments.stream()
-            .filter(f -> {
-                DataFragment.LocationChoice lc = f.bestSourceLocation(ep, er);
-                return lc.usingReplica() && lc.provider().equals(ep) && lc.region().equals(er);
-            })
-            .count();
-        double localFraction = (double) localFragments / nRelations;
+        // Couverture réplicas : fraction du facteur de réplication max atteinte pour
+        // les relations de CETTE requête. La jointure accélère PROGRESSIVEMENT avec la
+        // couverture (données servies par des copies chaudes) — Paper Fig 3 : le temps
+        // de réponse décroît graduellement jusqu'au nombre max de réplicas, ce qui rend
+        // les stratégies (2 réplicas vs 6) distinguables sur les courbes.
+        int totalReplicas = fragments.stream().mapToInt(DataFragment::getReplicaCount).sum();
+        double coverage = (double) totalReplicas
+            / Math.max(1, nRelations * DataFragment.MAX_REPLICAS);
         double avgWarmup = fragments.stream()
             .filter(DataFragment::hasReplica)
             .mapToDouble(DataFragment::getWarmupEfficiency)
             .average()
             .orElse(0.0);
-        double joinSpeedup = 1.0 - 0.6 * localFraction * avgWarmup;
+        double joinSpeedup = 1.0 - TcdrmConstants.JOIN_COVERAGE_SPEEDUP * coverage * avgWarmup;
 
         double cpuJitter = 1.0 + TcdrmConstants.CPU_JITTER_RATIO * (rnd.nextDouble() * 2 - 1);
 
