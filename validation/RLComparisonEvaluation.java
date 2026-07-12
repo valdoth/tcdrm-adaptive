@@ -12,7 +12,10 @@ public class RLComparisonEvaluation {
         try {
             TcdrmAdapter.initSimulation();
             TcdrmAdapter.setExecRegion("RANDOM");
-            TcdrmAdapter.setMaxQueries(3000);
+            // 1000 requêtes — conforme au papier (Section 4.1) et à MAX_QUERIES :
+            // les workloads LegacyWorkloadTemplates et la normalisation d'état RL
+            // (state[6] = queryCount/MAX_QUERIES) sont dimensionnés pour 1000.
+            TcdrmAdapter.setMaxQueries(1000);
 
             // Runs NoRepLc + TCDRM baselines, then waits for Python and runs QL + DQN.
             // Generates all paper figures and summary CSV.

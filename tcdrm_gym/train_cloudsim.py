@@ -133,7 +133,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 			'episode','reward','avg10','epsilon','states_explored',
 			'sla_violations','cumulative_cost','replica_count','budget_remaining',
 			'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action',
-			'dynamic_tsla','dynamic_min_popularity','replication_state'
+			'dynamic_tsla','dynamic_min_popularity'
 		]
 	)
 	# Optional TensorBoard
@@ -184,7 +184,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 		if isinstance(last_info, dict):
 			for k in ['sla_violations','cumulative_cost','replica_count','budget_remaining',
 					  'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action',
-					  'dynamic_tsla','dynamic_min_popularity','replication_state']:
+					  'dynamic_tsla','dynamic_min_popularity']:
 				if k in last_info:
 					row[k] = last_info[k]
 		csv_logger.log(to_builtin(row))
@@ -319,7 +319,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			'sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
 			'reward_wait_time', 'reward_unutilization', 'reward_queue_penalty',
 			'reward_invalid_action', 'avg_loss',
-			'dynamic_tsla', 'dynamic_min_popularity', 'replication_state'
+			'dynamic_tsla', 'dynamic_min_popularity'
 		]
 	)
 	tb_writer = None
@@ -368,7 +368,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 		if isinstance(last_info, dict):
 			for k in ['sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
 					  'reward_wait_time', 'reward_unutilization', 'reward_queue_penalty', 'reward_invalid_action',
-					  'dynamic_tsla', 'dynamic_min_popularity', 'replication_state']:
+					  'dynamic_tsla', 'dynamic_min_popularity']:
 				if k in last_info:
 					row[k] = last_info[k]
 		csv_logger.log(to_builtin(row))

@@ -177,11 +177,11 @@ class CloudSimEnv(gym.Env):
 			info["action_mask"] = [bool(x) for x in list(mask)]
 		except Exception:
 			pass
-		# Seuils adaptatifs (Sujet 1) — pour validation expérimentale du caractère dynamique
+		# Seuils adaptatifs (Sujet 1) — T_SLA et éligibilité popularité (P_SLA normalisé,
+		# Paper Algorithm 1). C_SLA est le budget contractuel (statique).
 		try:
 			info["dynamic_tsla"] = float(self._server.getDynamicTSla(bool(self.complex)))
 			info["dynamic_min_popularity"] = float(self._server.getDynamicMinPopularity(bool(self.complex)))
-			info["replication_state"] = str(self._server.getReplicationState(bool(self.complex)))
 		except Exception:
 			pass
 
@@ -259,11 +259,10 @@ class CloudSimEnv(gym.Env):
 			info["action_mask"] = [bool(x) for x in list(mask)]
 		except Exception:
 			pass
-		# Seuils adaptatifs (Sujet 1) — pour validation expérimentale du caractère dynamique
+		# Seuils adaptatifs (Sujet 1) — T_SLA et éligibilité popularité (C_SLA = contrat statique)
 		try:
 			info["dynamic_tsla"] = float(self._server.getDynamicTSla(bool(self.complex)))
 			info["dynamic_min_popularity"] = float(self._server.getDynamicMinPopularity(bool(self.complex)))
-			info["replication_state"] = str(self._server.getReplicationState(bool(self.complex)))
 		except Exception:
 			pass
 

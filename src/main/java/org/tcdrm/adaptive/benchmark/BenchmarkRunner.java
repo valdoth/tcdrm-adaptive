@@ -75,14 +75,27 @@ public class BenchmarkRunner {
         double cumulCost = 0;
         double lastLatency = 0;
         double lastCost = 0;
-        // CSLA de référence (budget total / nombre de requêtes) — le budget total est statique
+        // CSLA contractuel (budget du locataire, Paper Table 1) — STATIQUE, jamais ajusté.
         double cSlaRef = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
-        // TSLA et P_SLA (gate popularité) adaptatifs (Axe 4) : miroir exact de la méta-adaptation
-        // par fenêtre glissante de TrainingEnvironment, pour que l'évaluation applique la même
-        // logique que l'entraînement au lieu d'un seuil figé au contrat.
+        // Seuils adaptatifs (Sujet 1) : méta-contrôleurs Q-learning ENTRAÎNÉS (Q-tables
+        // persistées par TrainingEnvironment, rechargées ici). ε=0 : exploitation greedy
+        // de la politique apprise + apprentissage online continu pendant le run.
+        // Les deux agents (QL/Rainbow) rechargent la même Q-table de départ → comparaison
+        // équitable ; les seuils repartent des valeurs CONTRACTUELLES (1.0).
         double contractTSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
-        AdaptiveThresholds thresholds = new AdaptiveThresholds(
-            contractTSla, TcdrmConstants.MIN_POPULARITY_TO_REPLICATE, cSlaRef);
+        org.tcdrm.adaptive.rl.ThresholdMetaLearner popLearner =
+            org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
+                TcdrmConstants.metaQtableFile("pop", complex),
+                1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_STEP, 0.0, seed);
+        org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaMetaLearner =
+            org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
+                TcdrmConstants.metaQtableFile("tsla", complex),
+                1.0, TcdrmConstants.META_TSLA_MIN_MULTIPLIER, 1.0,
+                TcdrmConstants.META_TSLA_STEP, 0.0, seed ^ 0x9E3779B9L);
+        double dynTSla = contractTSla;
+        int windowViol = 0;
+        double windowCost = 0.0;
+        int windowN = 0;
         int lastReplicaCount = 0;
 
         // Ring buffer for thrash detection (mirrors TrainingEnvironment)
@@ -92,20 +105,18 @@ public class BenchmarkRunner {
 
         int maxQ = RuntimeConfig.getMaxQueries() != null ? RuntimeConfig.getMaxQueries() : TcdrmConstants.MAX_QUERIES;
         for (int q = 0; q < maxQ; q++) {
-            // CSLA effectif = budget_restant / requêtes_restantes (miroir de TrainingEnvironment)
-            int remaining = Math.max(1, maxQ - q);
-            double perQueryBudget = sim.getCurrentBudget() / remaining;
-            double effectiveCsla = Math.min(cSlaRef, Math.max(perQueryBudget, cSlaRef * 0.1));
+            // État normalisé par le CSLA contractuel statique (le budget restant est déjà
+            // une dimension d'état séparée : state[1]).
+            double[] state = sim.buildRLState(lastLatency, lastCost, cSlaRef);
 
-            double[] state = sim.buildRLState(lastLatency, lastCost, effectiveCsla);
-
-            // Determine action validity (mirrors TrainingEnvironment.step() / getActionMask())
+            // Determine action validity (mirrors TrainingEnvironment.step() / getActionMask()).
+            // Éligibilité popularité (Paper Algorithm 1) : la réplication n'est possible que
+            // sur données populaires — seuil P_SLA adaptatif (Sujet 1), contrat = P_SLA papier.
+            // Au-dessus du seuil, l'agent décide librement QUAND/COMBIEN répliquer.
             int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-            // Popularity gate: block REPLICATE until data reaches the adaptive P_SLA gate.
-            // Aligns the pre-replication phase with NoRepLC/TCDRM (same seed → same jitter)
-            // so the comparison is fair. Agent decides freely above the threshold.
-            boolean popularityGateOpen = sim.getPopularityScore() >= thresholds.getDynamicMinPopularity();
-            boolean canReplicate = popularityGateOpen && lastReplicaCount < maxReplicas && sim.getCurrentBudget() > 0;
+            boolean popularityEligible = sim.isReplicationAllowed();
+            boolean canReplicate = popularityEligible && lastReplicaCount < maxReplicas
+                && sim.getCurrentBudget() > 0;
             boolean canDelete = lastReplicaCount > 0;
 
             // Get action from Python RL bridge
@@ -115,8 +126,9 @@ public class BenchmarkRunner {
             } else {
                 action = bridge.selectActionRainbow(state);
             }
-            // Enforce popularity gate: downgrade REPLICATE to NOOP when gate is closed
-            if (action == 1 && !popularityGateOpen) action = 0;
+            // Données non populaires → REPLICATE devient NOOP (contrainte contractuelle,
+            // pas une action invalide de l'agent). Également appliqué dans executeRLQuery.
+            if (action == 1 && !popularityEligible) action = 0;
 
             boolean lastAssignmentSuccess = !((action == 1 && !canReplicate)
                 || (action == 2 && !canDelete));
@@ -129,24 +141,30 @@ public class BenchmarkRunner {
             lastCost = result.totalCost();
             lastReplicaCount = result.replicaCount();
 
-            // Alimente la fenêtre glissante de méta-adaptation TSLA/P_SLA (Axe 4) et propage
-            // immédiatement le seuil vivant à la simulation (normalisation de l'état RL).
-            thresholds.recordQuery(lastLatency, lastCost);
-            sim.setDynamicThresholds(thresholds.getDynamicTSla());
-            double tSla = thresholds.getDynamicTSla();
+            // Alimente la fenêtre glissante des méta-contrôleurs (Sujet 1) : à chaque fin de
+            // fenêtre, les Q-learners observent le stress, apprennent et ajustent les seuils,
+            // propagés immédiatement à la simulation (état RL + éligibilité popularité).
+            windowN++;
+            if (lastLatency > dynTSla) windowViol++;
+            windowCost += lastCost;
+            if (windowN >= TcdrmConstants.META_WINDOW_QUERIES) {
+                double vr = (double) windowViol / windowN;
+                double cr = (windowCost / windowN) / Math.max(1e-9, cSlaRef);
+                double minPop = popLearner.observeAndAdjust(vr, cr);
+                dynTSla = contractTSla * tslaMetaLearner.observeAndAdjust(vr, cr);
+                sim.setDynamicThresholds(dynTSla, minPop);
+                windowViol = 0; windowCost = 0.0; windowN = 0;
+            }
+            double tSla = dynTSla;
 
             // Record action for thrash detection then compute reward
             actionRing[ringPos % 10] = action;
             ringPos++;
             if (ringCount < 10) ringCount++;
 
-            double reward = calculateReward(result, tSla, effectiveCsla, action,
-                lastAssignmentSuccess, complex, actionRing, ringCount, sim, cSlaRef);
-            // Next-state CSLA (budget already decremented by executeRLQuery)
-            int remainingNext = Math.max(1, maxQ - q - 1);
-            double effectiveCslaNext = Math.min(cSlaRef,
-                Math.max(sim.getCurrentBudget() / remainingNext, cSlaRef * 0.1));
-            double[] nextState = sim.buildRLState(lastLatency, lastCost, effectiveCslaNext);
+            double reward = calculateReward(result, tSla, cSlaRef, action,
+                lastAssignmentSuccess, complex, actionRing, ringCount, sim);
+            double[] nextState = sim.buildRLState(lastLatency, lastCost, cSlaRef);
             boolean done = (q == maxQ - 1);
 
             if ("qlearning".equals(modelType)) {
@@ -161,7 +179,6 @@ public class BenchmarkRunner {
                 result.cpuCost(), 0, tSla
             );
         }
-        thresholds.flush();
 
         System.out.println("      " + modelType.toUpperCase() + " terminé (adaptive online)");
         return data;
@@ -175,7 +192,7 @@ public class BenchmarkRunner {
     private static double calculateReward(TcdrmSimulation.QueryResult result, double tSla, double cSla,
                                            int action, boolean lastAssignmentSuccess, boolean complex,
                                            int[] actionRing, int ringCount,
-                                           TcdrmSimulation sim, double cSlaFull) {
+                                           TcdrmSimulation sim) {
         double latency = result.queryTimeMs();
         int replicas = result.replicaCount();
 
@@ -215,13 +232,13 @@ public class BenchmarkRunner {
                 : Math.max(slaMargin, 1.0 - popularityScore);
             prematureReplPenalty = -5.0 * effectiveMargin;
 
-            boolean slaViolated = latency > tSla || result.totalCost() > cSlaFull;
-            // Threshold aligned with MIN_POPULARITY_TO_REPLICATE (gate opens at 0.3)
-            // so the bonus fires as soon as the agent is allowed to replicate (query 60),
-            // not only from query 100 (0.5 × P_SLA) — closes the post-gate dead zone.
-            if (slaViolated && (sim.isWorkloadStabilized()
-                    || popularityScore >= TcdrmConstants.MIN_POPULARITY_TO_REPLICATE)) {
-                correctTriggerBonus = 8.0;
+            // CORRECT_TRIGGER continu : bonus proportionnel à la popularité observée quand
+            // l'agent réplique sous violation SLA. Aucun seuil statique — combiné à
+            // lowPopularityPenalty (-5·(1-pop)), le point de bascule net est APPRIS par
+            // l'agent au lieu d'être imposé par un gate codé en dur.
+            boolean slaViolated = latency > tSla || result.totalCost() > cSla;
+            if (slaViolated) {
+                correctTriggerBonus = 8.0 * popularityScore;
             }
         }
 
@@ -256,116 +273,4 @@ public class BenchmarkRunner {
         return replicates >= 2 && deletes >= 2;
     }
 
-    /**
-     * Miroir exact de la méta-adaptation TSLA/P_SLA de TrainingEnvironment (fenêtre glissante,
-     * Sujet 1) — garantit que l'évaluation (runRL, passe unique de maxQ requêtes) applique la
-     * même logique d'adaptation que l'entraînement au lieu d'un seuil figé au contrat. Le stress
-     * (violations/coût) est mesuré sur une fenêtre glissante de CHECK_INTERVAL requêtes plutôt
-     * que sur l'ensemble de la passe : la phase de démarrage (avant que les réplicas ne
-     * stabilisent le système) est naturellement en forte violation SLA, un signal qui serait
-     * dilué et invisible sur une moyenne complète (ex: 1000 requêtes).
-     */
-    private static final class AdaptiveThresholds {
-        private static final int CHECK_INTERVAL = 100;
-
-        private enum State { CONSERVATIVE, BALANCED, AGGRESSIVE }
-
-        private final double contractTSla;
-        private final double contractMinPopularity;
-        private final double cslaRef;
-
-        private double dynamicTSla;
-        private double dynamicMinPopularity;
-        private State state = State.BALANCED;
-        private int consecutiveViolationWindows = 0;
-        private int consecutiveCostOverWindows  = 0;
-
-        private int windowViolations = 0;
-        private double windowCost = 0.0;
-        private int windowQueries = 0;
-
-        AdaptiveThresholds(double contractTSla, double contractMinPopularity, double cslaRef) {
-            this.contractTSla = contractTSla;
-            this.contractMinPopularity = contractMinPopularity;
-            this.cslaRef = cslaRef;
-            this.dynamicTSla = contractTSla;
-            this.dynamicMinPopularity = contractMinPopularity;
-        }
-
-        void recordQuery(double latency, double cost) {
-            windowQueries++;
-            if (latency > dynamicTSla) windowViolations++;
-            windowCost += cost;
-            if (windowQueries >= CHECK_INTERVAL) flush();
-        }
-
-        void flush() {
-            if (windowQueries <= 0) return;
-            double violationRate = (double) windowViolations / windowQueries;
-            double avgCostRatio  = (windowCost / windowQueries) / Math.max(1e-9, cslaRef);
-            adapt(violationRate, avgCostRatio);
-            windowViolations = 0;
-            windowCost = 0.0;
-            windowQueries = 0;
-        }
-
-        private void adapt(double violationRate, double avgCostRatio) {
-            boolean highViolation = violationRate > 0.20;
-            boolean highCost      = avgCostRatio   > 1.20;
-
-            consecutiveViolationWindows = highViolation ? consecutiveViolationWindows + 1 : 0;
-            consecutiveCostOverWindows  = highCost      ? consecutiveCostOverWindows  + 1 : 0;
-
-            // Réagit dès la première fenêtre en stress (miroir de TrainingEnvironment) : le stress
-            // réel de démarrage est concentré sur une seule fenêtre et déjà résorbé à la suivante.
-            boolean evtHighViolation = consecutiveViolationWindows >= 1;
-            boolean evtHighCost      = consecutiveCostOverWindows  >= 1;
-            boolean evtStable        = violationRate < 0.05 && avgCostRatio < 0.80;
-
-            State prev = state;
-            switch (state) {
-                case BALANCED:
-                    if      (evtHighCost)      state = State.CONSERVATIVE;
-                    else if (evtHighViolation) state = State.AGGRESSIVE;
-                    break;
-                case AGGRESSIVE:
-                    if (evtHighCost || evtStable) state = State.BALANCED;
-                    break;
-                case CONSERVATIVE:
-                    if (evtHighViolation || evtStable) state = State.BALANCED;
-                    break;
-            }
-            if (state != prev) {
-                consecutiveViolationWindows = 0;
-                consecutiveCostOverWindows  = 0;
-            }
-
-            double tStep = contractTSla * 0.05;
-            switch (state) {
-                case AGGRESSIVE:   dynamicTSla = Math.max(contractTSla * 0.60, dynamicTSla - tStep); break;
-                case CONSERVATIVE: dynamicTSla = Math.min(contractTSla, dynamicTSla + tStep * 0.5); break;
-                case BALANCED:     dynamicTSla = Math.min(contractTSla, dynamicTSla + tStep * 0.3); break;
-            }
-
-            double pStep = contractMinPopularity * 0.05;
-            switch (state) {
-                case AGGRESSIVE:
-                    dynamicMinPopularity = Math.max(contractMinPopularity * 0.50, dynamicMinPopularity - pStep);
-                    break;
-                case CONSERVATIVE:
-                    dynamicMinPopularity = Math.min(contractMinPopularity * 1.50, dynamicMinPopularity + pStep * 0.5);
-                    break;
-                case BALANCED:
-                    if (dynamicMinPopularity < contractMinPopularity) {
-                        dynamicMinPopularity = Math.min(contractMinPopularity, dynamicMinPopularity + pStep * 0.3);
-                    } else if (dynamicMinPopularity > contractMinPopularity) {
-                        dynamicMinPopularity = Math.max(contractMinPopularity, dynamicMinPopularity - pStep * 0.3);
-                    }
-                    break;
-            }
-        }
-
-        double getDynamicTSla() { return dynamicTSla; }
-        double getDynamicMinPopularity() { return dynamicMinPopularity; }
-    }
 }

@@ -15,7 +15,10 @@ import java.util.Random;
  * Stratégies disponibles :
  * - NoRepLc : pas de réplication
  * - TCDRM   : réplication réactive (seuil P_SLA du papier, sans EMA)
- * - RL      : réplication adaptative via agents Python — aucun filtre statique
+ * - RL      : réplication adaptative via agents Python. L'éligibilité popularité du
+ *             papier (Algorithm 1 : pd_i ≥ P_SLA) s'applique à TOUS les modèles, avec
+ *             un seuil adaptatif pour le RL (Sujet 1) ; au-dessus du seuil, l'agent
+ *             décide librement quand/combien répliquer.
  */
 public class TcdrmSimulation {
 
@@ -33,6 +36,13 @@ public class TcdrmSimulation {
 
     // Seuil T_SLA adaptatif — ajusté par la méta-boucle RL entre épisodes (Sujet 1).
     private double dynamicTSla;
+
+    // Seuil de popularité adaptatif (P_SLA normalisé, Sujet 1). Contrat = 1.0
+    // (accessCount ≥ P_SLA, Paper Algorithm 1) ; ajusté par le méta-contrôleur
+    // Q-learning (ThresholdMetaLearner) — aucune règle d'ajustement codée en dur.
+    // Toute réplication RL sous ce seuil est convertie en NOOP : les données
+    // non populaires ne sont JAMAIS répliquées.
+    private double dynamicMinPopularity = 1.0;
 
     // Sujet 2 : optimiseur multi-objectifs du placement de réplicas
     private final ReplicaPlacementOptimizer placementOptimizer;
@@ -81,8 +91,15 @@ public class TcdrmSimulation {
     }
 
     private List<int[]> workloadSets;
+
+    /** Nombre effectif de requêtes du run : override runtime sinon MAX_QUERIES (papier: 1000). */
+    private static int effectiveMaxQueries() {
+        Integer override = org.tcdrm.adaptive.core.RuntimeConfig.getMaxQueries();
+        return override != null ? override : TcdrmConstants.MAX_QUERIES;
+    }
+
     private List<int[]> buildLegacyWorkloadSets(long seed) {
-        int n = TcdrmConstants.MAX_QUERIES;
+        int n = effectiveMaxQueries();
         if (complex) {
             return org.tcdrm.adaptive.data.LegacyWorkloadTemplates.generateComplex(fragments, n, seed);
         } else {
@@ -193,9 +210,10 @@ public class TcdrmSimulation {
     /**
      * Exécute une requête avec une action RL.
      *
-     * Le modèle décide librement quand répliquer — aucun seuil statique.
-     * La reward function enseigne le bon moment ; la dimension [7] (phase) de l'état
-     * fournit le contexte de popularité sans le forcer.
+     * Éligibilité popularité (Paper Algorithm 1) : REPLICATE n'est exécutée que si les
+     * données sont populaires (popularityScore ≥ seuil P_SLA adaptatif) — sinon NOOP.
+     * Au-dessus du seuil, l'agent décide librement : la reward et l'état [7]
+     * (popularityScore) lui enseignent le bon moment et le bon nombre de réplicas.
      *
      * @param action 0=NOOP, 1=REPLICATE, 2=DELETE
      */
@@ -203,9 +221,11 @@ public class TcdrmSimulation {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
         double creationCost = 0.0;
 
-        // Aucun blocage statique : l'agent apprend lui-même quand répliquer.
-        // state[7] (popularityScore) et la lowPopularityPenalty dans la reward lui enseignent
-        // de ne pas répliquer quand les données ne sont pas encore connues.
+        // Garde-fou contractuel (Algorithm 1) : jamais de réplica sur données non populaires.
+        // Appliqué ici, dans l'environnement, pour qu'aucun chemin (éval, entraînement,
+        // warm-up aléatoire) ne puisse répliquer à popularité insuffisante.
+        if (action == 1 && !isReplicationAllowed()) action = 0;
+
         if (action == 1 && currentReplicaCount < maxReplicas && currentBudget > 0) {
             creationCost = createReplica();
             currentBudget -= creationCost;
@@ -267,7 +287,13 @@ public class TcdrmSimulation {
                     DataFragment.LocationChoice loc = frag.bestSourceLocation(p, r);
                     double dataGb = frag.getSizeGb() * TcdrmConstants.QUERY_SELECTIVITY;
                     double t = estimateMeanTransferMs(dataGb, loc.provider(), loc.region(), p, r);
-                    if (loc.usingReplica()) t *= (1.0 - 0.3 * loc.warmupEff());
+                    if (loc.usingReplica()) {
+                        // Même gain progressif que QueryCloudlet.execute (cohérence du choix de site)
+                        double gain = TcdrmConstants.REPLICA_TRANSFER_GAIN_FIRST
+                            + TcdrmConstants.REPLICA_TRANSFER_GAIN_EXTRA
+                                * Math.max(0, frag.getReplicaCount() - 1);
+                        t *= (1.0 - gain * loc.warmupEff());
+                    }
                     siteTime = TcdrmConstants.PARALLEL_FETCH
                         ? Math.max(siteTime, t)
                         : siteTime + t;
@@ -461,7 +487,7 @@ public class TcdrmSimulation {
             lastCost / cSla,                                       // 3: coût normalisé
             lastLatency > tSla ? 1.0 : 0.0,                       // 4: violation T_SLA
             lastCost > cSla ? 1.0 : 0.0,                          // 5: violation C_SLA
-            (double) queryCount / TcdrmConstants.MAX_QUERIES,      // 6: progression [0,1]
+            (double) queryCount / effectiveMaxQueries(),           // 6: progression [0,1]
             getPopularityScore(),                                  // 7: popularité normalisée [0,1]
                                                                    //    0 = données inconnues (query 0)
                                                                    //    1 = P_SLA atteint (query 200+)
@@ -496,7 +522,28 @@ public class TcdrmSimulation {
         this.dynamicTSla = Math.max(50.0, tSla);
     }
 
+    /**
+     * Injecte les seuils adaptatifs T_SLA et popularité (P_SLA normalisé).
+     * Le seuil popularité est borné à [0,1] — bornes de définition de la popularité
+     * normalisée (fraction du P_SLA contractuel), pas un réglage comportemental.
+     */
+    public void setDynamicThresholds(double tSla, double minPopularity) {
+        setDynamicThresholds(tSla);
+        this.dynamicMinPopularity = Math.max(0.0, Math.min(1.0, minPopularity));
+    }
+
+    /**
+     * Éligibilité popularité (Paper Algorithm 1) : vrai si les données observées sont
+     * suffisamment populaires pour autoriser une réplication.
+     */
+    public boolean isReplicationAllowed() {
+        return getPopularityScore() >= dynamicMinPopularity;
+    }
+
     public double getDynamicTSla() { return dynamicTSla; }
+
+    /** Seuil de popularité adaptatif courant (P_SLA normalisé, Sujet 1). */
+    public double getDynamicMinPopularity() { return dynamicMinPopularity; }
 
     /** Poids courants de l'optimiseur de placement (Sujet 2) pour monitoring. */
     public double[] getPlacementWeights() {

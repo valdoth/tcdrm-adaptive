@@ -136,26 +136,17 @@ public class TrainingServer {
         return env != null ? env.getPlacementWeights() : new double[]{0.45, 0.45, 0.10};
     }
 
-    /**
-     * État adaptatif courant (Sujet 1) : CONSERVATIVE / BALANCED / AGGRESSIVE.
-     */
-    public String getReplicationState(boolean complex) {
-        TrainingEnvironment env = complex ? complexEnv : simpleEnv;
-        return env != null ? env.getReplicationState() : "BALANCED";
-    }
-
     /** Seuil T_SLA adaptatif courant (ms), pour monitoring Python (Sujet 1). */
     public double getDynamicTSla(boolean complex) {
         TrainingEnvironment env = complex ? complexEnv : simpleEnv;
         return env != null ? env.getDynamicTSla() : 0.0;
     }
 
-    /** Gate de popularité adaptatif courant (équivalent P_SLA), pour monitoring Python (Sujet 1). */
+    /** Seuil de popularité adaptatif courant (P_SLA normalisé), pour monitoring Python (Sujet 1). */
     public double getDynamicMinPopularity(boolean complex) {
         TrainingEnvironment env = complex ? complexEnv : simpleEnv;
-        return env != null ? env.getDynamicMinPopularity() : 0.0;
+        return env != null ? env.getDynamicMinPopularity() : 1.0;
     }
-
 
     /**
      * Point d'entrée pour démarrer le serveur d'entraînement.
@@ -244,7 +235,7 @@ public class TrainingServer {
             env = createEnvironment(seed, complex);
         } else {
             // Changer la seed sans recréer l'environnement : préserve la méta-adaptation
-            // TSLA/PSLA (dynamicTSla, dynamicMinPopularity, replicationState) entre épisodes.
+            // TSLA (dynamicTSla, replicationState) entre épisodes.
             env.setSeed(seed);
         }
         double[] state = env.reset();

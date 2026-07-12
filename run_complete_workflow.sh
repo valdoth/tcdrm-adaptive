@@ -43,6 +43,8 @@ cleanup_initial() {
         echo "   Removing old models (retraining planned)..."
             rm -f "$PYTHON_DIR/models/qlearning_cloudsim.pkl" 2>/dev/null || true
             rm -f "$PYTHON_DIR/models/rainbow_cloudsim.pt" 2>/dev/null || true
+            # Q-tables des méta-contrôleurs de seuils (réapprises avec les agents)
+            rm -f "$PYTHON_DIR/models/"meta_threshold_*.qtable 2>/dev/null || true
     else
         echo "   Keeping existing models..."
     fi
