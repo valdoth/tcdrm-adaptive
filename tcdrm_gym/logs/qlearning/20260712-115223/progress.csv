@@ -1,0 +1,3 @@
+episode,reward,avg10,epsilon,states_explored,sla_violations,cumulative_cost,replica_count,budget_remaining,reward_wait_time,reward_unutilization,reward_queue_penalty,reward_invalid_action,dynamic_tsla,dynamic_min_popularity,replication_state
+0,3425.7521530033523,3425.7521530033523,0.99981,1458,180,4.893828924151366,6,55.106171075848756,6.792929957277918,-0.06,-0.0,0.0,200.0,1.0,BALANCED
+1,2122.9906957554253,2774.371424379389,0.99962,1458,202,15.911161950589252,12,44.088838049410754,5.85878067831998,-0.12,-0.0,0.0,400.0,1.0,BALANCED
