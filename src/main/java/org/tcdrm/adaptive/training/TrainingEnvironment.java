@@ -71,11 +71,19 @@ public class TrainingEnvironment {
     private double windowCost = 0.0;
     private int windowQueries = 0;
     
+    // Identité de l'agent propriétaire des Q-tables de méta-seuils.
+    private final String agentTag;
+
     public TrainingEnvironment(long seed, boolean complex) { this(seed, complex, new TrainingSettings()); }
 
     public TrainingEnvironment(long seed, boolean complex, TrainingSettings settings) {
+        this(seed, complex, settings, "shared");
+    }
+
+    public TrainingEnvironment(long seed, boolean complex, TrainingSettings settings, String agentTag) {
         this.seed = seed;
         this.complex = complex;
+        this.agentTag = (agentTag == null || agentTag.isBlank()) ? "shared" : agentTag;
         this.settings = settings != null ? settings : new TrainingSettings();
         this.cSla = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
         // Initialisation des seuils adaptatifs à partir des valeurs de référence (ou settings)
@@ -83,15 +91,18 @@ public class TrainingEnvironment {
         double tComplex = this.settings.getTSlaComplexMs() > 0 ? this.settings.getTSlaComplexMs() : TcdrmConstants.TSLA_COMPLEX_MS;
         this.dynamicTSla = complex ? tComplex : tSimple;
         this.tSla = this.dynamicTSla;
-        // Méta-contrôleurs Q-learning des seuils (Sujet 1) : Q-tables rechargées si déjà
-        // entraînées (persistance inter-sessions), ε>0 pendant l'entraînement.
+        // Méta-contrôleurs Q-learning des seuils (Sujet 1) : Q-tables PAR AGENT — chaque
+        // agent apprend sa propre politique d'ajustement des seuils (persistance
+        // inter-sessions), ε>0 pendant l'entraînement.
         this.popularityLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
-            TcdrmConstants.metaQtableFile("pop", complex),
-            1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_STEP, 0.10, seed);
+            TcdrmConstants.metaQtableFile(this.agentTag, "pop", complex),
+            1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_RESOLUTION, 0.10,
+            seed ^ this.agentTag.hashCode());
         this.tslaLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
-            TcdrmConstants.metaQtableFile("tsla", complex),
+            TcdrmConstants.metaQtableFile(this.agentTag, "tsla", complex),
             1.0, TcdrmConstants.META_TSLA_MIN_MULTIPLIER, 1.0,
-            TcdrmConstants.META_TSLA_STEP, 0.10, seed ^ 0x9E3779B9L);
+            TcdrmConstants.META_TSLA_RESOLUTION, 0.10,
+            (seed ^ this.agentTag.hashCode()) ^ 0x9E3779B9L);
         reset();
     }
     
@@ -468,11 +479,11 @@ public class TrainingEnvironment {
         placementOptimizer.adaptWeights(violationRate, avgCostRatio);
     }
 
-    /** Sauvegarde les Q-tables des méta-contrôleurs de seuils (Sujet 1). */
+    /** Sauvegarde les Q-tables des méta-contrôleurs de seuils de CET agent (Sujet 1). */
     private void saveMetaLearners() {
         try {
-            popularityLearner.save(TcdrmConstants.metaQtableFile("pop", complex));
-            tslaLearner.save(TcdrmConstants.metaQtableFile("tsla", complex));
+            popularityLearner.save(TcdrmConstants.metaQtableFile(agentTag, "pop", complex));
+            tslaLearner.save(TcdrmConstants.metaQtableFile(agentTag, "tsla", complex));
         } catch (java.io.IOException e) {
             System.err.println("[TrainingEnvironment] Failed to save meta-threshold Q-tables: " + e.getMessage());
         }

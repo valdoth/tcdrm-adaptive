@@ -10,43 +10,54 @@ import java.util.Locale;
 import java.util.Random;
 
 /**
- * Méta-contrôleur Q-learning : APPREND à ajuster un seuil normalisé borné à partir du
- * stress observé (taux de violations SLA, ratio coût/contrat) sur des fenêtres de requêtes.
+ * Méta-contrôleur Q-learning : APPREND à choisir la valeur d'un seuil normalisé borné,
+ * à partir du stress observé (taux de violations SLA, ratio coût/contrat) sur des
+ * fenêtres de requêtes.
  *
- * Remplace les machines à états codées en dur : aucune règle du type
- * « si violations &gt; 20% alors baisser le seuil de 10% » n'est écrite dans le code —
- * c'est le modèle qui découvre la politique d'ajustement par renforcement.
+ * L'action est la SÉLECTION DIRECTE du niveau de seuil parmi tous les niveaux de
+ * l'intervalle — il n'existe AUCUNE limite de vitesse d'ajustement (aucun « pas maximal
+ * par fenêtre ») ni règle « si stress alors ±X% » : la trajectoire du seuil est
+ * entièrement déterminée par la politique apprise. La granularité de l'intervalle
+ * ({@code resolution}) est une discrétisation de l'espace d'action, au même titre que
+ * les buckets d'état — pas une règle de comportement.
  *
  * Littérature : approche « Q-Threshold » — Horovitz &amp; Arian, "Efficient Cloud
  * Auto-Scaling with SLA Objective Using Q-Learning", IEEE FiCloud 2018 ; reprise dans
  * "SLA-Adaptive Threshold Adjustment for a Kubernetes Horizontal Pod Autoscaler",
  * Electronics 13(7):1242, 2024. Ces travaux substituent un agent Q-learning aux seuils
- * d'auto-scaling fixés manuellement ; on applique ici le même principe aux seuils de
- * réplication TCDRM (T_SLA et éligibilité popularité P_SLA — Sujet 1).
+ * fixés manuellement ; on applique le même principe aux seuils de réplication TCDRM
+ * (T_SLA et éligibilité popularité P_SLA — Sujet 1).
  *
  * <ul>
- *   <li>État : (bucket violations × bucket coût × bucket valeur courante) — discrétisation.</li>
- *   <li>Actions : baisser / garder / monter le seuil d'un pas (granularité d'action).</li>
- *   <li>Récompense : r = −violationRate − max(0, costRatio − 1) — objectif contractuel
- *       (zéro violation, budget respecté), sans aucune règle de seuil codée en dur.</li>
- *   <li>Q-table persistée (.qtable) : entraînée sur les épisodes d'entraînement, rechargée
- *       par le benchmark (exploitation greedy + apprentissage online continu).</li>
+ *   <li>État : (bucket violations × bucket coût × bucket valeur courante).</li>
+ *   <li>Actions : choisir le niveau du seuil (un niveau par cran de résolution).</li>
+ *   <li>Récompense : r = −violationRate − max(0, costRatio − 1)
+ *       − w_fid·(écart au contrat normalisé). Le terme de fidélité enseigne que
+ *       s'écarter du contrat (P_SLA) n'est justifié que s'il supprime des violations —
+ *       l'équilibre seuil/SLA est APPRIS, pas codé.</li>
+ *   <li>Q-table persistée (.qtable) PAR AGENT : entraînée pendant l'entraînement de
+ *       l'agent, rechargée par le benchmark (greedy + apprentissage online).</li>
  * </ul>
  */
 public final class ThresholdMetaLearner {
 
-    private static final int N_ACTIONS = 3; // 0 = baisser, 1 = garder, 2 = monter
     private static final int VIOL_BUCKETS = 5;
     private static final int COST_BUCKETS = 3;
 
     // Hyperparamètres d'apprentissage (standard Q-learning)
     private static final double ALPHA = 0.30;
     private static final double GAMMA = 0.90;
+    /**
+     * Poids du terme de fidélité au contrat dans la récompense méta — même famille que
+     * les poids r1..r9 de la reward des agents : un réglage de fonction de récompense,
+     * pas un seuil de comportement.
+     */
+    private static final double FIDELITY_WEIGHT = 0.5;
 
     private final double minValue;
     private final double maxValue;
-    private final double step;
-    private final int valueBuckets;
+    private final double resolution;
+    private final int nLevels;
     private final Random rnd;
     private final double[][] q;
 
@@ -56,23 +67,24 @@ public final class ThresholdMetaLearner {
     private int lastAction = -1;
 
     public ThresholdMetaLearner(double initialValue, double minValue, double maxValue,
-                                double step, double epsilon, long seed) {
-        if (maxValue <= minValue || step <= 0) {
-            throw new IllegalArgumentException("Invalid threshold bounds/step");
+                                double resolution, double epsilon, long seed) {
+        if (maxValue <= minValue || resolution <= 0) {
+            throw new IllegalArgumentException("Invalid threshold bounds/resolution");
         }
         this.minValue = minValue;
         this.maxValue = maxValue;
-        this.step = step;
-        this.valueBuckets = (int) Math.round((maxValue - minValue) / step) + 1;
+        this.resolution = resolution;
+        this.nLevels = (int) Math.round((maxValue - minValue) / resolution) + 1;
         this.epsilon = epsilon;
         this.rnd = new Random(seed);
-        this.q = new double[VIOL_BUCKETS * COST_BUCKETS * valueBuckets][N_ACTIONS];
+        this.q = new double[VIOL_BUCKETS * COST_BUCKETS * nLevels][nLevels];
         this.value = clamp(initialValue);
     }
 
     /**
      * Observe la fenêtre écoulée, met à jour la Q-table (TD-learning) puis choisit
-     * (ε-greedy) le prochain ajustement du seuil.
+     * (ε-greedy) le niveau du seuil pour la fenêtre suivante — n'importe quel niveau
+     * de l'intervalle, sans restriction de déplacement.
      *
      * @param violationRate taux de violations T_SLA sur la fenêtre [0,1]
      * @param costRatio     coût moyen / contrat C_SLA sur la fenêtre
@@ -80,17 +92,21 @@ public final class ThresholdMetaLearner {
      */
     public double observeAndAdjust(double violationRate, double costRatio) {
         int s = stateOf(violationRate, costRatio);
-        double reward = -violationRate - Math.max(0.0, costRatio - 1.0);
+        // Fidélité au contrat : s'éloigner du seuil contractuel (maxValue) coûte —
+        // l'assouplissement doit se payer en violations évitées.
+        double relaxation = (maxValue - value) / (maxValue - minValue);
+        double reward = -violationRate - Math.max(0.0, costRatio - 1.0)
+            - FIDELITY_WEIGHT * relaxation;
 
         if (lastState >= 0 && lastAction >= 0) {
             double best = maxQ(s);
             q[lastState][lastAction] += ALPHA * (reward + GAMMA * best - q[lastState][lastAction]);
         }
 
-        int a = (rnd.nextDouble() < epsilon) ? rnd.nextInt(N_ACTIONS) : argmaxQ(s);
+        int a = (rnd.nextDouble() < epsilon) ? rnd.nextInt(nLevels) : argmaxQ(s);
         lastState = s;
         lastAction = a;
-        value = clamp(value + (a - 1) * step);
+        value = clamp(minValue + a * resolution);
         return value;
     }
 
@@ -123,22 +139,22 @@ public final class ThresholdMetaLearner {
         else if (costRatio <= 1.20) cb = 1;
         else                        cb = 2;
 
-        int valB = (int) Math.round((value - minValue) / step);
-        valB = Math.max(0, Math.min(valueBuckets - 1, valB));
-        return (vb * COST_BUCKETS + cb) * valueBuckets + valB;
+        int valB = (int) Math.round((value - minValue) / resolution);
+        valB = Math.max(0, Math.min(nLevels - 1, valB));
+        return (vb * COST_BUCKETS + cb) * nLevels + valB;
     }
 
     private double clamp(double v) { return Math.max(minValue, Math.min(maxValue, v)); }
 
     private double maxQ(int s) {
         double m = q[s][0];
-        for (int i = 1; i < N_ACTIONS; i++) m = Math.max(m, q[s][i]);
+        for (int i = 1; i < nLevels; i++) m = Math.max(m, q[s][i]);
         return m;
     }
 
     private int argmaxQ(int s) {
         int best = 0;
-        for (int i = 1; i < N_ACTIONS; i++) if (q[s][i] > q[s][best]) best = i;
+        for (int i = 1; i < nLevels; i++) if (q[s][i] > q[s][best]) best = i;
         return best;
     }
 
@@ -148,37 +164,45 @@ public final class ThresholdMetaLearner {
         File parent = file.getParentFile();
         if (parent != null) parent.mkdirs();
         try (BufferedWriter w = new BufferedWriter(new FileWriter(file))) {
-            w.write(String.format(Locale.ROOT, "# qtable states=%d actions=%d min=%s max=%s step=%s%n",
-                q.length, N_ACTIONS, minValue, maxValue, step));
+            w.write(String.format(Locale.ROOT, "# qtable states=%d actions=%d min=%s max=%s resolution=%s%n",
+                q.length, nLevels, minValue, maxValue, resolution));
             for (double[] row : q) {
-                w.write(String.format(Locale.ROOT, "%s %s %s%n", row[0], row[1], row[2]));
+                StringBuilder sb = new StringBuilder();
+                for (int a = 0; a < nLevels; a++) {
+                    if (a > 0) sb.append(' ');
+                    sb.append(row[a]);
+                }
+                sb.append(System.lineSeparator());
+                w.write(sb.toString());
             }
         }
     }
 
     /**
-     * Charge une Q-table existante si compatible, sinon crée un learner vierge.
-     * Le seuil courant repart toujours de {@code initialValue} (valeur contractuelle).
+     * Charge une Q-table existante si compatible (mêmes dimensions), sinon crée un
+     * learner vierge. Le seuil courant repart toujours de {@code initialValue}
+     * (valeur contractuelle).
      */
     public static ThresholdMetaLearner loadOrCreate(File file, double initialValue, double minValue,
-                                                    double maxValue, double step, double epsilon, long seed) {
-        ThresholdMetaLearner learner = new ThresholdMetaLearner(initialValue, minValue, maxValue, step, epsilon, seed);
+                                                    double maxValue, double resolution, double epsilon, long seed) {
+        ThresholdMetaLearner learner = new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed);
         if (file == null || !file.isFile()) return learner;
         try (BufferedReader r = new BufferedReader(new FileReader(file))) {
             String header = r.readLine();
-            if (header == null || !header.startsWith("# qtable states=" + learner.q.length + " ")) {
+            String expected = "# qtable states=" + learner.q.length + " actions=" + learner.nLevels + " ";
+            if (header == null || !header.startsWith(expected)) {
                 return learner; // structure incompatible → repartir vierge
             }
             for (int s = 0; s < learner.q.length; s++) {
                 String line = r.readLine();
-                if (line == null) return new ThresholdMetaLearner(initialValue, minValue, maxValue, step, epsilon, seed);
+                if (line == null) return new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed);
                 String[] parts = line.trim().split("\\s+");
-                for (int a = 0; a < N_ACTIONS && a < parts.length; a++) {
+                for (int a = 0; a < learner.nLevels && a < parts.length; a++) {
                     learner.q[s][a] = Double.parseDouble(parts[a]);
                 }
             }
         } catch (IOException | NumberFormatException e) {
-            return new ThresholdMetaLearner(initialValue, minValue, maxValue, step, epsilon, seed);
+            return new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed);
         }
         return learner;
     }
