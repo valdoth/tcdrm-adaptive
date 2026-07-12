@@ -77,21 +77,23 @@ public class BenchmarkRunner {
         double lastCost = 0;
         // CSLA contractuel (budget du locataire, Paper Table 1) — STATIQUE, jamais ajusté.
         double cSlaRef = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
-        // Seuils adaptatifs (Sujet 1) : méta-contrôleurs Q-learning ENTRAÎNÉS (Q-tables
-        // persistées par TrainingEnvironment, rechargées ici). ε=0 : exploitation greedy
-        // de la politique apprise + apprentissage online continu pendant le run.
-        // Les deux agents (QL/Rainbow) rechargent la même Q-table de départ → comparaison
-        // équitable ; les seuils repartent des valeurs CONTRACTUELLES (1.0).
+        // Seuils adaptatifs (Sujet 1) : méta-contrôleurs Q-learning ENTRAÎNÉS, PAR AGENT —
+        // chaque modèle recharge SES Q-tables (apprises pendant son propre entraînement),
+        // donc sa propre politique de seuil et son propre moment de déclenchement.
+        // ε=0 : exploitation greedy + apprentissage online continu pendant le run.
+        // Les seuils repartent des valeurs CONTRACTUELLES (1.0).
         double contractTSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
         org.tcdrm.adaptive.rl.ThresholdMetaLearner popLearner =
             org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
-                TcdrmConstants.metaQtableFile("pop", complex),
-                1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_STEP, 0.0, seed);
+                TcdrmConstants.metaQtableFile(modelType, "pop", complex),
+                1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_RESOLUTION, 0.0,
+                seed ^ modelType.hashCode());
         org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaMetaLearner =
             org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
-                TcdrmConstants.metaQtableFile("tsla", complex),
+                TcdrmConstants.metaQtableFile(modelType, "tsla", complex),
                 1.0, TcdrmConstants.META_TSLA_MIN_MULTIPLIER, 1.0,
-                TcdrmConstants.META_TSLA_STEP, 0.0, seed ^ 0x9E3779B9L);
+                TcdrmConstants.META_TSLA_RESOLUTION, 0.0,
+                (seed ^ modelType.hashCode()) ^ 0x9E3779B9L);
         double dynTSla = contractTSla;
         int windowViol = 0;
         double windowCost = 0.0;

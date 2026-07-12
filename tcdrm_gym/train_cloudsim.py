@@ -483,6 +483,10 @@ def main():
 
 	try:
 		cfg = {}
+		# Identité de l'agent : chaque agent entraîne et possède SES Q-tables de
+		# méta-seuils (meta_threshold_<agent>_*.qtable) — les politiques de seuil
+		# de Q-Learning et Rainbow sont apprises indépendamment.
+		cfg['agentTag'] = str(args.agent)
 		if args.max_episode_length is not None:
 			cfg['maxEpisodeLength'] = int(args.max_episode_length)
 		# Forward dynamic warmup config

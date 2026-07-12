@@ -24,6 +24,9 @@ public class TrainingServer {
     private TrainingEnvironment simpleEnv;
     private TrainingEnvironment complexEnv;
     private TrainingSettings settings = new TrainingSettings();
+    // Identité de l'agent en cours d'entraînement : chaque agent possède ses propres
+    // Q-tables de méta-seuils (meta_threshold_<tag>_*.qtable).
+    private String agentTag = "shared";
     
     /**
      * Crée un nouvel environnement d'entraînement.
@@ -34,10 +37,10 @@ public class TrainingServer {
      */
     public TrainingEnvironment createEnvironment(long seed, boolean complex) {
         if (complex) {
-            complexEnv = new TrainingEnvironment(seed, true, settings);
+            complexEnv = new TrainingEnvironment(seed, true, settings, agentTag);
             return complexEnv;
         } else {
-            simpleEnv = new TrainingEnvironment(seed, false, settings);
+            simpleEnv = new TrainingEnvironment(seed, false, settings, agentTag);
             return simpleEnv;
         }
     }
@@ -202,6 +205,15 @@ public class TrainingServer {
     public void configureSimulation(Map<String, Object> params) {
         if (params == null) return;
         Map<String, Object> p = new HashMap<>(params);
+        // Identité de l'agent : si elle change (ex: Q-Learning puis Rainbow dans la même
+        // session serveur), recréer les environnements pour que chaque agent charge et
+        // sauvegarde SES Q-tables de méta-seuils — jamais celles de l'autre.
+        Object tag = p.get("agentTag");
+        if (tag instanceof String s && !s.isBlank() && !s.equals(agentTag)) {
+            agentTag = s;
+            simpleEnv = null;
+            complexEnv = null;
+        }
         Object maxEp = p.get("maxEpisodeLength");
         if (maxEp instanceof Number n) settings.setMaxEpisodeLength(n.intValue());
         Object tSimple = p.get("tSlaSimpleMs");

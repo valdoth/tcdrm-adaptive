@@ -65,30 +65,39 @@ public final class TcdrmConstants {
     public static final int MAX_REPLICAS_COMPLEX = 12;
     /**
      * Éligibilité popularité (Paper Algorithm 1 : IF pd_i > P_SLA THEN répliquer).
-     * La réplication n'est JAMAIS autorisée sur données non populaires — pour tous les
-     * modèles, RL compris. Le contrat = popularité normalisée 1.0 (accessCount ≥ P_SLA).
+     * Le contrat = popularité normalisée 1.0 (accessCount ≥ P_SLA).
      *
-     * Sujet 1 : le seuil est ajusté par un méta-contrôleur Q-learning APPRIS
-     * ({@link org.tcdrm.adaptive.rl.ThresholdMetaLearner}) — aucune règle d'ajustement
-     * codée en dur. Le seuil repart du contrat (1.0) à chaque run et ne peut évoluer
-     * que d'un pas par fenêtre de META_WINDOW_QUERIES : structurellement, aucune
-     * réplication n'est possible sur données inconnues (query 0).
+     * Sujet 1 : la VALEUR du seuil n'existe nulle part en dur — elle est choisie à
+     * chaque fenêtre par un méta-contrôleur Q-learning PAR AGENT
+     * ({@link org.tcdrm.adaptive.rl.ThresholdMetaLearner}) qui sélectionne librement
+     * un niveau dans [0,1] (aucune limite de vitesse d'ajustement). Le seuil repart du
+     * contrat (1.0) à chaque run, et la récompense méta inclut un terme de fidélité au
+     * contrat : s'en éloigner n'est appris que si cela supprime des violations SLA.
      */
     /** Cadence de décision du méta-contrôleur de seuils (requêtes par fenêtre). */
     public static final int META_WINDOW_QUERIES = 50;
-    /** Granularité d'ajustement du seuil de popularité par décision du méta-contrôleur. */
-    public static final double META_POPULARITY_STEP = 0.10;
-    /** Granularité d'ajustement du multiplicateur T_SLA par décision du méta-contrôleur. */
-    public static final double META_TSLA_STEP = 0.05;
+    /**
+     * Résolution de discrétisation de l'espace d'action du seuil de popularité
+     * (11 niveaux sur [0,1]) — granularité de grille, PAS une limite d'ajustement :
+     * le méta-contrôleur peut passer de n'importe quel niveau à n'importe quel autre.
+     */
+    public static final double META_POPULARITY_RESOLUTION = 0.10;
+    /** Résolution de discrétisation du multiplicateur T_SLA (grille, pas une limite). */
+    public static final double META_TSLA_RESOLUTION = 0.05;
     /** Borne basse du multiplicateur T_SLA appris (fraction du contrat). */
     public static final double META_TSLA_MIN_MULTIPLIER = 0.60;
     /** Répertoire des Q-tables du méta-contrôleur (persistées entre entraînement et éval). */
     public static final String META_QTABLE_DIR = "tcdrm_gym/models";
 
-    /** Fichier de Q-table du méta-contrôleur pour un seuil et un type de workload donnés. */
-    public static java.io.File metaQtableFile(String kind, boolean complex) {
+    /**
+     * Fichier de Q-table du méta-contrôleur pour un agent, un seuil et un workload donnés.
+     * Les Q-tables sont PAR AGENT : Q-Learning et Rainbow apprennent chacun leur propre
+     * politique d'ajustement des seuils — leurs moments de déclenchement sont donc
+     * indépendants (pas de seuil commun partagé).
+     */
+    public static java.io.File metaQtableFile(String agentTag, String kind, boolean complex) {
         return new java.io.File(META_QTABLE_DIR,
-            "meta_threshold_" + kind + "_" + (complex ? "complex" : "simple") + ".qtable");
+            "meta_threshold_" + agentTag + "_" + kind + "_" + (complex ? "complex" : "simple") + ".qtable");
     }
 
     // ==================================================================
