@@ -308,12 +308,15 @@ class RainbowDQNAgent:
         n_atoms:            int   = 51,
         v_min:              float = -10.0,
         v_max:              float = 10.0,
+        reward_scale:       float = 1.0,
+        per_beta_frames:    int   = None,
     ):
         if hidden_dims is None:
             hidden_dims = [128, 128]
 
         self.state_dim          = state_dim
         self.action_dim         = action_dim
+        self._hidden_dims       = list(hidden_dims)
         self.discount_factor    = discount_factor
         self.batch_size         = batch_size
         self.tau                = tau
@@ -321,6 +324,11 @@ class RainbowDQNAgent:
         self.n_step             = max(1, n_step)
         self._min_buffer_size   = max(batch_size, min_buffer_size)
         self.normalize_rewards  = normalize_rewards
+        # Échelle appliquée APRÈS normalisation : ramène l'ordre de grandeur des RETOURS
+        # (Σ γⁱ r̃ ≈ r̃/(1−γ), soit ±50-100 pour r̃ soutenu ±1) dans le support C51.
+        # Sans elle, la distribution sature aux bornes v_min/v_max et le réseau ne
+        # distingue plus les états bons des très bons.
+        self.reward_scale       = reward_scale
         self.use_distributional = use_distributional
         self.n_atoms            = n_atoms
         self.v_min              = v_min
@@ -349,8 +357,11 @@ class RainbowDQNAgent:
             lr=learning_rate, eps=1.5e-4, weight_decay=1e-5)
         self._init_scheduler(lr_scheduler, scheduler_params or {})
 
+        # β du PER anneal jusqu'à 1 sur TOUTE la durée d'entraînement (Rainbow, Hessel 2018)
+        # quand per_beta_frames est fourni — sinon heuristique historique.
         self.replay_buffer = PrioritizedReplayBuffer(
-            buffer_capacity, beta_frames=max(buffer_capacity, 100000))
+            buffer_capacity,
+            beta_frames=per_beta_frames if per_beta_frames else max(buffer_capacity, 100000))
         self._nstep_buf    = NStepBuffer(self.n_step, self.discount_factor)
         # Normalisation de récompense séparée par régime (simple=0, complex=1) : les échelles
         # naturelles diffèrent (CSLA_COMPLEX ≈ 2.7× CSLA_SIMPLE, coûts/latences plus élevés en
@@ -410,7 +421,7 @@ class RainbowDQNAgent:
             regime = 1 if len(state) > 8 and state[8] >= 0.5 else 0
             stats = self._reward_stats[regime]
             stats.update(reward)
-            reward = stats.normalize(reward)
+            reward = stats.normalize(reward) * self.reward_scale
 
         for transition in self._nstep_buf.push(state, action, reward, next_state, done):
             self.replay_buffer.push(*transition)
@@ -584,6 +595,8 @@ class RainbowDQNAgent:
             'v_min':             self.v_min,
             'v_max':             self.v_max,
             'n_step':            self.n_step,
+            'reward_scale':      self.reward_scale,
+            'hidden_dims':       self._hidden_dims,
             'reward_stats': {
                 regime: {
                     'mean':  float(rs.mean),
@@ -613,18 +626,59 @@ class RainbowDQNAgent:
         except Exception:
             pass
 
+        # Réconcilier les hyperparamètres distributionnels AVANT load_state_dict :
+        # si le checkpoint a été entraîné avec un autre support C51 (v_min/v_max/n_atoms),
+        # les attributs du réseau (delta_z, bornes de clamp de la projection de Bellman)
+        # resteraient ceux du constructeur alors que le buffer `support` serait écrasé
+        # par le checkpoint → l'apprentissage online (benchmark) projetterait chaque
+        # cible sur une grille FAUSSE et corromprait le réseau. On reconstruit les
+        # réseaux (et l'optimiseur qui référence leurs paramètres) aux dimensions du
+        # checkpoint quand elles diffèrent.
+        self.use_distributional = ckpt.get('use_distributional', True)
+        ckpt_n_atoms = ckpt.get('n_atoms', self.n_atoms)
+        ckpt_v_min   = ckpt.get('v_min',   self.v_min)
+        ckpt_v_max   = ckpt.get('v_max',   self.v_max)
+        ckpt_hidden  = ckpt.get('hidden_dims', self._hidden_dims)
+        if self.use_distributional and (
+                ckpt_n_atoms != self.n_atoms
+                or ckpt_v_min != self.v_min or ckpt_v_max != self.v_max
+                or list(ckpt_hidden) != list(self._hidden_dims)):
+            print(f'[RainbowDQN] Rebuilding networks to match checkpoint '
+                  f'(atoms={ckpt_n_atoms}, support=[{ckpt_v_min}, {ckpt_v_max}], hidden={ckpt_hidden})')
+            self.n_atoms, self.v_min, self.v_max = ckpt_n_atoms, ckpt_v_min, ckpt_v_max
+            self._hidden_dims = list(ckpt_hidden)
+            lr = self.optimizer.param_groups[0]['lr']
+            self.policy_net = C51NoisyDuelingNetwork(
+                self.state_dim, self.action_dim, self._hidden_dims,
+                self.n_atoms, self.v_min, self.v_max).to(self.device)
+            self.target_net = C51NoisyDuelingNetwork(
+                self.state_dim, self.action_dim, self._hidden_dims,
+                self.n_atoms, self.v_min, self.v_max).to(self.device)
+            self.target_net.eval()
+            self.optimizer = optim.Adam(
+                self.policy_net.parameters(), lr=lr, eps=1.5e-4, weight_decay=1e-5)
+
         self.policy_net.load_state_dict(ckpt['policy_net_state_dict'])
         self.target_net.load_state_dict(ckpt['target_net_state_dict'])
-        self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        try:
+            self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        except (ValueError, KeyError):
+            print('[RainbowDQN] Optimizer state incompatible with rebuilt networks — using fresh optimizer')
         self.update_count       = ckpt.get('update_count', 0)
         self.training_steps     = ckpt.get('training_steps', 0)
         self.episode_rewards    = ckpt.get('episode_rewards', [])
         self.losses             = ckpt.get('losses', [])
-        self.use_distributional = ckpt.get('use_distributional', True)
         self.n_atoms            = ckpt.get('n_atoms', 51)
         self.v_min              = ckpt.get('v_min', -10.0)
         self.v_max              = ckpt.get('v_max', 10.0)
         self.n_step             = ckpt.get('n_step', 3)
+        # Clé absente = checkpoint antérieur à l'introduction de reward_scale,
+        # donc entraîné à l'échelle 1.0 — PAS celle du constructeur courant.
+        self.reward_scale       = ckpt.get('reward_scale', 1.0)
+        # Resynchroniser l'accumulateur n-step : sans cela, un checkpoint n_step=N chargé
+        # dans un agent construit avec n_step=M accumulerait des retours sur M pas tout
+        # en les actualisant avec γ^N dans la perte.
+        self._nstep_buf = NStepBuffer(self.n_step, self.discount_factor)
         rs = ckpt.get('reward_stats')
         if rs is not None and self._reward_stats is not None:
             if 'mean' in rs:

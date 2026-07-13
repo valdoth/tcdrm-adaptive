@@ -44,6 +44,13 @@ public class TcdrmSimulation {
     // non populaires ne sont JAMAIS répliquées.
     private double dynamicMinPopularity = 1.0;
 
+    // Fenêtre d'observation ΔT de suppression (Paper Algorithm 3), en NOMBRE DE
+    // REQUÊTES — apprise par méta-contrôleur (fraction de P_SLA). Unifie durée de
+    // vie minimale, fenêtre de popularité et cooldown de re-création.
+    // Défaut : P_SLA entier (posture la plus conservatrice = ne supprimer qu'après
+    // un cycle complet d'inactivité), assouplie uniquement par apprentissage.
+    private int dynamicDeletionWindowQueries = TcdrmConstants.P_SLA;
+
     // Sujet 2 : optimiseur multi-objectifs du placement de réplicas
     private final ReplicaPlacementOptimizer placementOptimizer;
     // Compteurs de réplicas par provider pour le scoring de saturation (Sujet 2)
@@ -75,7 +82,12 @@ public class TcdrmSimulation {
     }
 
     private List<DataFragment> createDistributedFragments() {
-        int nRelations = complex ? TcdrmConstants.RELATIONS_COMPLEX : TcdrmConstants.RELATIONS_SIMPLE;
+        int perQuery = complex ? TcdrmConstants.RELATIONS_COMPLEX : TcdrmConstants.RELATIONS_SIMPLE;
+        // Modes dynamiques (variable/burst) : pool 3× plus grand que ce qu'une requête
+        // touche — la popularité devient une propriété émergente PAR fragment (certains
+        // chauds, d'autres froids), au lieu d'être uniforme comme en mode steady.
+        boolean steady = "steady".equals(org.tcdrm.adaptive.core.RuntimeConfig.getWorkloadMode());
+        int nRelations = steady ? perQuery : perQuery * TcdrmConstants.WORKLOAD_POOL_FACTOR;
         List<DataFragment> frags = new ArrayList<>();
 
         String[] providers = MultiCloudInfrastructure.PROVIDERS;
@@ -100,16 +112,29 @@ public class TcdrmSimulation {
 
     private List<int[]> buildLegacyWorkloadSets(long seed) {
         int n = effectiveMaxQueries();
-        if (complex) {
-            return org.tcdrm.adaptive.data.LegacyWorkloadTemplates.generateComplex(fragments, n, seed);
-        } else {
-            return org.tcdrm.adaptive.data.LegacyWorkloadTemplates.generateSimple(fragments, n, seed);
+        int perQuery = complex ? TcdrmConstants.RELATIONS_COMPLEX : TcdrmConstants.RELATIONS_SIMPLE;
+        String mode = org.tcdrm.adaptive.core.RuntimeConfig.getWorkloadMode();
+        switch (mode) {
+            case "variable":
+                return org.tcdrm.adaptive.data.PopularityWorkloads.generateVariable(
+                    fragments.size(), perQuery, n, seed);
+            case "burst":
+                return org.tcdrm.adaptive.data.PopularityWorkloads.generateBurst(
+                    fragments.size(), perQuery, n, seed);
+            default: // steady — requête répétée, fidèle au protocole du papier
+                if (complex) {
+                    return org.tcdrm.adaptive.data.LegacyWorkloadTemplates.generateComplex(fragments, n, seed);
+                }
+                return org.tcdrm.adaptive.data.LegacyWorkloadTemplates.generateSimple(fragments, n, seed);
         }
     }
 
     private List<DataFragment> selectFragmentsForQuery(int qIdx) {
-        if (workloadSets != null && qIdx < workloadSets.size()) {
-            int[] idx = workloadSets.get(qIdx);
+        if (workloadSets != null && !workloadSets.isEmpty()) {
+            // Boucle sur le pattern généré si le run dépasse sa longueur (warmup,
+            // maxEpisodeLength > MAX_QUERIES) — jamais de fallback « tous les
+            // fragments », qui fausserait silencieusement la popularité.
+            int[] idx = workloadSets.get(qIdx % workloadSets.size());
             return org.tcdrm.adaptive.data.LegacyWorkloadTemplates.select(fragments, idx);
         }
         return fragments;
@@ -371,8 +396,9 @@ public class TcdrmSimulation {
         for (int i = 0; i < fragments.size(); i++) {
             DataFragment f = fragments.get(i);
             if (!f.hasReplica()) continue;
-            if (f.getQueriesSinceReplication() < TcdrmConstants.MIN_REPLICA_LIFETIME_QUERIES) continue;
-            if (f.isStillPopular(queryCount, TcdrmConstants.POPULARITY_WINDOW_QUERIES)) continue;
+            // ΔT appris (Algorithm 3) : durée de vie minimale ET fenêtre de popularité
+            if (f.getQueriesSinceReplication() < dynamicDeletionWindowQueries) continue;
+            if (f.isStillPopular(queryCount, dynamicDeletionWindowQueries)) continue;
 
             // Score deletion candidates: prefer falling trend + oldest access
             // trend: -1=falling (prefer delete), 0=stable, +1=rising (avoid delete)
@@ -394,7 +420,7 @@ public class TcdrmSimulation {
         DataFragment f = fragments.get(idx);
         String replicaProvider = f.getReplicaProvider();
         f.deleteReplica();
-        f.startRecreateCooldown(TcdrmConstants.REPLICA_RECREATE_COOLDOWN_QUERIES);
+        f.startRecreateCooldown(dynamicDeletionWindowQueries);
         currentReplicaCount--;
         if (replicaProvider != null) {
             int pi = providerIndex(replicaProvider);
@@ -431,16 +457,6 @@ public class TcdrmSimulation {
             if (f.getAccessCount() > maxAccess) maxAccess = f.getAccessCount();
         }
         return Math.min(1.0, (double) maxAccess / TcdrmConstants.P_SLA);
-    }
-
-    private void deleteLastReplica() {
-        for (int i = fragments.size() - 1; i >= 0; i--) {
-            if (fragments.get(i).hasReplica()) {
-                fragments.get(i).deleteReplica();
-                currentReplicaCount--;
-                return;
-            }
-        }
     }
 
     /** Index du provider dans {@link MultiCloudInfrastructure#PROVIDERS}. */
@@ -540,6 +556,18 @@ public class TcdrmSimulation {
         return getPopularityScore() >= dynamicMinPopularity;
     }
 
+    /**
+     * Injecte la fenêtre ΔT de suppression apprise (Paper Algorithm 3), exprimée en
+     * fraction du P_SLA contractuel. Bornée aux bornes de définition [MIN, 1.0].
+     */
+    public void setDynamicDeletionWindow(double fractionOfPsla) {
+        double f = Math.max(TcdrmConstants.META_DELETION_WINDOW_MIN, Math.min(1.0, fractionOfPsla));
+        this.dynamicDeletionWindowQueries = (int) Math.round(f * TcdrmConstants.P_SLA);
+    }
+
+    /** Fenêtre ΔT de suppression courante (requêtes). */
+    public int getDynamicDeletionWindowQueries() { return dynamicDeletionWindowQueries; }
+
     public double getDynamicTSla() { return dynamicTSla; }
 
     /** Seuil de popularité adaptatif courant (P_SLA normalisé, Sujet 1). */
@@ -557,18 +585,4 @@ public class TcdrmSimulation {
     }
 
     public ReplicaPlacementOptimizer getPlacementOptimizer() { return placementOptimizer; }
-
-    private void refreshExecRegionPerQuery() {
-        String cfg = org.tcdrm.adaptive.core.RuntimeConfig.getExecRegion();
-        if (cfg != null && cfg.equalsIgnoreCase("RANDOM")) {
-            String[] regions = MultiCloudInfrastructure.REGIONS;
-            if (regions != null && regions.length > 0) {
-                this.execRegion = regions[rnd.nextInt(regions.length)];
-            } else {
-                this.execRegion = "EU";
-            }
-        } else {
-            this.execRegion = cfg != null ? cfg : "EU";
-        }
-    }
 }

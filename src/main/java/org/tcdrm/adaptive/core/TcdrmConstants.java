@@ -68,14 +68,24 @@ public final class TcdrmConstants {
      * Le contrat = popularité normalisée 1.0 (accessCount ≥ P_SLA).
      *
      * Sujet 1 : la VALEUR du seuil n'existe nulle part en dur — elle est choisie à
-     * chaque fenêtre par un méta-contrôleur Q-learning PAR AGENT
+     * CHAQUE REQUÊTE par un méta-contrôleur Q-learning PAR AGENT
      * ({@link org.tcdrm.adaptive.rl.ThresholdMetaLearner}) qui sélectionne librement
-     * un niveau dans [0,1] (aucune limite de vitesse d'ajustement). Le seuil repart du
-     * contrat (1.0) à chaque run, et la récompense méta inclut un terme de fidélité au
-     * contrat : s'en éloigner n'est appris que si cela supprime des violations SLA.
+     * un niveau dans [0,1] (aucune limite de vitesse d'ajustement, aucune cadence fixe).
+     * Le seuil repart du contrat (1.0) à chaque run, et la récompense méta inclut un
+     * terme de fidélité au contrat : s'en éloigner n'est appris que si cela supprime
+     * des violations SLA.
      */
-    /** Cadence de décision du méta-contrôleur de seuils (requêtes par fenêtre). */
-    public static final int META_WINDOW_QUERIES = 50;
+    /**
+     * Constante de lissage (EMA) du signal de stress observé par les méta-contrôleurs
+     * (taux de violations T_SLA, ratio coût/C_SLA). Les méta-contrôleurs observent ce
+     * signal et peuvent ajuster les seuils À CHAQUE REQUÊTE — il n'existe AUCUNE
+     * cadence fixe de décision (aucune « fenêtre de N requêtes ») : le MOMENT du
+     * déclenchement est entièrement déterminé par la politique apprise de chaque agent
+     * (Sujet 1 : « quand décider » est appris, pas cadencé). α est un paramètre de
+     * filtrage du bruit de mesure (mémoire effective ≈ 2/α − 1 requêtes), au même
+     * titre que les buckets d'état — pas une règle de comportement.
+     */
+    public static final double META_EMA_ALPHA = 0.04;
     /**
      * Résolution de discrétisation de l'espace d'action du seuil de popularité
      * (11 niveaux sur [0,1]) — granularité de grille, PAS une limite d'ajustement :
@@ -98,6 +108,15 @@ public final class TcdrmConstants {
     public static java.io.File metaQtableFile(String agentTag, String kind, boolean complex) {
         return new java.io.File(META_QTABLE_DIR,
             "meta_threshold_" + agentTag + "_" + kind + "_" + (complex ? "complex" : "simple") + ".qtable");
+    }
+
+    /**
+     * Fichier des poids de récompense utilisés à l'ENTRAÎNEMENT d'un agent — écrit par
+     * le TrainingServer, rechargé par le benchmark pour que la récompense d'évaluation
+     * (apprentissage online) soit toujours alignée sur celle de l'entraînement.
+     */
+    public static java.io.File rewardConfigFile(String agentTag) {
+        return new java.io.File(META_QTABLE_DIR, "reward_config_" + agentTag + ".properties");
     }
 
     // ==================================================================
@@ -155,6 +174,13 @@ public final class TcdrmConstants {
     /** Number of queries per experiment (Paper Section 4.1: 1000) */
     public static final int MAX_QUERIES = 1000;
     /**
+     * Facteur de taille du pool de fragments pour les workloads dynamiques
+     * (variable/burst) : pool = relations_par_requête × facteur. Une requête ne
+     * touche qu'une fraction du pool — la popularité devient une propriété émergente
+     * par fragment (inspiré des workloads de traces réelles Google/Alibaba).
+     */
+    public static final int WORKLOAD_POOL_FACTOR = 3;
+    /**
      * Budget initial du locataire ($) — STATIQUE (contrat client, comme C_SLA).
      * Couvre le coût contractuel max d'un run de 1000 requêtes avec marge :
      * simple 1000×0.015 = 15$, complex 1000×0.040 = 40$ → 60$ laisse une marge
@@ -196,20 +222,23 @@ public final class TcdrmConstants {
     public static final double JOIN_COVERAGE_SPEEDUP = 0.6;
 
     // ==================================================================
-    // Replica Lifetime / Anti-oscillation
-    // Empêche les allers-retours réplication/suppression en imposant
-    // une durée de vie minimale avant suppression.
+    // Suppression de réplicas (Paper Algorithm 3) — fenêtre ΔT APPRISE
     // ==================================================================
-    /** Nombre minimal de requêtes avant qu'un réplica puisse être supprimé */
-    public static final int MIN_REPLICA_LIFETIME_QUERIES = 30;
-    /** Cooldown de re-création après une suppression pour éviter re-création immédiate */
-    public static final int REPLICA_RECREATE_COOLDOWN_QUERIES = 80;
     /**
-     * Fenêtre glissante de popularité. Un fragment accédé dans les dernières
-     * POPULARITY_WINDOW_QUERIES requêtes est "encore utilisé" : son réplica est protégé
-     * contre la suppression tant que les données restent populaires.
+     * La fenêtre d'observation ΔT de l'Algorithme 3 (le papier la définit comme
+     * « configurable observation window ») est APPRISE par un méta-contrôleur
+     * Q-learning par agent — aucune valeur en dur. Elle unifie les trois anciens
+     * paramètres statiques (durée de vie minimale 30, fenêtre de popularité 50,
+     * cooldown 80) : l'Algorithme 3 s'exprime entièrement en unités de ΔT —
+     * un réplica ne peut être jugé froid qu'après ΔT d'observation (durée de vie
+     * minimale), il n'est supprimable que si les données ne sont plus accédées
+     * depuis ΔT, et après suppression on attend ΔT avant re-création (anti-
+     * oscillation). ΔT est exprimé en fraction du P_SLA contractuel.
      */
-    public static final int POPULARITY_WINDOW_QUERIES = 50;
+    /** Résolution de la grille d'action du ΔT de suppression (fraction de P_SLA). */
+    public static final double META_DELETION_WINDOW_RESOLUTION = 0.05;
+    /** Borne basse de définition du ΔT (fraction de P_SLA) — une fenêtre nulle n'a pas de sens. */
+    public static final double META_DELETION_WINDOW_MIN = 0.05;
 
     // ==================================================================
     // Query Execution Model
