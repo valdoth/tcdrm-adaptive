@@ -36,12 +36,24 @@ public class TrainingServer {
      * @return L'environnement créé
      */
     public TrainingEnvironment createEnvironment(long seed, boolean complex) {
+        // Persiste les poids de récompense de CET agent : le benchmark les recharge
+        // pour garantir l'alignement train/eval (aucun poids codé en dur côté éval).
+        saveRewardConfig();
         if (complex) {
             complexEnv = new TrainingEnvironment(seed, true, settings, agentTag);
             return complexEnv;
         } else {
             simpleEnv = new TrainingEnvironment(seed, false, settings, agentTag);
             return simpleEnv;
+        }
+    }
+
+    private void saveRewardConfig() {
+        try {
+            settings.saveRewardConfig(
+                org.tcdrm.adaptive.core.TcdrmConstants.rewardConfigFile(agentTag));
+        } catch (java.io.IOException e) {
+            System.err.println("[TrainingServer] Failed to save reward config: " + e.getMessage());
         }
     }
     
@@ -211,6 +223,11 @@ public class TrainingServer {
         Object tag = p.get("agentTag");
         if (tag instanceof String s && !s.isBlank() && !s.equals(agentTag)) {
             agentTag = s;
+            // Chaque agent part des DÉFAUTS + SES overrides : sans ce reset, le second
+            // agent entraîné dans la même session hériterait silencieusement des poids
+            // de récompense du premier pour toute clé qu'il ne renvoie pas
+            // (ex: rewardCostOver=25 de Rainbow contaminerait Q-Learning).
+            settings = new TrainingSettings();
             simpleEnv = null;
             complexEnv = null;
         }
@@ -230,6 +247,7 @@ public class TrainingServer {
         Object rOk   = p.get("rewardSlaOk");         if (rOk   instanceof Number n) settings.setRewardSlaOk(n.doubleValue());
         Object rViol = p.get("rewardSlaViol");        if (rViol instanceof Number n) settings.setRewardSlaViol(n.doubleValue());
         Object rCost = p.get("rewardCostOver");       if (rCost instanceof Number n) settings.setRewardCostOver(n.doubleValue());
+        Object rCLin = p.get("rewardCostLinear");     if (rCLin instanceof Number n) settings.setRewardCostLinear(n.doubleValue());
         Object rRepl = p.get("rewardReplCost");       if (rRepl instanceof Number n) settings.setRewardReplCost(n.doubleValue());
         Object rPrem = p.get("rewardPrematureRepl");   if (rPrem instanceof Number n) settings.setRewardPrematureRepl(n.doubleValue());
         Object rDel  = p.get("rewardPrematureDelete"); if (rDel  instanceof Number n) settings.setRewardPrematureDelete(n.doubleValue());
@@ -238,6 +256,10 @@ public class TrainingServer {
         Object rInv  = p.get("rewardInvalid");        if (rInv  instanceof Number n) settings.setRewardInvalid(n.doubleValue());
         Object rPop  = p.get("rewardLowPopularity");  if (rPop  instanceof Number n) settings.setRewardLowPopularity(n.doubleValue());
         Object rCorr = p.get("rewardCorrectTrigger"); if (rCorr instanceof Number n) settings.setRewardCorrectTrigger(n.doubleValue());
+        Object rHold = p.get("rewardUnpopularHolding"); if (rHold instanceof Number n) settings.setRewardUnpopularHolding(n.doubleValue());
+        // Persiste la configuration de récompense de CET agent après application des
+        // overrides Python (ex: --reward-cost-over) — rechargée par le benchmark.
+        saveRewardConfig();
     }
 
     /** Reset structuré (retourne un objet avec state + info). */
@@ -306,77 +328,6 @@ public class TrainingServer {
         }
         return env.getActionMask();
     }
-}
-
-/** Paramètres configurables de l'entraînement/simulation. */
-class TrainingSettings {
-    private int maxEpisodeLength = -1; // -1 = utiliser constantes
-    private double tSlaSimpleMs = -1;  // -1 = utiliser constantes
-    private double tSlaComplexMs = -1; // -1 = utiliser constantes
-    // Dynamic warmup configuration (applied on TrainingEnvironment.reset)
-    private int warmupQueries = 0;           // number of warmup queries before RL actions
-    private String warmupStrategy = "random"; // random | tcdrm | norep
-    private double warmupRandomProb = 0.2;   // probability for replicate/delete in random mode
-
-    // Sujet 1 : poids de la fonction de récompense — configurables depuis Python
-    // R = r_slaOk × SLA_OK − r_slaViol × SLA_VIOL − r_costOver × COST_OVER
-    //     − r_replCost × REPL_COST − r_premature × PREMATURE_REPL
-    //     − r_thrash × THRASH − r_maint × replicas − r_invalid × INVALID
-    private double rewardSlaOk        = 10.0;
-    private double rewardSlaViol      = 20.0;
-    private double rewardCostOver     = 15.0;
-    private double rewardReplCost     =  5.0;
-    // Pénalités symétriques REPLICATE/DELETE prématurés : dissuadent d'agir sans pression SLA.
-    // slaMargin ∈ [0,1] : 1 = loin de la violation (très prématuré), 0 = SLA violé (justifié).
-    private double rewardPrematureRepl   = 5.0;
-    private double rewardPrematureDelete = 5.0;  // symétrique : pénalise DELETE inutile quand SLA OK
-    private double rewardThrash          =  8.0;
-    private double rewardMaintenance     =  0.01; // réduit 0.05→0.01 : supprime l'incitation à détruire des réplicas
-    private double rewardInvalid         =  2.0;
-    // Pénalité proportionnelle à (1 - popularityScore) lors d'une réplication.
-    // 0 quand P_SLA atteint, maximale au query 0 — enseigne à ne pas répliquer avant que
-    // les données soient connues, sans aucun seuil statique dans le code de simulation.
-    private double rewardLowPopularity  =  5.0;
-    // Bonus quand l'agent réplique exactement quand l'Algorithme 1 le ferait :
-    // SLA violé (temps ou coût) ET workload stabilisé (P_SLA atteint).
-    private double rewardCorrectTrigger =  8.0;
-
-    public int getMaxEpisodeLength() { return maxEpisodeLength; }
-    public void setMaxEpisodeLength(int v) { this.maxEpisodeLength = v; }
-    public double getTSlaSimpleMs() { return tSlaSimpleMs; }
-    public void setTSlaSimpleMs(double v) { this.tSlaSimpleMs = v; }
-    public double getTSlaComplexMs() { return tSlaComplexMs; }
-    public void setTSlaComplexMs(double v) { this.tSlaComplexMs = v; }
-    public int getWarmupQueries() { return warmupQueries; }
-    public void setWarmupQueries(int v) { this.warmupQueries = Math.max(0, v); }
-    public String getWarmupStrategy() { return warmupStrategy; }
-    public void setWarmupStrategy(String s) { this.warmupStrategy = (s == null ? "random" : s); }
-    public double getWarmupRandomProb() { return warmupRandomProb; }
-    public void setWarmupRandomProb(double p) { this.warmupRandomProb = Math.max(0.0, Math.min(1.0, p)); }
-
-    public double getRewardSlaOk()             { return rewardSlaOk; }
-    public double getRewardSlaViol()           { return rewardSlaViol; }
-    public double getRewardCostOver()          { return rewardCostOver; }
-    public double getRewardReplCost()          { return rewardReplCost; }
-    public double getRewardPrematureRepl()     { return rewardPrematureRepl; }
-    public double getRewardPrematureDelete()   { return rewardPrematureDelete; }
-    public double getRewardThrash()            { return rewardThrash; }
-    public double getRewardMaintenance()       { return rewardMaintenance; }
-    public double getRewardInvalid()           { return rewardInvalid; }
-    public double getRewardLowPopularity()     { return rewardLowPopularity; }
-    public double getRewardCorrectTrigger()    { return rewardCorrectTrigger; }
-
-    public void setRewardSlaOk(double v)             { rewardSlaOk           = Math.max(0, v); }
-    public void setRewardSlaViol(double v)            { rewardSlaViol         = Math.max(0, v); }
-    public void setRewardCostOver(double v)           { rewardCostOver        = Math.max(0, v); }
-    public void setRewardReplCost(double v)           { rewardReplCost        = Math.max(0, v); }
-    public void setRewardPrematureRepl(double v)      { rewardPrematureRepl   = Math.max(0, v); }
-    public void setRewardPrematureDelete(double v)    { rewardPrematureDelete = Math.max(0, v); }
-    public void setRewardThrash(double v)             { rewardThrash          = Math.max(0, v); }
-    public void setRewardMaintenance(double v)        { rewardMaintenance     = Math.max(0, v); }
-    public void setRewardInvalid(double v)            { rewardInvalid         = Math.max(0, v); }
-    public void setRewardLowPopularity(double v)      { rewardLowPopularity   = Math.max(0, v); }
-    public void setRewardCorrectTrigger(double v)     { rewardCorrectTrigger  = Math.max(0, v); }
 }
 
 /** Info renvoyée à chaque reset/step (horodatage simple). */

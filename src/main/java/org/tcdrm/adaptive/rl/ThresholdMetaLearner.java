@@ -11,12 +11,14 @@ import java.util.Random;
 
 /**
  * Méta-contrôleur Q-learning : APPREND à choisir la valeur d'un seuil normalisé borné,
- * à partir du stress observé (taux de violations SLA, ratio coût/contrat) sur des
- * fenêtres de requêtes.
+ * à partir du stress observé (taux de violations SLA, ratio coût/contrat), fourni en
+ * continu sous forme de signal lissé (EMA) — observation et décision À CHAQUE REQUÊTE,
+ * sans aucune cadence fixe : le MOMENT d'un changement de seuil est entièrement
+ * déterminé par la politique apprise.
  *
  * L'action est la SÉLECTION DIRECTE du niveau de seuil parmi tous les niveaux de
- * l'intervalle — il n'existe AUCUNE limite de vitesse d'ajustement (aucun « pas maximal
- * par fenêtre ») ni règle « si stress alors ±X% » : la trajectoire du seuil est
+ * l'intervalle — il n'existe AUCUNE limite de vitesse d'ajustement ni règle
+ * « si stress alors ±X% » : la trajectoire du seuil est
  * entièrement déterminée par la politique apprise. La granularité de l'intervalle
  * ({@code resolution}) est une discrétisation de l'espace d'action, au même titre que
  * les buckets d'état — pas une règle de comportement.
@@ -53,6 +55,14 @@ public final class ThresholdMetaLearner {
      * pas un seuil de comportement.
      */
     private static final double FIDELITY_WEIGHT = 0.5;
+    /**
+     * Coût d'ÉVÉNEMENT : chaque BAISSE du seuil coûte proportionnellement à son
+     * ampleur, en plus du coût de fidélité par requête. Sans lui, la cadence par
+     * requête permettrait une « ouverture-éclair » gratuite : baisser le seuil une
+     * seule requête (le temps que l'agent réplique) puis le remonter — le coût de
+     * fidélité, facturé par requête passée sous le contrat, serait négligeable.
+     */
+    private static final double CHANGE_WEIGHT = 1.0;
 
     private final double minValue;
     private final double maxValue;
@@ -65,6 +75,8 @@ public final class ThresholdMetaLearner {
     private double value;
     private int lastState = -1;
     private int lastAction = -1;
+    /** Ampleur normalisée de la baisse introduite par la dernière action (coût d'événement). */
+    private double lastDrop = 0.0;
 
     public ThresholdMetaLearner(double initialValue, double minValue, double maxValue,
                                 double resolution, double epsilon, long seed) {
@@ -78,35 +90,53 @@ public final class ThresholdMetaLearner {
         this.epsilon = epsilon;
         this.rnd = new Random(seed);
         this.q = new double[VIOL_BUCKETS * COST_BUCKETS * nLevels][nLevels];
+        // Prior informé : la récompense méta contient un terme de fidélité au contrat
+        // connu a priori (−FIDELITY_WEIGHT × assouplissement). L'encoder dans la
+        // Q-table initiale (au lieu de 0 partout) évite qu'une table VIERGE en greedy
+        // pur dérive vers les niveaux inexplorés par simple optimisme d'initialisation :
+        // sans apprentissage, la politique reste au contrat ; dès que des violations
+        // sont observées, le TD-learning surpasse ce prior et apprend à assouplir.
+        for (double[] row : q) {
+            for (int a = 0; a < nLevels; a++) {
+                double relax = (maxValue - (minValue + a * resolution)) / (maxValue - minValue);
+                row[a] = -FIDELITY_WEIGHT * relax;
+            }
+        }
         this.value = clamp(initialValue);
     }
 
     /**
-     * Observe la fenêtre écoulée, met à jour la Q-table (TD-learning) puis choisit
-     * (ε-greedy) le niveau du seuil pour la fenêtre suivante — n'importe quel niveau
-     * de l'intervalle, sans restriction de déplacement.
+     * Observe le stress courant (signal lissé EMA), met à jour la Q-table (TD-learning)
+     * puis choisit (ε-greedy) le niveau courant du seuil — n'importe quel niveau de
+     * l'intervalle, sans restriction de déplacement. Appelé à CHAQUE requête : le
+     * moment d'un changement de seuil est une décision apprise, pas une cadence.
      *
-     * @param violationRate taux de violations T_SLA sur la fenêtre [0,1]
-     * @param costRatio     coût moyen / contrat C_SLA sur la fenêtre
+     * @param violationRate taux de violations T_SLA lissé (EMA) [0,1]
+     * @param costRatio     ratio lissé coût / contrat C_SLA (EMA)
      * @return la nouvelle valeur du seuil
      */
     public double observeAndAdjust(double violationRate, double costRatio) {
         int s = stateOf(violationRate, costRatio);
         // Fidélité au contrat : s'éloigner du seuil contractuel (maxValue) coûte —
-        // l'assouplissement doit se payer en violations évitées.
+        // l'assouplissement doit se payer en violations évitées. Le coût d'événement
+        // (CHANGE_WEIGHT × baisse introduite par la dernière action) rend les
+        // ouvertures-éclair non gratuites.
         double relaxation = (maxValue - value) / (maxValue - minValue);
         double reward = -violationRate - Math.max(0.0, costRatio - 1.0)
-            - FIDELITY_WEIGHT * relaxation;
+            - FIDELITY_WEIGHT * relaxation
+            - CHANGE_WEIGHT * lastDrop;
 
         if (lastState >= 0 && lastAction >= 0) {
             double best = maxQ(s);
             q[lastState][lastAction] += ALPHA * (reward + GAMMA * best - q[lastState][lastAction]);
         }
 
-        int a = (rnd.nextDouble() < epsilon) ? rnd.nextInt(nLevels) : argmaxQ(s);
+        int a = (rnd.nextDouble() < epsilon) ? rnd.nextInt(nLevels) : argmaxQ(s, levelOf(value));
+        double newValue = clamp(minValue + a * resolution);
+        lastDrop = Math.max(0.0, (value - newValue) / (maxValue - minValue));
         lastState = s;
         lastAction = a;
-        value = clamp(minValue + a * resolution);
+        value = newValue;
         return value;
     }
 
@@ -118,6 +148,7 @@ public final class ThresholdMetaLearner {
         this.value = clamp(initialValue);
         this.lastState = -1;
         this.lastAction = -1;
+        this.lastDrop = 0.0;
     }
 
     public double getValue() { return value; }
@@ -152,9 +183,21 @@ public final class ThresholdMetaLearner {
         return m;
     }
 
-    private int argmaxQ(int s) {
-        int best = 0;
-        for (int i = 1; i < nLevels; i++) if (q[s][i] > q[s][best]) best = i;
+    /** Index de niveau correspondant à une valeur de seuil. */
+    private int levelOf(double v) {
+        int lvl = (int) Math.round((v - minValue) / resolution);
+        return Math.max(0, Math.min(nLevels - 1, lvl));
+    }
+
+    /**
+     * Argmax avec tie-break au niveau COURANT : sur un état jamais visité (ligne
+     * uniforme, ex. Q-table vierge), la politique greedy conserve le seuil en place
+     * (le contrat en début de run) au lieu de sauter arbitrairement à l'index 0 —
+     * qui, pour le seuil de popularité, autoriserait la réplication dès la requête 1.
+     */
+    private int argmaxQ(int s, int preferredLevel) {
+        int best = preferredLevel;
+        for (int i = 0; i < nLevels; i++) if (q[s][i] > q[s][best]) best = i;
         return best;
     }
 

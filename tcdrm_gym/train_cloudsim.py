@@ -299,14 +299,22 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			gradient_clip=10.0,
 			lr_scheduler='cosine',
 			scheduler_params={'T_max': total_steps_estimate, 'eta_min': 1e-6},
-			n_step=3,
+			# n_step=5 : l'effet d'un REPLICATE n'apparaît qu'après le warmup du réplica
+			# (~10 requêtes) — un retour multi-pas plus long propage ce crédit différé.
+			n_step=5,
 			min_buffer_size=1500,
 			normalize_rewards=True,
 			sigma_init=0.65,
 			use_distributional=True,
+			# Support C51 recalibré : avec reward_scale=0.04, les valeurs d'état soutenues
+			# (r̃/(1−γ) ≈ ±4×r̃) tiennent dans [−12, 12] sans saturer les bornes —
+			# l'ancien support [−15, 6] écrasait toute la masse aux extrêmes.
 			n_atoms=51,
-			v_min=-15.0,
-			v_max=6.0,
+			v_min=-12.0,
+			v_max=12.0,
+			reward_scale=0.04,
+			# β du PER anneal jusqu'à 1 sur toute la durée (Rainbow, Hessel 2018)
+			per_beta_frames=total_steps_estimate,
 		)
 
 	best_reward = float('-inf')
@@ -463,6 +471,8 @@ def main():
 					   help='Random warmup probability for replicate/delete actions (0..1)')
 	parser.add_argument('--seed-base', type=int, default=42,
 					   help='Base seed; episode seed = seed_base + episode (decorrelate agents)')
+	parser.add_argument('--reward-cost-linear', type=float, default=None,
+	                    help='Poids du coût linéaire continu (pénalité ∝ coût réel/C_SLA, même sous contrat) — priorise le coût')
 	parser.add_argument('--reward-cost-over', type=float, default=None,
 					   help='Override rewardCostOver weight (default Java: 15.0) — plus élevé pénalise davantage le coût récurrent, encourage plus de réplication')
     
@@ -495,6 +505,8 @@ def main():
 		cfg['warmupRandomProb'] = float(max(0.0, min(1.0, args.warmup_random_prob)))
 		if args.reward_cost_over is not None:
 			cfg['rewardCostOver'] = float(args.reward_cost_over)
+		if args.reward_cost_linear is not None:
+			cfg['rewardCostLinear'] = float(args.reward_cost_linear)
 		if args.agent == 'qlearning':
 			env = CloudSimQLearningEnv(port=args.port, complex=False, config=cfg)
 			env_complex = CloudSimQLearningEnv(port=args.port, complex=True, config=cfg)

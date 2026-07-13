@@ -6,11 +6,9 @@ Charge les modèles RL entraînés avec CloudSimPlus et les expose à Java.
 
 import os
 import numpy as np
-import torch
 
 from agents.simple_qlearning_agent import SimpleQLearningAgent
 from agents.rainbow_dqn_agent import RainbowDQNAgent
-from .adaptive_strategy import AdaptiveState
 
 
 class PythonRLBridge:
@@ -18,34 +16,43 @@ class PythonRLBridge:
         self._ql_model_path      = qlearning_model_path
         self._rainbow_model_path = rainbow_model_path
 
+        # ε=0 : protocole d'évaluation documenté (BenchmarkRunner) — exploitation greedy
+        # pure + apprentissage online continu. Toute exploration résiduelle en éval
+        # injecterait des actions aléatoires dans les courbes du benchmark.
         self.qlearning_agent = SimpleQLearningAgent(
             n_states=1458,
             n_actions=3,
             learning_rate=0.15,
             discount_factor=0.95,
-            epsilon_start=0.075,
-            epsilon_min=0.01,
-            epsilon_decay=0.997,
+            epsilon_start=0.0,
+            epsilon_min=0.0,
+            epsilon_decay=1.0,
             use_double_q=True,
             adaptive_lr=True
         )
         if qlearning_model_path and os.path.exists(qlearning_model_path):
             print(f"Loading Q-Learning model: {qlearning_model_path}")
             self.qlearning_agent.load(qlearning_model_path)
-            self.qlearning_agent.epsilon = 0.075
+            self.qlearning_agent.epsilon = 0.0
             stats = self.qlearning_agent.get_stats()
             print(f"Q-Learning loaded (states explored: {stats['states_explored']}/{self.qlearning_agent.n_states})")
         else:
             print("Q-Learning: no trained model, using fresh agent")
 
+        # Mêmes hyperparamètres que train_cloudsim.py (le load() réconcilie de toute
+        # façon support C51 / n_step / reward_scale depuis le checkpoint).
         self.rainbow_agent = RainbowDQNAgent(
             state_dim=9,
             action_dim=3,
             hidden_dims=[256, 256],
-            n_step=3,
+            n_step=5,
             min_buffer_size=500,
             normalize_rewards=True,
             use_distributional=True,
+            n_atoms=51,
+            v_min=-12.0,
+            v_max=12.0,
+            reward_scale=0.04,
         )
         if rainbow_model_path and os.path.exists(rainbow_model_path):
             print(f"Loading Rainbow DQN model: {rainbow_model_path}")
@@ -54,54 +61,47 @@ class PythonRLBridge:
         else:
             print("Rainbow DQN: no trained model, using fresh agent")
 
-        self._ql_state         = AdaptiveState()
-        self._rainbow_state    = AdaptiveState()
         self._ql_last_state    = None
         self._ql_last_action   = None
         self._rainbow_last_state  = None
         self._rainbow_last_action = None
-        self._thrashing_window = 10
         self._ql_episode       = 0
         self._rainbow_episode  = 0
         print("Python bridge initialized")
 
     def resetCounters(self):
-        self._ql_state.reset(initial_p_threshold=0.5)
-        self._rainbow_state.reset(initial_p_threshold=0.4)
         self._ql_last_state    = None
         self._ql_last_action   = None
         self._rainbow_last_state  = None
         self._rainbow_last_action = None
 
-    def selectActionQLearning(self, state_array):
+    def selectActionQLearning(self, state_array, can_replicate, can_delete):
+        """Le masque d'actions vient de Java (mêmes règles que TrainingEnvironment.
+        getActionMask : éligibilité popularité + limites physiques) — parité train/eval.
+        Aucune règle en dur côté éval (le thrashing est géré par la pénalité APPRISE)."""
         try:
             state = self._parse_state(state_array)
-            if self._is_thrashing(self._ql_state):
-                self._record_action(self._ql_state, 0)
-                return 0
             discrete_state = self._discretize_state_for_qlearning(state)
-            valid_actions = self._physical_constraints(state)
+            valid_actions = self._valid_actions(can_replicate, can_delete)
             action = self.qlearning_agent.select_action(discrete_state, valid_actions=valid_actions, training=True)
             self._ql_last_state  = discrete_state
             self._ql_last_action = int(action)
-            self._record_action(self._ql_state, action)
             return int(action)
         except Exception as e:
             print(f"Q-Learning error: {e}")
             return 0
 
-    def selectActionRainbow(self, state_array):
+    def selectActionRainbow(self, state_array, can_replicate, can_delete):
         try:
             state = self._parse_state(state_array)
-            if self._is_thrashing(self._rainbow_state):
-                self._record_action(self._rainbow_state, 0)
-                return 0
             continuous_state = self._build_rainbow_state(state)
-            action_mask = self._physical_mask(state)
-            action = self.rainbow_agent.select_action(continuous_state, training=True, action_mask=action_mask)
+            action_mask = self._action_mask(can_replicate, can_delete)
+            # training=False : inférence déterministe (poids moyens, sans bruit NoisyNet) —
+            # symétrique du ε=0 de Q-Learning. L'apprentissage online (updateRainbow)
+            # continue d'entraîner le réseau, seule la SÉLECTION est greedy.
+            action = self.rainbow_agent.select_action(continuous_state, training=False, action_mask=action_mask)
             self._rainbow_last_state  = continuous_state
             self._rainbow_last_action = int(action)
-            self._record_action(self._rainbow_state, action)
             return int(action)
         except Exception as e:
             print(f"Rainbow DQN error: {e}")
@@ -202,37 +202,20 @@ class PythonRLBridge:
             'is_complex':            float(state_list[8]) if len(state_list) > 8 else 0.0,
         }
 
-    def _is_thrashing(self, adaptive_state: AdaptiveState) -> bool:
-        recent = adaptive_state.action_history[-self._thrashing_window:]
-        if len(recent) < self._thrashing_window:
-            return False
-        recent_creates = sum(1 for a in recent if a == 1)
-        recent_deletes = sum(1 for a in recent if a == 2)
-        return recent_creates >= 2 and recent_deletes >= 2
+    @staticmethod
+    def _action_mask(can_replicate, can_delete) -> np.ndarray:
+        """Masque [NOOP, REPLICATE, DELETE] depuis les flags de l'environnement Java."""
+        return np.array([1.0, 1.0 if can_replicate else 0.0, 1.0 if can_delete else 0.0],
+                        dtype=np.float32)
 
-    def _record_action(self, adaptive_state: AdaptiveState, action: int):
-        adaptive_state.action_history.append(action)
-        if len(adaptive_state.action_history) > 20:
-            adaptive_state.action_history.pop(0)
-        adaptive_state.query_counter += 1
-        if action == 1:
-            adaptive_state.last_replicate_q = adaptive_state.query_counter
-        elif action == 2:
-            adaptive_state.last_delete_q = adaptive_state.query_counter
-
-    def _physical_mask(self, state: dict) -> np.ndarray:
-        mask = np.ones(3, dtype=np.float32)
-        replicas = float(state['replicas_normalized'])
-        budget   = float(state['budget'])
-        if replicas <= 0.0:
-            mask[2] = 0.0
-        if replicas >= 1.0 or budget <= 0.0:
-            mask[1] = 0.0
-        return mask
-
-    def _physical_constraints(self, state: dict):
-        mask = self._physical_mask(state)
-        return [i for i, v in enumerate(mask) if v > 0.5]
+    @staticmethod
+    def _valid_actions(can_replicate, can_delete):
+        valid = [0]
+        if can_replicate:
+            valid.append(1)
+        if can_delete:
+            valid.append(2)
+        return valid
 
     def isQLearningReady(self):
         return self.qlearning_agent is not None

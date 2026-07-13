@@ -77,18 +77,22 @@ show_help() {
     echo "  --skip-compile        Skip Java compilation"
     echo "  --skip-simulation     Skip Java simulation (training only)"
     echo "  --episodes N          Training episodes [default: 100] (benchmark toujours 1000 requêtes)"
+    echo "  --workload MODE       Force workload: steady|variable|burst partout"
+    echo "                        [default: auto — training variable+burst alternes, benchmark steady]"
     echo "  --help                Show this help"
     echo ""
     echo "Examples:"
     echo "  $0                                    # Full workflow"
     echo "  $0 --skip-training                    # Simulation only"
     echo "  $0 --episodes 200                     # Extended training"
+    echo "  $0 --workload variable --episodes 1500 # Popularité dynamique (Zipf + dérive)"
 }
 
 SKIP_TRAINING=false
 SKIP_COMPILE=false
 SKIP_SIMULATION=false
 N_EPISODES=100
+WORKLOAD_MODE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -96,6 +100,7 @@ while [[ $# -gt 0 ]]; do
         --skip-compile)      SKIP_COMPILE=true; shift ;;
         --skip-simulation)   SKIP_SIMULATION=true; shift ;;
         --episodes)          N_EPISODES="$2"; shift 2 ;;
+        --workload)          WORKLOAD_MODE="$2"; shift 2 ;;
         --help)              show_help; exit 0 ;;
         *)                   echo -e "${RED}Unknown option: $1${NC}"; show_help; exit 1 ;;
     esac
@@ -108,6 +113,13 @@ echo "============================================================"
 echo ""
 echo "Configuration:"
 echo "  - Training episodes: $N_EPISODES"
+if [ -n "$WORKLOAD_MODE" ]; then
+    echo "  - Workload mode: $WORKLOAD_MODE (force partout)"
+    # Propagé au TrainingServer et au benchmark TcdrmMain (processus java hérités)
+    export TCDRM_WORKLOAD="$WORKLOAD_MODE"
+else
+    echo "  - Workload mode: auto (training: variable+burst alternes, benchmark: steady)"
+fi
 echo "  - Skip training: $SKIP_TRAINING"
 echo "  - Skip compile: $SKIP_COMPILE"
 echo "  - Skip simulation: $SKIP_SIMULATION"
@@ -210,6 +222,7 @@ if [ "$SKIP_TRAINING" = false ]; then
         --episodes $N_EPISODES \
         --port "$TRAIN_PORT" \
         --reward-cost-over 25 \
+        --reward-cost-linear 3 \
         --output models/rainbow_cloudsim.pt
 
     DQN_MODEL="$PYTHON_DIR/models/rainbow_cloudsim.pt"

@@ -11,11 +11,18 @@ package org.tcdrm.adaptive.rl;
  */
 public interface PythonRLBridge {
     
-    /** Select action using Q-Learning (online learning). */
-    int selectActionQLearning(double[] state);
-    
-    /** Select action using Rainbow DQN (online learning). */
-    int selectActionRainbow(double[] state);
+    /**
+     * Select action using Q-Learning (online learning).
+     *
+     * Les flags de validité viennent de l'environnement Java (mêmes règles que
+     * TrainingEnvironment.getActionMask : éligibilité popularité + limites physiques)
+     * pour que l'éval présente à l'agent EXACTEMENT le même masque d'actions que
+     * l'entraînement — aucune divergence train/eval.
+     */
+    int selectActionQLearning(double[] state, boolean canReplicate, boolean canDelete);
+
+    /** Select action using Rainbow DQN (online learning). Mêmes flags que ci-dessus. */
+    int selectActionRainbow(double[] state, boolean canReplicate, boolean canDelete);
 
     /**
      * Update Q-Learning agent with reward from last action.

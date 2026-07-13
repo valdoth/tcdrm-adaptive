@@ -41,6 +41,8 @@ public class TrainingEnvironment {
     private double dynamicMinPopularity = 1.0;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner popularityLearner;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaLearner;
+    // Fenêtre ΔT de suppression (Paper Algorithm 3), apprise — fraction de P_SLA.
+    private final org.tcdrm.adaptive.rl.ThresholdMetaLearner deletionWindowLearner;
     // Metrics for external-style logging
     private int slaViolations;
     private double cumulativeCost;
@@ -58,18 +60,14 @@ public class TrainingEnvironment {
     private int actionRingPos = 0;
     private int actionRingCount = 0;
 
-    // Fenêtre glissante pour la méta-adaptation TSLA (Sujet 1) : vérifie le stress
-    // (violations/coût) toutes les ADAPT_CHECK_INTERVAL requêtes plutôt qu'une seule fois en fin
-    // d'épisode. La phase de démarrage (avant que les réplicas ne stabilisent le système) est
-    // naturellement en forte violation SLA ; ce signal serait dilué et invisible dans une moyenne
-    // sur l'épisode complet (1000 requêtes), qui ne dépasserait jamais les seuils de déclenchement.
-    // Cadence de décision des méta-contrôleurs — partagée avec BenchmarkRunner
-    // (TcdrmConstants.META_WINDOW_QUERIES) pour que l'entraînement et l'évaluation
-    // aient la même dynamique.
-    private static final int ADAPT_CHECK_INTERVAL = TcdrmConstants.META_WINDOW_QUERIES;
-    private int windowViolations = 0;
-    private double windowCost = 0.0;
-    private int windowQueries = 0;
+    // Signal de stress lissé (EMA) pour la méta-adaptation des seuils (Sujet 1) :
+    // observé et exploitable À CHAQUE REQUÊTE — aucune cadence fixe de décision.
+    // Le moment où un seuil change est entièrement déterminé par la politique apprise
+    // du méta-contrôleur de CET agent, pas par une frontière de fenêtre partagée.
+    // Partagé avec BenchmarkRunner (TcdrmConstants.META_EMA_ALPHA) pour que
+    // l'entraînement et l'évaluation aient la même dynamique.
+    private double violEma = 0.0;
+    private double costRatioEma = 0.0;
     
     // Identité de l'agent propriétaire des Q-tables de méta-seuils.
     private final String agentTag;
@@ -93,16 +91,23 @@ public class TrainingEnvironment {
         this.tSla = this.dynamicTSla;
         // Méta-contrôleurs Q-learning des seuils (Sujet 1) : Q-tables PAR AGENT — chaque
         // agent apprend sa propre politique d'ajustement des seuils (persistance
-        // inter-sessions), ε>0 pendant l'entraînement.
+        // inter-sessions), ε>0 pendant l'entraînement. ε calibré pour la cadence
+        // PAR REQUÊTE (1000 décisions/épisode) : 0.05 ≈ 50 explorations par épisode.
+        final double metaEps = 0.05;
         this.popularityLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
             TcdrmConstants.metaQtableFile(this.agentTag, "pop", complex),
-            1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_RESOLUTION, 0.10,
+            1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_RESOLUTION, metaEps,
             seed ^ this.agentTag.hashCode());
         this.tslaLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
             TcdrmConstants.metaQtableFile(this.agentTag, "tsla", complex),
             1.0, TcdrmConstants.META_TSLA_MIN_MULTIPLIER, 1.0,
-            TcdrmConstants.META_TSLA_RESOLUTION, 0.10,
+            TcdrmConstants.META_TSLA_RESOLUTION, metaEps,
             (seed ^ this.agentTag.hashCode()) ^ 0x9E3779B9L);
+        this.deletionWindowLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
+            TcdrmConstants.metaQtableFile(this.agentTag, "delw", complex),
+            1.0, TcdrmConstants.META_DELETION_WINDOW_MIN, 1.0,
+            TcdrmConstants.META_DELETION_WINDOW_RESOLUTION, metaEps,
+            (seed ^ this.agentTag.hashCode()) ^ 0x51ED270CL);
         reset();
     }
     
@@ -123,12 +128,29 @@ public class TrainingEnvironment {
             : (settings.getTSlaSimpleMs()  > 0 ? settings.getTSlaSimpleMs()  : TcdrmConstants.TSLA_SIMPLE_MS);
         popularityLearner.startEpisode(1.0);
         tslaLearner.startEpisode(1.0);
+        deletionWindowLearner.startEpisode(1.0);
         this.dynamicMinPopularity = popularityLearner.getValue();
         this.dynamicTSla = contractTSla * tslaLearner.getValue();
+        // Régime de workload d'ENTRAÎNEMENT : variable/burst tiré de la seed de
+        // l'épisode (~50/50, reproductible) — décorrélé de l'alternance simple/complex
+        // pour couvrir toutes les combinaisons (type de requête × régime de popularité).
+        // TCDRM_WORKLOAD force un mode unique. Le BENCHMARK, lui, utilise steady par
+        // défaut (protocole du papier) — voir RuntimeConfig.
+        if (!org.tcdrm.adaptive.core.RuntimeConfig.hasExplicitWorkloadMode()) {
+            // splitmix64 : brassage fort de la seed — java.util.Random donne un premier
+            // tirage corrélé pour des seeds consécutives (biais connu), pas ce mixeur.
+            long z = seed + 0x9E3779B97F4A7C15L;
+            z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+            z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+            z ^= (z >>> 31);
+            org.tcdrm.adaptive.core.RuntimeConfig.setWorkloadMode(
+                ((z & 1L) == 0L) ? "variable" : "burst");
+        }
         // Passer l'optimiseur de placement persistant à la nouvelle simulation (Sujet 2)
         this.simulation = new TcdrmSimulation(seed, complex, placementOptimizer);
-        // Injecter les seuils adaptatifs (T_SLA + éligibilité popularité) dans la simulation
+        // Injecter les seuils adaptatifs (T_SLA, éligibilité popularité, ΔT suppression)
         this.simulation.setDynamicThresholds(dynamicTSla, dynamicMinPopularity);
+        this.simulation.setDynamicDeletionWindow(deletionWindowLearner.getValue());
         this.tSla = this.dynamicTSla;
         this.currentQuery = 0;
         this.lastLatency = 0.0;
@@ -147,9 +169,8 @@ public class TrainingEnvironment {
         this.actionRingPos = 0;
         this.actionRingCount = 0;
         java.util.Arrays.fill(actionRingBuffer, 0);
-        this.windowViolations = 0;
-        this.windowCost = 0.0;
-        this.windowQueries = 0;
+        this.violEma = 0.0;
+        this.costRatioEma = 0.0;
         // Optional dynamic warmup before RL actions to avoid static starts
         int wu = settings.getWarmupQueries();
         if (wu > 0) {
@@ -225,15 +246,17 @@ public class TrainingEnvironment {
         lastLatency = result.queryTimeMs();
         lastCost = result.totalCost();
         cumulativeCost += lastCost;
-        if (lastLatency > tSla) {
-            slaViolations++;
-            windowViolations++;
-        }
-        windowCost += lastCost;
-        windowQueries++;
-        if (windowQueries >= ADAPT_CHECK_INTERVAL) {
-            flushAdaptationWindow();
-        }
+        boolean violated = lastLatency > tSla;
+        if (violated) slaViolations++;
+        // Signal de stress lissé, mis à jour et exploité À CHAQUE REQUÊTE : les
+        // méta-contrôleurs décident du moment ET de la valeur des seuils sans
+        // aucune cadence fixe (Sujet 1 : « quand décider » est appris).
+        double alpha = TcdrmConstants.META_EMA_ALPHA;
+        violEma = (1.0 - alpha) * violEma + alpha * (violated ? 1.0 : 0.0);
+        costRatioEma = (1.0 - alpha) * costRatioEma
+            + alpha * (lastCost / Math.max(1e-9, cSla));
+        adaptThresholds(violEma, costRatioEma);
+        applyThresholds();
         int rc = result.replicaCount();
         if (rc != lastReplicaCount) {
             replicaChanges += Math.abs(rc - lastReplicaCount);
@@ -311,6 +334,12 @@ public class TrainingEnvironment {
         double budgetUrgency = 1.0 + Math.max(0.0, 1.0 - budgetRatio); // 1.0 (plein) → 2.0 (vide)
         double costOverPenalty = -settings.getRewardCostOver() * budgetUrgency * Math.max(0.0, cQ_norm - 1.0);
 
+        // COST_LINEAR : coût réel de CHAQUE requête, même sous C_SLA — donne à l'agent
+        // une sensibilité continue au prix de la bande passante (rewardCostOver est
+        // inerte tant que cQ < C_SLA). 0 par défaut ; activé par agent pour une
+        // politique qui priorise le coût.
+        double costLinearPenalty = -settings.getRewardCostLinear() * cQ_norm;
+
         // LOW_POPULARITY : pénalité proportionnelle à (1 - popularityScore) lors d'une réplication.
         // Enseigne à l'agent de ne pas répliquer avant que les données soient connues,
         // sans aucun seuil statique — le signal vient de l'état et de la récompense.
@@ -365,12 +394,21 @@ public class TrainingEnvironment {
         // Maintenance : coût léger par réplica actif (encourage la parcimonie)
         rewardUnutilization = -settings.getRewardMaintenance() * replicas;
 
+        // DÉTENTION IMPOPULAIRE (Paper Algorithm 1) : coût RÉCURRENT — chaque requête où
+        // un réplica existe sur des données non populaires coûte w×(1−pop) par réplica.
+        // Ferme l'exploit « répliquer à q≈0 » : le gain de latence (~+9/req) ne couvre
+        // plus le coût cumulé tant que la popularité est basse — l'agent apprend à
+        // attendre que les données soient suffisamment connues, sans seuil codé en dur.
+        double unpopularHoldingPenalty =
+            -settings.getRewardUnpopularHolding() * (1.0 - popularityScore) * replicas;
+
         // Action invalide
         rewardInvalidAction = lastInvalidAction ? -settings.getRewardInvalid() : 0.0;
 
-        return rewardWaitTime + rewardQueuePenalty + costOverPenalty
+        return rewardWaitTime + rewardQueuePenalty + costOverPenalty + costLinearPenalty
             + replCostPenalty + lowPopularityPenalty + prematureReplPenalty + prematureDeletePenalty
-            + correctTriggerBonus + thrashPenalty + rewardUnutilization + rewardInvalidAction;
+            + correctTriggerBonus + thrashPenalty + rewardUnutilization + unpopularHoldingPenalty
+            + rewardInvalidAction;
     }
 
     /** Records action into ring buffer for thrash detection. */
@@ -443,8 +481,9 @@ public class TrainingEnvironment {
     // politique d'ajustement est apprise et persistée dans les Q-tables.
 
     /**
-     * Fin de fenêtre glissante : chaque méta-contrôleur observe le stress (violations,
-     * coût), apprend (TD-update) et choisit son prochain ajustement de seuil.
+     * À chaque requête : chaque méta-contrôleur observe le stress lissé (violations,
+     * coût), apprend (TD-update) et choisit le niveau courant de son seuil — le moment
+     * d'un changement est donc entièrement déterminé par sa politique apprise.
      */
     private void adaptThresholds(double violationRate, double avgCostRatio) {
         dynamicMinPopularity = popularityLearner.observeAndAdjust(violationRate, avgCostRatio);
@@ -453,20 +492,23 @@ public class TrainingEnvironment {
             ? (settings.getTSlaComplexMs() > 0 ? settings.getTSlaComplexMs() : TcdrmConstants.TSLA_COMPLEX_MS)
             : (settings.getTSlaSimpleMs()  > 0 ? settings.getTSlaSimpleMs()  : TcdrmConstants.TSLA_SIMPLE_MS);
         dynamicTSla = contractTSla * tslaLearner.observeAndAdjust(violationRate, avgCostRatio);
+
+        // ΔT de suppression (Algorithm 3) : appris sur le même signal de stress ;
+        // inerte tant que le workload garde toutes les données populaires, s'activera
+        // avec les workloads à popularité variable (requêtes réellement différentes).
+        if (simulation != null) {
+            simulation.setDynamicDeletionWindow(
+                deletionWindowLearner.observeAndAdjust(violationRate, avgCostRatio));
+        }
     }
 
     /**
      * Calcule les métriques de fin d'épisode et applique la méta-adaptation restante.
      *
-     * Sujet 1 (TSLA) : la fenêtre glissante intra-épisode ({@link #flushAdaptationWindow})
-     * pilote déjà l'essentiel de l'adaptation toutes les {@link #ADAPT_CHECK_INTERVAL} requêtes ;
-     * on se contente ici de vider le reliquat de fenêtre non encore traité.
-     * Sujet 2 (placement) : agrégat sur l'épisode complet, inchangé.
+     * Sujet 1 (seuils) : l'adaptation est déjà continue (à chaque requête, signal EMA) —
+     * rien à vider ici. Sujet 2 (placement) : agrégat sur l'épisode complet, inchangé.
      */
     private void endEpisodeAndAdapt() {
-        // Sujet 1 : vide le reliquat de la fenêtre glissante TSLA
-        flushAdaptationWindow();
-
         // Persister la connaissance des méta-contrôleurs de seuils (rechargée par le
         // benchmark : c'est le MODÈLE qui porte la politique d'ajustement des seuils).
         saveMetaLearners();
@@ -484,28 +526,18 @@ public class TrainingEnvironment {
         try {
             popularityLearner.save(TcdrmConstants.metaQtableFile(agentTag, "pop", complex));
             tslaLearner.save(TcdrmConstants.metaQtableFile(agentTag, "tsla", complex));
+            deletionWindowLearner.save(TcdrmConstants.metaQtableFile(agentTag, "delw", complex));
         } catch (java.io.IOException e) {
             System.err.println("[TrainingEnvironment] Failed to save meta-threshold Q-tables: " + e.getMessage());
         }
     }
 
     /**
-     * Évalue le stress (violations/coût) accumulé sur la fenêtre glissante courante et déclenche
-     * la méta-adaptation TSLA (Sujet 1) si la fenêtre contient au moins une requête.
+     * Propage immédiatement les seuils courants : l'adaptation étant continue (chaque
+     * requête), tSla (récompense), l'état RL normalisé et l'éligibilité popularité
+     * doivent suivre en temps réel.
      */
-    private void flushAdaptationWindow() {
-        if (windowQueries <= 0) return;
-        double violationRate = (double) windowViolations / windowQueries;
-        double avgCostRatio  = (windowCost / windowQueries)
-            / Math.max(1e-9, complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE);
-        adaptThresholds(violationRate, avgCostRatio);
-        windowViolations = 0;
-        windowCost = 0.0;
-        windowQueries = 0;
-        // Propager immédiatement les nouveaux seuils : la fenêtre glissante adapte
-        // dynamicTSla/dynamicMinPopularity en cours d'épisode, donc tSla (récompense),
-        // l'état RL normalisé et l'éligibilité popularité doivent suivre en temps réel,
-        // pas seulement au prochain reset().
+    private void applyThresholds() {
         this.tSla = this.dynamicTSla;
         if (this.simulation != null) {
             this.simulation.setDynamicThresholds(this.dynamicTSla, this.dynamicMinPopularity);
