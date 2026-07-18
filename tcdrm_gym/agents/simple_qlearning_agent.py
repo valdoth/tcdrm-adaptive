@@ -28,7 +28,8 @@ class SimpleQLearningAgent:
 		epsilon_schedule: str = 'exp',
 		epsilon_linear_steps: int = 10000,
 		lambda_trace: float = 0.0,
-		optimistic_init: float = 0.0
+		optimistic_init: float = 0.0,
+		seed: int = 0
 	):
 		"""
 		Initialise l'agent Q-Learning amélioré.
@@ -45,6 +46,13 @@ class SimpleQLearningAgent:
 			adaptive_lr: Utiliser learning rate adaptatif
 			optimistic_init: Valeur d'initialisation optimiste (0.0 = neutre)
 		"""
+		# RNG dédié et SEEDÉ : le tirage A/B du Double Q-learning (update) et l'exploration
+		# ε-greedy passent par ce générateur, jamais par np.random global. Sans lui,
+		# l'apprentissage ONLINE effectué pendant le benchmark (updateQLearning) tirait sur
+		# un np.random non-seedé → les tables A/B divergeaient différemment à CHAQUE
+		# lancement du process Python, rendant le résultat (surtout en régime complex,
+		# plus sensible) NON REPRODUCTIBLE. Un seed fixe garantit la reproductibilité.
+		self.rng = np.random.default_rng(seed)
 		self.n_states = n_states
 		self.n_actions = n_actions
 		self.alpha_init = learning_rate
@@ -79,6 +87,12 @@ class SimpleQLearningAgent:
 		self.episodes_completed = 0
 		self.recent_rewards = []
 
+	def reset_rng(self, seed: int = 0):
+		"""Réinitialise le RNG dédié — appelé au début de CHAQUE run du benchmark
+		(via resetCounters) pour que chaque évaluation reparte d'un état déterministe,
+		rendant les runs reproductibles et indépendants (simple ≠ complex n'interfèrent)."""
+		self.rng = np.random.default_rng(seed)
+
 	def start_episode(self):
 		if self.traces is not None:
 			self.traces.fill(0.0)
@@ -90,14 +104,14 @@ class SimpleQLearningAgent:
 		if valid_actions is None:
 			valid_actions = list(range(self.n_actions))
         
-		if training and np.random.random() < self.epsilon:
+		if training and self.rng.random() < self.epsilon:
 			if self.training_steps > 100:
 				visit_counts_valid = self.visit_counts[state, valid_actions]
 				if visit_counts_valid.sum() > 0:
 					probs = 1.0 / (visit_counts_valid + 1.0)
 					probs = probs / probs.sum()
-					return np.random.choice(valid_actions, p=probs)
-			return np.random.choice(valid_actions)
+					return int(self.rng.choice(valid_actions, p=probs))
+			return int(self.rng.choice(valid_actions))
 		else:
 			if self.use_double_q:
 				q_values = (self.q_table_a[state, valid_actions] + 
@@ -146,7 +160,7 @@ class SimpleQLearningAgent:
 		else:
 			# Default path: Double Q-learning or single-table Q-learning
 			if self.use_double_q:
-				if np.random.random() < 0.5:
+				if self.rng.random() < 0.5:
 					current_q = self.q_table_a[state, action]
 					if done:
 						target_q = reward
