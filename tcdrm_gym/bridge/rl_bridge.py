@@ -42,9 +42,9 @@ class PythonRLBridge:
         # Mêmes hyperparamètres que train_cloudsim.py (le load() réconcilie de toute
         # façon support C51 / n_step / reward_scale depuis le checkpoint).
         self.rainbow_agent = RainbowDQNAgent(
-            state_dim=9,
+            state_dim=11,
             action_dim=3,
-            hidden_dims=[256, 256],
+            hidden_dims=[128, 128],
             n_step=5,
             min_buffer_size=500,
             normalize_rewards=True,
@@ -186,6 +186,8 @@ class PythonRLBridge:
             state['query_progress'],
             state['normalized_popularity'],
             state['is_complex'],
+            state['eligible_fraction'],
+            state['mean_popularity'],
         ], dtype=np.float32)
 
     def _parse_state(self, state_array):
@@ -200,6 +202,8 @@ class PythonRLBridge:
             'query_progress':        float(state_list[6]) if len(state_list) > 6 else 0.0,
             'normalized_popularity': float(state_list[7]) if len(state_list) > 7 else 0.0,
             'is_complex':            float(state_list[8]) if len(state_list) > 8 else 0.0,
+            'eligible_fraction':     float(state_list[9]) if len(state_list) > 9 else 0.0,
+            'mean_popularity':       float(state_list[10]) if len(state_list) > 10 else 0.0,
         }
 
     @staticmethod

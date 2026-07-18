@@ -81,6 +81,10 @@ public class BenchmarkRunner {
         }
 
         TcdrmSimulation sim = new TcdrmSimulation(seed, complex);
+        // Profil de routage persisté à l'entraînement de CET agent (0 = temps seul) :
+        // les agents « priorité coût » privilégient les liens inter-région une fois
+        // les données migrées.
+        sim.setCostAwareRouting(rw.getCostRoutingToleranceMs());
         BenchmarkData data = new BenchmarkData(name);
 
         double cumulCost = 0;
@@ -223,8 +227,12 @@ public class BenchmarkRunner {
         double tQ_norm = latency / Math.max(1.0, tSla);
         double cQ_norm = result.totalCost() / Math.max(1e-9, cSla);
 
-        // SLA_OK: reward proportional to how far below tSla
-        double rewardWaitTime = rw.getRewardSlaOk() * Math.max(0.0, 1.0 - tQ_norm);
+        // SLA_OK: satisficing — full reward once comfortably below tSla ((1−margin)·tSla),
+        // no extra for going lower (mirror of TrainingEnvironment). Removes the
+        // over-provisioning incentive so the agent minimises replica count and cost.
+        double slaMarginNorm = Math.max(1e-6, rw.getSlaSatisfyMargin());
+        double slaOkFactor = Math.max(0.0, Math.min(1.0, (1.0 - tQ_norm) / slaMarginNorm));
+        double rewardWaitTime = rw.getRewardSlaOk() * slaOkFactor;
 
         // SLA_VIOL: proportional penalty when latency exceeds tSla
         double rewardQueuePenalty = -rw.getRewardSlaViol() * Math.max(0.0, tQ_norm - 1.0);
@@ -251,14 +259,13 @@ public class BenchmarkRunner {
 
             lowPopularityPenalty = -rw.getRewardLowPopularity() * (1.0 - popularityScore);
 
+            // PREMATURE_REPL = slaMargin seul (miroir de TrainingEnvironment) : pénalise
+            // la réplication sans besoin (SLA confortable). La faible popularité est déjà
+            // pénalisée par LOW_POPULARITY + le coût de détention — l'ancien
+            // max(slaMargin, 1−pop) doublait la pénalité et enseignait la réplication
+            // tardive (bascule nette à pop 0.56).
             double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
-            // After stabilization data is fully popular: no premature penalty so the agent
-            // can freely add replicas beyond the first batch without being penalised when
-            // latency happens to be below T_SLA.
-            double effectiveMargin = sim.isWorkloadStabilized()
-                ? 0.0
-                : Math.max(slaMargin, 1.0 - popularityScore);
-            prematureReplPenalty = -rw.getRewardPrematureRepl() * effectiveMargin;
+            prematureReplPenalty = -rw.getRewardPrematureRepl() * slaMargin;
 
             // CORRECT_TRIGGER continu : bonus proportionnel à la popularité observée quand
             // l'agent réplique sous violation SLA. Aucun seuil statique — combiné à
@@ -266,7 +273,13 @@ public class BenchmarkRunner {
             // l'agent au lieu d'être imposé par un gate codé en dur.
             boolean slaViolated = latency > tSla || result.totalCost() > cSla;
             if (slaViolated) {
-                correctTriggerBonus = rw.getRewardCorrectTrigger() * popularityScore;
+                // Utilité marginale décroissante (miroir de TrainingEnvironment) :
+                // bonus plein pour les premières réplications, décroissant avec le
+                // remplissage — l'agent s'arrête près de l'optimum au lieu de saturer.
+                double fillBefore = Math.max(0, replicas - 1)
+                    / (double) TcdrmConstants.maxReplicasForQueryType(complex);
+                correctTriggerBonus = rw.getRewardCorrectTrigger() * popularityScore
+                    * (1.0 - fillBefore);
             }
         }
 
@@ -284,9 +297,9 @@ public class BenchmarkRunner {
         double rewardUnutilization = -rw.getRewardMaintenance() * replicas;
 
         // DÉTENTION IMPOPULAIRE (miroir de TrainingEnvironment) : coût récurrent
-        // w×(1−pop)×replicas — ferme l'exploit « répliquer à q≈0 ».
+        // Σ (1−pop_f)×réplicas_f — chaque réplica évalué sur la popularité de SA donnée.
         double unpopularHoldingPenalty =
-            -rw.getRewardUnpopularHolding() * (1.0 - popularityScore) * replicas;
+            -rw.getRewardUnpopularHolding() * sim.getUnpopularReplicaLoad();
 
         // Invalid action signal
         double rewardInvalidAction = lastAssignmentSuccess ? 0.0 : -rw.getRewardInvalid();

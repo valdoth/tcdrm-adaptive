@@ -155,7 +155,13 @@ public class MultiCloudInfrastructure {
         if (candidates.isEmpty()) {
             return 0;
         }
-        Vm vm = candidates.get(rnd.nextInt(candidates.size()));
+        // Sélection BEST-FIT (politique native CloudSimPlus, cf. DatacenterBrokerBestFit) :
+        // la VM avec le plus de PEs attendus libres reçoit le cloudlet — au lieu d'un
+        // tirage aléatoire. Réduit l'attente quand plusieurs requêtes se chevauchent.
+        Vm vm = candidates.get(0);
+        for (Vm v : candidates) {
+            if (v.getExpectedFreePesNumber() > vm.getExpectedFreePesNumber()) vm = v;
+        }
         cloudlet.setBroker(broker);
         cloudlet.setVm(vm);
         broker.submitCloudletList(Collections.singletonList(cloudlet), vm);

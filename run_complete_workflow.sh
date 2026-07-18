@@ -76,7 +76,7 @@ show_help() {
     echo "  --skip-training       Skip training (use existing models)"
     echo "  --skip-compile        Skip Java compilation"
     echo "  --skip-simulation     Skip Java simulation (training only)"
-    echo "  --episodes N          Training episodes [default: 100] (benchmark toujours 1000 requêtes)"
+    echo "  --episodes N          Training episodes [default: 300] (Rainbow DQN a besoin de >=300 ; benchmark toujours 1000 requêtes)"
     echo "  --workload MODE       Force workload: steady|variable|burst partout"
     echo "                        [default: auto — training variable+burst alternes, benchmark steady]"
     echo "  --help                Show this help"
@@ -91,7 +91,7 @@ show_help() {
 SKIP_TRAINING=false
 SKIP_COMPILE=false
 SKIP_SIMULATION=false
-N_EPISODES=100
+N_EPISODES=300
 WORKLOAD_MODE=""
 
 while [[ $# -gt 0 ]]; do
@@ -113,6 +113,10 @@ echo "============================================================"
 echo ""
 echo "Configuration:"
 echo "  - Training episodes: $N_EPISODES"
+if [ "$SKIP_TRAINING" = false ] && [ "$N_EPISODES" -lt 300 ]; then
+    echo -e "${YELLOW}⚠️  ATTENTION: $N_EPISODES episodes est INSUFFISANT pour Rainbow DQN (reseau neuf).${NC}"
+    echo -e "${YELLOW}   Les figures produites ne feront pas foi. Recommande: --episodes 1500 (minimum 300).${NC}"
+fi
 if [ -n "$WORKLOAD_MODE" ]; then
     echo "  - Workload mode: $WORKLOAD_MODE (force partout)"
     # Propagé au TrainingServer et au benchmark TcdrmMain (processus java hérités)
@@ -222,7 +226,7 @@ if [ "$SKIP_TRAINING" = false ]; then
         --episodes $N_EPISODES \
         --port "$TRAIN_PORT" \
         --reward-cost-over 25 \
-        --reward-cost-linear 3 \
+        --reward-cost-linear 8 \
         --output models/rainbow_cloudsim.pt
 
     DQN_MODEL="$PYTHON_DIR/models/rainbow_cloudsim.pt"

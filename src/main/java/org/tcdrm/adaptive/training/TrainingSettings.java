@@ -29,6 +29,15 @@ public class TrainingSettings {
     //     − r_replCost × REPL_COST − r_premature × PREMATURE_REPL
     //     − r_thrash × THRASH − r_maint × replicas − r_invalid × INVALID
     private double rewardSlaOk        = 10.0;
+    // Marge de SATISFACTION SLA (fraction du T_SLA) : la récompense SLA_OK sature à sa
+    // valeur PLEINE dès que la latence descend à (1 − marge)·T_SLA, et n'augmente PLUS
+    // en-dessous. Le T_SLA du papier est une CONTRAINTE à satisfaire, pas une latence à
+    // minimiser : sans plafond, l'agent sur-provisionne (6 réplicas → 46 ms) pour gratter
+    // une récompense de latence sans valeur, alors que 2 réplicas (74 ms) tiennent déjà le
+    // SLA à moindre coût. Ce plafond aligne la récompense sur l'objectif tenant-oriented
+    // « minimiser le coût sous contrainte SLA » (Paper §2, Zhao et al. : éviter le
+    // sur-provisionnement en ajustant le nombre de réplicas à la demande).
+    private double slaSatisfyMargin   =  0.30;
     private double rewardSlaViol      = 20.0;
     private double rewardCostOver     = 15.0;
     // Coût LINÉAIRE continu : pénalité proportionnelle au coût réel de chaque requête
@@ -60,6 +69,15 @@ public class TrainingSettings {
     // Bonus quand l'agent réplique exactement quand l'Algorithme 1 le ferait :
     // SLA violé (temps ou coût) ET workload stabilisé (P_SLA atteint).
     private double rewardCorrectTrigger =  8.0;
+    // Routage sensible au coût — TOLÉRANCE en ms : parmi les sites d'exécution à
+    // moins de cette tolérance du meilleur temps estimé, la simulation choisit le
+    // moins cher en BW (départage lexicographique — la latence ne peut se dégrader
+    // de plus que la tolérance). 0 = temps seul (historique). Fait partie du PROFIL
+    // de l'agent (persisté comme les poids de récompense) : une fois des réplicas
+    // migrés, les liens inter-région sont préférés aux liens inter-provider.
+    // Défaut 1 ms (aligné sur l'infrastructure) : départage des égalités analytiques
+    // exactes par le coût — BW −42 % mesuré en variable, neutre en steady.
+    private double costRoutingToleranceMs = 1.0;
 
     public int getMaxEpisodeLength() { return maxEpisodeLength; }
     public void setMaxEpisodeLength(int v) { this.maxEpisodeLength = v; }
@@ -75,6 +93,7 @@ public class TrainingSettings {
     public void setWarmupRandomProb(double p) { this.warmupRandomProb = Math.max(0.0, Math.min(1.0, p)); }
 
     public double getRewardSlaOk()             { return rewardSlaOk; }
+    public double getSlaSatisfyMargin()        { return slaSatisfyMargin; }
     public double getRewardSlaViol()           { return rewardSlaViol; }
     public double getRewardCostOver()          { return rewardCostOver; }
     public double getRewardCostLinear()        { return rewardCostLinear; }
@@ -87,8 +106,10 @@ public class TrainingSettings {
     public double getRewardLowPopularity()     { return rewardLowPopularity; }
     public double getRewardCorrectTrigger()    { return rewardCorrectTrigger; }
     public double getRewardUnpopularHolding()  { return rewardUnpopularHolding; }
+    public double getCostRoutingToleranceMs()  { return costRoutingToleranceMs; }
 
     public void setRewardSlaOk(double v)             { rewardSlaOk           = Math.max(0, v); }
+    public void setSlaSatisfyMargin(double v)        { slaSatisfyMargin      = Math.max(0.01, Math.min(1.0, v)); }
     public void setRewardSlaViol(double v)            { rewardSlaViol         = Math.max(0, v); }
     public void setRewardCostOver(double v)           { rewardCostOver        = Math.max(0, v); }
     public void setRewardCostLinear(double v)         { rewardCostLinear      = Math.max(0, v); }
@@ -101,6 +122,7 @@ public class TrainingSettings {
     public void setRewardLowPopularity(double v)      { rewardLowPopularity   = Math.max(0, v); }
     public void setRewardCorrectTrigger(double v)     { rewardCorrectTrigger  = Math.max(0, v); }
     public void setRewardUnpopularHolding(double v)   { rewardUnpopularHolding = Math.max(0, v); }
+    public void setCostRoutingToleranceMs(double v)   { costRoutingToleranceMs = Math.max(0, v); }
 
     // === Persistance des poids de récompense (alignement train/eval par agent) ===
 
@@ -110,6 +132,7 @@ public class TrainingSettings {
         if (parent != null) parent.mkdirs();
         Properties p = new Properties();
         p.setProperty("rewardSlaOk",           Double.toString(rewardSlaOk));
+        p.setProperty("slaSatisfyMargin",      Double.toString(slaSatisfyMargin));
         p.setProperty("rewardSlaViol",         Double.toString(rewardSlaViol));
         p.setProperty("rewardCostOver",        Double.toString(rewardCostOver));
         p.setProperty("rewardCostLinear",      Double.toString(rewardCostLinear));
@@ -122,6 +145,7 @@ public class TrainingSettings {
         p.setProperty("rewardLowPopularity",   Double.toString(rewardLowPopularity));
         p.setProperty("rewardCorrectTrigger",  Double.toString(rewardCorrectTrigger));
         p.setProperty("rewardUnpopularHolding", Double.toString(rewardUnpopularHolding));
+        p.setProperty("costRoutingToleranceMs", Double.toString(costRoutingToleranceMs));
         try (FileOutputStream out = new FileOutputStream(file)) {
             p.store(out, "TCDRM reward weights (written at training time, reloaded by the benchmark)");
         }
@@ -141,6 +165,7 @@ public class TrainingSettings {
             return s;
         }
         s.rewardSlaOk           = parse(p, "rewardSlaOk",           s.rewardSlaOk);
+        s.slaSatisfyMargin      = parse(p, "slaSatisfyMargin",      s.slaSatisfyMargin);
         s.rewardSlaViol         = parse(p, "rewardSlaViol",         s.rewardSlaViol);
         s.rewardCostOver        = parse(p, "rewardCostOver",        s.rewardCostOver);
         s.rewardCostLinear      = parse(p, "rewardCostLinear",      s.rewardCostLinear);
@@ -153,6 +178,7 @@ public class TrainingSettings {
         s.rewardLowPopularity   = parse(p, "rewardLowPopularity",   s.rewardLowPopularity);
         s.rewardCorrectTrigger  = parse(p, "rewardCorrectTrigger",  s.rewardCorrectTrigger);
         s.rewardUnpopularHolding = parse(p, "rewardUnpopularHolding", s.rewardUnpopularHolding);
+        s.costRoutingToleranceMs = parse(p, "costRoutingToleranceMs", s.costRoutingToleranceMs);
         return s;
     }
 

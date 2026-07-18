@@ -237,7 +237,13 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
     
 	final_path = save_path.replace('.pkl', '_final.pkl')
 	agent.save(final_path)
-	agent.save(save_path)  # also save under the canonical path expected by the benchmark
+	# Le chemin canonique (chargé par le benchmark) garde le MEILLEUR checkpoint
+	# (avg10) sauvé en cours d'entraînement — le final ne l'écrase plus : évaluer la
+	# photo de fin de run (souvent en plein creux d'exploration) rendait les runs
+	# courts trompeurs. Fallback : si aucun best n'a été sauvé (run < 10 épisodes),
+	# le final sert de canonique.
+	if best_reward == float('-inf'):
+		agent.save(save_path)
 
 	csv_logger.close()
 	if tb_writer is not None:
@@ -257,8 +263,74 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	return agent, rewards_history
 
 
+def _tcdrm_demo_action(state, action_mask):
+	"""Heuristique de DÉMONSTRATION type TCDRM (Paper Algorithm 1) pour le warm-start :
+	répliquer quand le SLA est violé ET les données sont populaires ET la réplication est
+	possible ; supprimer si un réplica est inutile (SLA très confortable) ; sinon NOOP.
+	état : [0]lat/tSla [4]viol_tSla [5]viol_cSla [7]popularité [9]fraction_éligible.
+	"""
+	can_repl = action_mask is None or action_mask[1] > 0.5
+	can_del  = action_mask is not None and action_mask[2] > 0.5
+	lat_norm   = float(state[0])
+	viol       = float(state[4]) >= 0.5 or float(state[5]) >= 0.5 or lat_norm >= 1.0
+	# Éligible dès qu'un fragment franchit le seuil courant (state[9]>0), OU données
+	# clairement populaires — démontre l'ouverture PRÉCOCE gagnante, pas seulement à 0.9.
+	eligible   = float(state[9]) > 0.0 or float(state[7]) >= 0.9
+	if can_repl and viol and eligible:
+		return 1                      # REPLICATE dès que le méta autorise sous violation
+	if can_del and lat_norm < 0.4:    # SLA très confortable → un réplica est superflu
+		return 2
+	return 0                          # NOOP
+
+
+def _run_demonstrations(agent, env, env_complex, demo_episodes, seed_base, max_episode_length):
+	"""Pré-remplit le buffer de l'agent avec des transitions de l'heuristique TCDRM et
+	le fait apprendre dessus (DQfD-lite, Hester et al. 2018) : l'agent démarre d'une
+	politique compétente au lieu d'explorer de zéro → convergence en bien moins d'épisodes."""
+	if demo_episodes <= 0:
+		return
+	print(f"  Warm-start : {demo_episodes} épisodes de démonstration TCDRM (DQfD-lite)...")
+
+	def _set_demo(env_obj, on):
+		# Force le gate de popularité ouvert côté Java pour que la démo puisse répliquer
+		# (indispensable en complex où un seul réplica aide peu).
+		try:
+			env_obj._connect()
+			env_obj._server.setDemoMode(bool(on))
+		except Exception as e:
+			print(f"  (setDemoMode indisponible: {e})")
+
+	_set_demo(env, True)
+	if env_complex is not None:
+		_set_demo(env_complex, True)
+	try:
+		for d in range(demo_episodes):
+			use_complex = (env_complex is not None) and (d % 2 == 1)
+			active_env = env_complex if use_complex else env
+			state, info = active_env.reset(seed=seed_base + 100000 + d)  # seeds disjointes du train
+			last_info = info
+			done = False
+			while not done:
+				mask = None
+				if isinstance(last_info, dict) and 'action_mask' in last_info:
+					try:
+						mask = np.array(last_info['action_mask'], dtype=np.float32)
+					except Exception:
+						mask = None
+				action = _tcdrm_demo_action(state, mask)
+				next_state, reward, done, truncated, info = active_env.step(action)
+				agent.update(state, action, reward, next_state, done)  # apprend de la démo
+				state = next_state
+				last_info = info
+	finally:
+		# Toujours restaurer le mode normal avant l'entraînement RL.
+		_set_demo(env, False)
+		if env_complex is not None:
+			_set_demo(env_complex, False)
+
+
 def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: int = 42, agent: RainbowDQNAgent = None,
-                   env_complex: CloudSimEnv = None, max_episode_length: int = 1000):
+                   env_complex: CloudSimEnv = None, max_episode_length: int = 1000, demo_episodes: int = 20):
 	"""
 	Entraîne un agent Rainbow DQN complet (6/6 composants Rainbow) :
 	  Double DQN + Dueling + PER + N-step(3) + NoisyLinear + C51 Distributional.
@@ -283,19 +355,28 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 		# quasiment plus (observé avec T_max=20000 fixe : déjà atteint vers l'épisode ~20-21
 		# alors qu'un Rainbow DQN avec C51+PER+NoisyNet a besoin de bien plus d'épisodes pour
 		# converger sur un état 9D face au Q-learning tabulaire).
-		total_steps_estimate = max(20000, episodes * max_episode_length)
+		# ×4 : scheduler cosine et β-PER comptent en PAS DE GRADIENT, et
+		# updates_per_step=4 en fait quatre par transition d'environnement.
+		total_steps_estimate = max(20000, episodes * max_episode_length * 4)
 		agent = RainbowDQNAgent(
-			state_dim=9,
+			# 11 dims : structure de popularite par element ([9] fraction eligible,
+			# [10] popularite moyenne) — l'agent VOIT quels volumes sont populaires.
+			state_dim=11,
 			action_dim=3,
-			# Capacité augmentée (128→256) : le réseau doit maintenant distinguer deux régimes
-			# (simple/complex, via la dimension is_complex) au lieu d'un seul, ce qui demande
-			# plus de capacité pour affiner la politique au-delà du plateau observé à 128.
-			hidden_dims=[256, 256],
-			learning_rate=0.0001,
+			# Réseau [128,128] : sur un état 11-dim / 3 actions, [256,256] est sur-
+			# paramétré et lent à converger. Un réseau plus compact atteint une bonne
+			# politique avec BEAUCOUP moins d'épisodes (Data-Efficient Rainbow, van
+			# Hasselt et al. 2019) — priorité à la vitesse de convergence.
+			hidden_dims=[128, 128],
+			# LR 3e-4 (cosine -> 1e-6) + batch 128 : réseau compact → apprentissage
+			# plus rapide sans instabilité C51.
+			learning_rate=0.0003,
 			discount_factor=0.99,
 			buffer_capacity=100000,
-			batch_size=64,
-			tau=0.005,
+			batch_size=128,
+			# tau 0.01 : cible qui suit plus vite — cohérent avec le ratio de replay
+			# accru (2 gradients/transition) sur ce petit espace d'état.
+			tau=0.01,
 			gradient_clip=10.0,
 			lr_scheduler='cosine',
 			scheduler_params={'T_max': total_steps_estimate, 'eta_min': 1e-6},
@@ -304,7 +385,9 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			n_step=5,
 			min_buffer_size=1500,
 			normalize_rewards=True,
-			sigma_init=0.65,
+			# sigma0=0.5 : valeur du papier Rainbow (Fortunato/Hessel) — l'exploration
+			# NoisyNet s'auto-adapte par gradient, pas besoin de sur-bruiter.
+			sigma_init=0.5,
 			use_distributional=True,
 			# Support C51 recalibré : avec reward_scale=0.04, les valeurs d'état soutenues
 			# (r̃/(1−γ) ≈ ±4×r̃) tiennent dans [−12, 12] sans saturer les bornes —
@@ -315,6 +398,10 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			reward_scale=0.04,
 			# β du PER anneal jusqu'à 1 sur toute la durée (Rainbow, Hessel 2018)
 			per_beta_frames=total_steps_estimate,
+			# 4 pas de gradient par transition : la simulation CloudSimPlus (Py4J) est
+			# le goulot, le gradient est bon marché — quadruple l'apprentissage par
+			# échantillon (replay ratio élevé = data-efficient RL).
+			updates_per_step=4,
 		)
 
 	best_reward = float('-inf')
@@ -336,6 +423,9 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 		tb_writer = SummaryWriter(log_dir=log_dir)
 	except Exception:
 		pass
+
+	# Warm-start par démonstrations TCDRM (DQfD-lite) — AVANT l'entraînement RL.
+	_run_demonstrations(agent, env, env_complex, demo_episodes, seed_base, max_episode_length)
 
 	for episode in range(episodes):
 		use_complex = (env_complex is not None) and (episode % 2 == 1)
@@ -369,7 +459,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			'episode': episode,
 			'reward': episode_reward,
 			'avg10': avg_reward,
-			'buffer': len(agent.replay_buffer),
+			'buffer': (len(agent.replay_buffers[0]) + len(agent.replay_buffers[1])),
 			'avg_noisy_sigma': net_stats.get('avg_noisy_sigma', 0),
 			'avg_loss': net_stats.get('avg_loss', 0)
 		}
@@ -384,7 +474,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 		if tb_writer is not None:
 			tb_writer.add_scalar('reward/episode', episode_reward, episode)
 			tb_writer.add_scalar('reward/avg10', float(avg_reward), episode)
-			tb_writer.add_scalar('rainbow/buffer', float(len(agent.replay_buffer)), episode)
+			tb_writer.add_scalar('rainbow/buffer', float((len(agent.replay_buffers[0]) + len(agent.replay_buffers[1]))), episode)
 			tb_writer.add_scalar('rainbow/avg_loss', float(net_stats.get('avg_loss', 0)), episode)
 			if 'avg_noisy_sigma' in net_stats:
 				tb_writer.add_scalar('rainbow/noisy_sigma', float(net_stats['avg_noisy_sigma']), episode)
@@ -409,7 +499,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			sigma_str = f" | σ: {net_stats.get('avg_noisy_sigma', 0):.4f}" if 'avg_noisy_sigma' in net_stats else ""
 			print(
 				f"Episode {episode:4d}/{episodes} | Reward: {episode_reward:8.2f} | "
-				f"Avg(10): {avg_reward:8.2f} | Buffer: {len(agent.replay_buffer)}"
+				f"Avg(10): {avg_reward:8.2f} | Buffer: {(len(agent.replay_buffers[0]) + len(agent.replay_buffers[1]))}"
 				f"{sigma_str}{metrics_tail}"
 			)
 
@@ -419,7 +509,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			best_meta = to_builtin({
 				'episode': episode,
 				'best_avg10_reward': best_reward,
-				'buffer': len(agent.replay_buffer),
+				'buffer': (len(agent.replay_buffers[0]) + len(agent.replay_buffers[1])),
 				'network': net_stats,
 				'metrics_tail': last_info if isinstance(last_info, dict) else {}
 			})
@@ -429,7 +519,9 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 
 	final_path = save_path.replace('.pt', '_final.pt')
 	agent.save(final_path)
-	agent.save(save_path)  # also save under the canonical path expected by the benchmark
+	# Le canonique = MEILLEUR checkpoint (voir train_qlearning) ; final -> _final only.
+	if best_reward == float('-inf'):
+		agent.save(save_path)
 
 	csv_logger.close()
 	if tb_writer is not None:
@@ -471,6 +563,12 @@ def main():
 					   help='Random warmup probability for replicate/delete actions (0..1)')
 	parser.add_argument('--seed-base', type=int, default=42,
 					   help='Base seed; episode seed = seed_base + episode (decorrelate agents)')
+	parser.add_argument('--cost-routing-tolerance', type=float, default=None,
+	                    help='Tolerance (ms) du routage sensible au cout : a temps quasi egal, prefere le site le moins cher — 0 = temps seul')
+	parser.add_argument('--reward-correct-trigger', type=float, default=None,
+	                    help='Bonus par réplication sous violation (défaut 8) ; PLUS BAS = arrête de répliquer plus tôt (moins de réplicas, moins cher)')
+	parser.add_argument('--reward-unpopular-holding', type=float, default=None,
+	                    help='Poids du coût de détention (défaut 5) ; PLUS BAS = agent plus proactif, réplique plus tôt les données qui chauffent (profil par agent, pas un seuil)')
 	parser.add_argument('--reward-cost-linear', type=float, default=None,
 	                    help='Poids du coût linéaire continu (pénalité ∝ coût réel/C_SLA, même sous contrat) — priorise le coût')
 	parser.add_argument('--reward-cost-over', type=float, default=None,
@@ -507,6 +605,12 @@ def main():
 			cfg['rewardCostOver'] = float(args.reward_cost_over)
 		if args.reward_cost_linear is not None:
 			cfg['rewardCostLinear'] = float(args.reward_cost_linear)
+		if args.reward_unpopular_holding is not None:
+			cfg['rewardUnpopularHolding'] = float(args.reward_unpopular_holding)
+		if args.reward_correct_trigger is not None:
+			cfg['rewardCorrectTrigger'] = float(args.reward_correct_trigger)
+		if args.cost_routing_tolerance is not None:
+			cfg['costRoutingToleranceMs'] = float(args.cost_routing_tolerance)
 		if args.agent == 'qlearning':
 			env = CloudSimQLearningEnv(port=args.port, complex=False, config=cfg)
 			env_complex = CloudSimQLearningEnv(port=args.port, complex=True, config=cfg)
