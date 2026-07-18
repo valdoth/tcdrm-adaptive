@@ -74,6 +74,23 @@ class PythonRLBridge:
         self._ql_last_action   = None
         self._rainbow_last_state  = None
         self._rainbow_last_action = None
+        # Reproductibilité de l'apprentissage ONLINE effectué pendant le benchmark :
+        #  • RNG dédié de l'agent QL (tirage A/B du Double Q-learning),
+        #  • RNG GLOBAL np.random — utilisé par l'échantillonnage priorisé du replay
+        #    buffer Rainbow (PrioritizedReplayBuffer.sample) lors des updates d'éval,
+        #  • RNG global torch — bruit NoisyNet / opérations stochastiques.
+        # Sans ces graines, chaque lancement du process Python divergeait (Rainbow_Complex
+        # notamment passait de 24.96 à 27.76 d'un run à l'autre). Réinitialisé à CHAQUE run
+        # (resetCounters est appelé par Java avant chaque évaluation) → runs indépendants
+        # et reproductibles. Graine fixe : aucun impact sur la politique apprise, seulement
+        # sur le déterminisme des tirages.
+        self.qlearning_agent.reset_rng(0)
+        np.random.seed(0)
+        try:
+            import torch
+            torch.manual_seed(0)
+        except Exception:
+            pass
 
     def selectActionQLearning(self, state_array, can_replicate, can_delete):
         """Le masque d'actions vient de Java (mêmes règles que TrainingEnvironment.
