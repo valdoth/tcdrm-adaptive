@@ -16,6 +16,18 @@ echo "========================================"
 #   comparison : les 4 modèles (NoRepLc + TCDRM + QL + Rainbow) → figures du papier
 SCENARIO="${1:-all}"
 
+# --- Régime de VALIDATION (≠ benchmark) -----------------------------------
+# Le benchmark du workflow évalue en steady/seed 42 : la MÊME requête répétée
+# 1000 fois (protocole du papier). La validation teste la GÉNÉRALISATION sur
+# des requêtes DIFFÉRENTES : workload à popularité dynamique (des requêtes
+# variées tirées d'un pool, hot-set qui dérive) et seed inédite — jamais vues
+# à l'identique pendant l'entraînement ni le benchmark. Même seed pour les 4
+# modèles : l'équité inter-modèles est préservée.
+# Surchargables : TCDRM_WORKLOAD=burst TCDRM_SEED=888 ./run.sh comparison
+export TCDRM_WORKLOAD="${TCDRM_WORKLOAD:-variable}"
+export TCDRM_SEED="${TCDRM_SEED:-777}"
+echo "🧪 Régime de validation : workload=$TCDRM_WORKLOAD seed=$TCDRM_SEED (benchmark: steady/42)"
+
 # --- Helpers ---------------------------------------------------------------
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
