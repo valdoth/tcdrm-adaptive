@@ -47,10 +47,8 @@ def _load(module_name: str, file_path: str):
 
 _bridge_dir = os.path.join(_TCDRM_GYM, 'bridge')
 
-# Load adaptive_strategy first (relative dep of rl_bridge)
-_load('adaptive_strategy', os.path.join(_bridge_dir, 'adaptive_strategy.py'))
-
-# Load the actual rl_bridge
+# Load the actual rl_bridge (self-contained: adaptive_strategy a été supprimé du repo,
+# la règle anti-thrashing en dur ayant été remplacée par la pénalité APPRISE)
 _rl_mod = _load('rl_bridge', os.path.join(_bridge_dir, 'rl_bridge.py'))
 
 PythonRLBridge = _rl_mod.PythonRLBridge
