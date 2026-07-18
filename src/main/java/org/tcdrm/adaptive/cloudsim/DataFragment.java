@@ -35,8 +35,15 @@ public class DataFragment {
     // Cooldown before re-creating a replica after deletion
     private int recreateCooldown;
 
-    // Compteur d'accès total — utilisé pour le scoring de popularité SPEA2
+    // Compteur d'accès total (diagnostic / SPEA2 legacy)
     private int accessCount = 0;
+
+    // POPULARITÉ = taux d'accès RÉCENT (EMA), conforme à la littérature (fréquence
+    // d'accès sur fenêtre à décroissance exponentielle) — PAS un cumul. Mis à jour à
+    // CHAQUE requête pour ce fragment : +λ s'il est accédé, décroissance sinon.
+    // Un accès SOUTENU est nécessaire pour être « populaire » (encode la confiance) ;
+    // une donnée qui refroidit voit son EMA décroître.
+    private double popularityEma = 0.0;
 
     // Index de la dernière requête ayant accédé à ce fragment.
     // Utilisé pour déterminer si les données sont "encore utilisées" avant toute suppression.
@@ -119,8 +126,10 @@ public class DataFragment {
 
     /**
      * Retourne la meilleure source (primaire ou réplica) pour servir la requête depuis
-     * (execProvider, execRegion). Un réplica est préféré UNIQUEMENT s'il est strictement
-     * plus proche que le primaire (rang < rang primaire).
+     * (execProvider, execRegion). Un réplica est préféré dès qu'il est AUSSI proche que
+     * le primaire (rang ≤ rang primaire) : servir depuis un réplica applique le gain de
+     * partage de charge (REPLICA_TRANSFER_GAIN × warmup), donc à distance égale le
+     * réplica est toujours plus rapide — maximise l'UTILISATION des réplicas créés.
      *
      * <p>Priorité : intra-DC (0) > inter-région (1) > inter-provider (2).</p>
      */
@@ -131,7 +140,8 @@ public class DataFragment {
 
         for (int i = 0; i < replicaCount; i++) {
             int rank = locationRank(replicaProviders[i], replicaRegions[i], execProvider, execRegion);
-            if (rank < bestRank) {
+            // ≤ : à rang égal, le réplica gagne (gain de transfert + délestage du primaire)
+            if (rank < bestRank || (rank == bestRank && bestIdx < 0 && rank <= primaryRank)) {
                 bestRank = rank;
                 bestIdx  = i;
             }
@@ -179,6 +189,10 @@ public class DataFragment {
 
     public int    getReplicaCount()  { return replicaCount; }
 
+    /** Localisation du i-ème réplica actif (0 ≤ i < replicaCount). */
+    public String getReplicaProviderAt(int i) { return replicaProviders[i]; }
+    public String getReplicaRegionAt(int i)   { return replicaRegions[i]; }
+
     // Backward-compat: slot 0
     public String getReplicaProvider() { return replicaCount > 0 ? replicaProviders[0] : null; }
     public String getReplicaRegion()   { return replicaCount > 0 ? replicaRegions[0]   : null; }
@@ -217,6 +231,19 @@ public class DataFragment {
     /** Rétro-compatibilité — préférer {@link #recordAccess(int)} avec l'index de requête. */
     public void recordAccess() { accessCount++; }
 
+    /**
+     * Met à jour la popularité (EMA du taux d'accès) pour la requête courante.
+     * À appeler pour CHAQUE fragment à chaque requête : {@code accessed=true} s'il est
+     * dans la requête (l'EMA monte), false sinon (l'EMA décroît).
+     *   pop ← (1−λ)·pop + λ·[accessed]
+     */
+    public void updatePopularity(boolean accessed, double lambda) {
+        popularityEma = (1.0 - lambda) * popularityEma + (accessed ? lambda : 0.0);
+    }
+
+    /** Popularité = taux d'accès récent (EMA) ∈ [0,1]. Définition littérature. */
+    public double getPopularityEma() { return popularityEma; }
+
     /** Nombre total d'accès depuis la création de cet épisode. */
     public int getAccessCount() { return accessCount; }
 
@@ -241,6 +268,7 @@ public class DataFragment {
         this.recentHalfCount = 0;
         this.olderHalfCount = 0;
         this.halfWindowStart = 0;
+        this.popularityEma = 0.0;
     }
 
     /**

@@ -39,6 +39,9 @@ public class TrainingEnvironment {
     // décide librement quand/combien répliquer.
     private double dynamicTSla;
     private double dynamicMinPopularity = 1.0;
+    // Mode démonstration (warm-start DQfD) : gate popularité forcé ouvert pour que
+    // l'heuristique de démonstration puisse réellement répliquer et enseigner le bénéfice.
+    private boolean demoMode = false;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner popularityLearner;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaLearner;
     // Fenêtre ΔT de suppression (Paper Algorithm 3), apprise — fraction de P_SLA.
@@ -148,8 +151,12 @@ public class TrainingEnvironment {
         }
         // Passer l'optimiseur de placement persistant à la nouvelle simulation (Sujet 2)
         this.simulation = new TcdrmSimulation(seed, complex, placementOptimizer);
-        // Injecter les seuils adaptatifs (T_SLA, éligibilité popularité, ΔT suppression)
-        this.simulation.setDynamicThresholds(dynamicTSla, dynamicMinPopularity);
+        // Profil de routage de l'agent (0 = temps seul) — même valeur qu'au benchmark
+        // via la config persistée : cohérence train/eval.
+        this.simulation.setCostAwareRouting(settings.getCostRoutingToleranceMs());
+        // Injecter les seuils adaptatifs (T_SLA, éligibilité popularité, ΔT suppression) ;
+        // en mode démonstration, gate forcé ouvert (minPop=0) dès le 1er pas.
+        this.simulation.setDynamicThresholds(dynamicTSla, demoMode ? 0.0 : dynamicMinPopularity);
         this.simulation.setDynamicDeletionWindow(deletionWindowLearner.getValue());
         this.tSla = this.dynamicTSla;
         this.currentQuery = 0;
@@ -321,8 +328,13 @@ public class TrainingEnvironment {
         double tQ_norm = latency / Math.max(1.0, tSla);
         double cQ_norm = result.totalCost() / Math.max(1e-9, cSla);
 
-        // SLA_OK : récompense proportionnelle à la marge sous T_SLA
-        rewardWaitTime = settings.getRewardSlaOk() * Math.max(0.0, 1.0 - tQ_norm);
+        // SLA_OK : récompense SATISFICING — pleine dès que la latence est confortablement
+        // sous T_SLA (à (1−marge)·T_SLA), sans bonus supplémentaire en-dessous. Le SLA est
+        // une CONTRAINTE, pas une latence à minimiser : ce plafond retire l'incitation au
+        // sur-provisionnement (réplicas inutiles) et laisse l'agent minimiser le coût.
+        double slaMarginNorm = Math.max(1e-6, settings.getSlaSatisfyMargin());
+        double slaOkFactor = Math.max(0.0, Math.min(1.0, (1.0 - tQ_norm) / slaMarginNorm));
+        rewardWaitTime = settings.getRewardSlaOk() * slaOkFactor;
 
         // SLA_VIOL : pénalité proportionnelle au dépassement de T_SLA
         rewardQueuePenalty = -settings.getRewardSlaViol() * Math.max(0.0, tQ_norm - 1.0);
@@ -359,22 +371,29 @@ public class TrainingEnvironment {
             // LOW_POPULARITY : pénalité maximale au query 0, nulle à partir de P_SLA.
             lowPopularityPenalty = -settings.getRewardLowPopularity() * (1.0 - popularityScore);
 
-            // PREMATURE_REPL : pénalité si on réplique quand les données ne sont pas encore connues.
+            // PREMATURE_REPL : pénalise la réplication SANS BESOIN (SLA confortable) —
+            // uniquement slaMargin. La protection « données pas encore connues » est
+            // déjà portée par LOW_POPULARITY (ponctuel) et le coût de détention
+            // convexe (récurrent) : l'ancien max(slaMargin, 1−pop) DOUBLAIT la pénalité
+            // de faible popularité (−10×(1−pop) combiné vs bonus +8×pop → bascule
+            // nette à pop 0.56 ≈ q130), enseignant la réplication TARDIVE — la source
+            // du surcoût (requêtes payées plein tarif en attendant les réplicas).
             double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
-            // After stabilization data is fully popular: no premature penalty so the agent
-            // can freely add replicas beyond the first batch without being penalised when
-            // latency happens to be below T_SLA.
-            double effectiveMargin = simulation.isWorkloadStabilized()
-                ? 0.0
-                : Math.max(slaMargin, 1.0 - popularityScore);
-            prematureReplPenalty = -settings.getRewardPrematureRepl() * effectiveMargin;
+            prematureReplPenalty = -settings.getRewardPrematureRepl() * slaMargin;
 
             // CORRECT_TRIGGER continu : bonus proportionnel à la popularité observée quand
             // l'agent réplique sous violation SLA. Aucun seuil statique — combiné à
             // lowPopularityPenalty, le point de bascule net est APPRIS par l'agent.
             boolean slaViolated = latency > tSla || result.totalCost() > cSla;
             if (slaViolated) {
-                correctTriggerBonus = settings.getRewardCorrectTrigger() * popularityScore;
+                // Utilité MARGINALE décroissante : bonus plein pour les PREMIÈRES
+                // réplications (timing préservé), décroissant linéairement avec le taux
+                // de remplissage AVANT l'action — les réplications au-delà du nécessaire
+                // rapportent peu, l'agent s'arrête près de l'optimum au lieu de saturer
+                // au max. Continu, aucun seuil statique.
+                double fillBefore = Math.max(0, replicas - 1) / (double) maxReplicasForReward();
+                correctTriggerBonus = settings.getRewardCorrectTrigger() * popularityScore
+                    * (1.0 - fillBefore);
             }
         }
 
@@ -394,13 +413,14 @@ public class TrainingEnvironment {
         // Maintenance : coût léger par réplica actif (encourage la parcimonie)
         rewardUnutilization = -settings.getRewardMaintenance() * replicas;
 
-        // DÉTENTION IMPOPULAIRE (Paper Algorithm 1) : coût RÉCURRENT — chaque requête où
-        // un réplica existe sur des données non populaires coûte w×(1−pop) par réplica.
-        // Ferme l'exploit « répliquer à q≈0 » : le gain de latence (~+9/req) ne couvre
-        // plus le coût cumulé tant que la popularité est basse — l'agent apprend à
-        // attendre que les données soient suffisamment connues, sans seuil codé en dur.
+        // DÉTENTION IMPOPULAIRE (Paper Algorithm 1) : coût RÉCURRENT — chaque réplica
+        // est évalué à l'aune de la popularité de SA donnée (Σ (1−pop_f)×réplicas_f) :
+        // détenir un réplica sur une donnée froide coûte même quand une autre donnée
+        // est chaude. Ferme l'exploit « répliquer à q≈0 » ET enseigne la suppression
+        // des réplicas devenus inutiles quand la popularité dérive ou qu'un pic
+        // retombe — sans aucun seuil codé en dur.
         double unpopularHoldingPenalty =
-            -settings.getRewardUnpopularHolding() * (1.0 - popularityScore) * replicas;
+            -settings.getRewardUnpopularHolding() * simulation.getUnpopularReplicaLoad();
 
         // Action invalide
         rewardInvalidAction = lastInvalidAction ? -settings.getRewardInvalid() : 0.0;
@@ -409,6 +429,11 @@ public class TrainingEnvironment {
             + replCostPenalty + lowPopularityPenalty + prematureReplPenalty + prematureDeletePenalty
             + correctTriggerBonus + thrashPenalty + rewardUnutilization + unpopularHoldingPenalty
             + rewardInvalidAction;
+    }
+
+    /** Nombre max de réplicas du régime courant (pour le bonus marginal). */
+    private int maxReplicasForReward() {
+        return TcdrmConstants.maxReplicasForQueryType(complex);
     }
 
     /** Records action into ring buffer for thrash detection. */
@@ -536,13 +561,23 @@ public class TrainingEnvironment {
      * Propage immédiatement les seuils courants : l'adaptation étant continue (chaque
      * requête), tSla (récompense), l'état RL normalisé et l'éligibilité popularité
      * doivent suivre en temps réel.
+     *
+     * MODE DÉMONSTRATION (warm-start DQfD) : le gate de popularité est forcé OUVERT
+     * (minPop=0) pour que l'heuristique de démonstration puisse réellement RÉPLIQUER et
+     * montrer à l'agent le bénéfice — indispensable en complex où un seul réplica aide
+     * peu (l'agent ne découvrirait jamais la réplication seul). Le méta continue
+     * d'observer/apprendre du stress ; seul le gate est court-circuité pendant les démos.
      */
     private void applyThresholds() {
         this.tSla = this.dynamicTSla;
         if (this.simulation != null) {
-            this.simulation.setDynamicThresholds(this.dynamicTSla, this.dynamicMinPopularity);
+            double effMinPop = demoMode ? 0.0 : this.dynamicMinPopularity;
+            this.simulation.setDynamicThresholds(this.dynamicTSla, effMinPop);
         }
     }
+
+    /** Active le mode démonstration (gate popularité forcé ouvert pour le warm-start). */
+    public void setDemoMode(boolean on) { this.demoMode = on; }
 
     public double getDynamicTSla() { return dynamicTSla; }
     /** Seuil de popularité adaptatif courant (P_SLA normalisé, appris — Sujet 1). */

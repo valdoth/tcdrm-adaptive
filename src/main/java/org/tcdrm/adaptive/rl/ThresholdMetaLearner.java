@@ -46,15 +46,34 @@ public final class ThresholdMetaLearner {
     private static final int VIOL_BUCKETS = 5;
     private static final int COST_BUCKETS = 3;
 
-    // Hyperparamètres d'apprentissage (standard Q-learning)
-    private static final double ALPHA = 0.30;
-    private static final double GAMMA = 0.90;
+    // Hyperparamètres d'apprentissage (standard Q-learning), calibrés pour la cadence
+    // de décision PAR REQUÊTE (1000 pas/épisode).
+    //
+    // GAMMA : le bénéfice d'ouvrir le seuil met ~40+ requêtes à se matérialiser
+    // (réplication par l'agent → warmup ~10 requêtes → décroissance de l'EMA de
+    // violations sur ~1/α ≈ 25 requêtes), alors que les coûts d'ouverture (fidélité,
+    // événement) sont immédiats. γ=0.998 donne un horizon effectif ≈ 500 requêtes —
+    // équivalent au γ=0.9 de l'ancienne cadence fenêtrée (0.9 ≈ 0.998^50). Un γ
+    // myope (0.9 par requête ≈ 10 requêtes d'horizon) fait apprendre au méta-contrôleur
+    // à ouvrir PLUS TARD que le contrat statique : il paie l'ouverture sans jamais
+    // en voir le retour.
+    private static final double ALPHA = 0.05;
+    private static final double GAMMA = 0.998;
     /**
      * Poids du terme de fidélité au contrat dans la récompense méta — même famille que
      * les poids r1..r9 de la reward des agents : un réglage de fonction de récompense,
      * pas un seuil de comportement.
+     *
+     * Réduit 0.5 → 0.3 : la fidélité PÉNALISE l'ouverture du seuil (relaxation), qui doit
+     * être « payée » par des violations évitées. Un agent LENT à exploiter la porte
+     * ouverte (Rainbow en début d'entraînement) ne réduit pas assez les violations pour
+     * couvrir une fidélité forte → le méta apprend à garder la porte FERMÉE, ce qui
+     * empêche l'agent de répliquer (cercle vicieux observé : Rainbow ouvre à q≈160 vs
+     * q≈43 pour Q-Learning). Une fidélité plus faible laisse le méta ouvrir sous
+     * violations soutenues même quand l'agent n'est pas encore optimal — le coût de
+     * détention par fragment protège toujours contre la réplication de données froides.
      */
-    private static final double FIDELITY_WEIGHT = 0.5;
+    private static final double FIDELITY_WEIGHT = 0.3;
     /**
      * Coût d'ÉVÉNEMENT : chaque BAISSE du seuil coûte proportionnellement à son
      * ampleur, en plus du coût de fidélité par requête. Sans lui, la cadence par
@@ -63,6 +82,15 @@ public final class ThresholdMetaLearner {
      * fidélité, facturé par requête passée sous le contrat, serait négligeable.
      */
     private static final double CHANGE_WEIGHT = 1.0;
+    /**
+     * Coût LINÉAIRE continu dans la récompense méta : sans lui, le terme
+     * max(0, costRatio−1) ne se déclenche JAMAIS tant que le coût reste sous le
+     * contrat C_SLA (cas permanent en workload simple) — le méta-contrôleur serait
+     * aveugle au coût et n'apprendrait le MOMENT d'ouverture du seuil que par les
+     * violations. Avec ce terme, ouvrir l'éligibilité quand la réplication réduit
+     * réellement le coût moyen (liens inter-région vs inter-provider) est appris.
+     */
+    private static final double COST_LINEAR_WEIGHT = 0.3;
 
     private final double minValue;
     private final double maxValue;
@@ -123,6 +151,7 @@ public final class ThresholdMetaLearner {
         // ouvertures-éclair non gratuites.
         double relaxation = (maxValue - value) / (maxValue - minValue);
         double reward = -violationRate - Math.max(0.0, costRatio - 1.0)
+            - COST_LINEAR_WEIGHT * costRatio
             - FIDELITY_WEIGHT * relaxation
             - CHANGE_WEIGHT * lastDrop;
 

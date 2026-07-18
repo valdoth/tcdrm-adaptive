@@ -51,6 +51,19 @@ public class TcdrmSimulation {
     // un cycle complet d'inactivité), assouplie uniquement par apprentissage.
     private int dynamicDeletionWindowQueries = TcdrmConstants.P_SLA;
 
+    // Routage sensible au coût (profil d'agent, ex. Rainbow « priorité coût ») :
+    // TOLÉRANCE en ms — parmi les sites dont le temps estimé est à moins de
+    // `costRoutingToleranceMs` du meilleur temps, on choisit le MOINS CHER en BW.
+    // Départage lexicographique (temps d'abord, coût ensuite) : la latence ne peut
+    // jamais se dégrader de plus que la tolérance, mais à temps quasi égal les liens
+    // inter-région (0.008$/GB) sont préférés aux liens inter-provider (0.01$/GB) —
+    // « utiliser l'inter-région le plus possible quand les données sont déjà migrées ».
+    // DÉFAUT 1 ms (infrastructure, tous modèles) : départage les égalités analytiques
+    // EXACTES entre sites par le coût, au lieu de l'ordre d'itération arbitraire —
+    // mesuré : BW −42 % en workload variable, latence moyenne inchangée, strictement
+    // neutre en steady. Un profil d'agent peut l'augmenter via setCostAwareRouting.
+    private double costRoutingToleranceMs = 1.0;
+
     // Sujet 2 : optimiseur multi-objectifs du placement de réplicas
     private final ReplicaPlacementOptimizer placementOptimizer;
     // Compteurs de réplicas par provider pour le scoring de saturation (Sujet 2)
@@ -83,11 +96,17 @@ public class TcdrmSimulation {
 
     private List<DataFragment> createDistributedFragments() {
         int perQuery = complex ? TcdrmConstants.RELATIONS_COMPLEX : TcdrmConstants.RELATIONS_SIMPLE;
-        // Modes dynamiques (variable/burst) : pool 3× plus grand que ce qu'une requête
-        // touche — la popularité devient une propriété émergente PAR fragment (certains
-        // chauds, d'autres froids), au lieu d'être uniforme comme en mode steady.
+        // Modes dynamiques (variable/burst) : pool plus grand que ce qu'une requête
+        // touche — la popularité devient une propriété émergente PAR fragment.
+        // Taille calibrée pour ÉGALISER LA DIFFICULTÉ entre régimes (probabilité
+        // qu'une requête soit couverte par la capacité max de réplication ≈ 10 %
+        // mesurée par simulation) : simple 3→9 (×3), complex 6→9 (×1.5). Un pool
+        // complex de 18 rendait la tâche d'entraînement quasi insoluble (couverture
+        // 1 %) : même 12 réplicas laissaient ~900 violations, enseignant à l'agent
+        // que « répliquer ne sert à rien » — politique NOOP catastrophique en éval.
         boolean steady = "steady".equals(org.tcdrm.adaptive.core.RuntimeConfig.getWorkloadMode());
-        int nRelations = steady ? perQuery : perQuery * TcdrmConstants.WORKLOAD_POOL_FACTOR;
+        int nRelations = steady ? perQuery
+            : (complex ? (perQuery * 3) / 2 : perQuery * TcdrmConstants.WORKLOAD_POOL_FACTOR);
         List<DataFragment> frags = new ArrayList<>();
 
         String[] providers = MultiCloudInfrastructure.PROVIDERS;
@@ -140,6 +159,20 @@ public class TcdrmSimulation {
         return fragments;
     }
 
+    /**
+     * Enregistre les accès de la requête ET met à jour la popularité (EMA du taux
+     * d'accès) de TOUS les fragments : ceux de la requête montent, les autres décroissent.
+     * La popularité est ainsi un taux récent (littérature), pas un cumul.
+     */
+    private void recordAccessAndPopularity(List<DataFragment> active, int qIdx) {
+        double lambda = TcdrmConstants.POPULARITY_EMA_LAMBDA;
+        for (DataFragment f : fragments) {
+            boolean accessed = active.contains(f);
+            if (accessed) f.recordAccess(qIdx);
+            f.updatePopularity(accessed, lambda);
+        }
+    }
+
     /** Résultat d'une requête. */
     public record QueryResult(
         int queryNumber,
@@ -157,22 +190,23 @@ public class TcdrmSimulation {
     public QueryResult executeNoRepQuery() {
         List<DataFragment> active = selectFragmentsForQuery(queryCount);
         final int qIdx = queryCount;
-        active.forEach(f -> f.recordAccess(qIdx));
+        recordAccessAndPopularity(active, qIdx);
 
         // Choisir le meilleur site d'exécution compte tenu des localisations primaires
         String[] optSite = findOptimalExecSite(active);
+        double[] sync = syncReplicasOnWrite(active); // toujours [0,0,0] : pas de réplicas
         QueryCloudlet query = new QueryCloudlet(queryCount, complex, active);
         query.execute(infrastructure, optSite[0], optSite[1], rnd);
 
         QueryResult result = new QueryResult(
             queryCount,
             query.getTotalTimeMs(),
-            query.getBwCost(),
+            query.getBwCost() + sync[0],
             query.getCpuCost(),
             query.getIoCost(),
-            query.getTotalCost(),
-            query.getBwInterProviderGb(),
-            query.getBwInterRegionGb(),
+            query.getTotalCost() + sync[0],
+            query.getBwInterProviderGb() + sync[1],
+            query.getBwInterRegionGb() + sync[2],
             0
         );
         queryCount++;
@@ -192,13 +226,14 @@ public class TcdrmSimulation {
 
         List<DataFragment> active = selectFragmentsForQuery(queryCount);
         final int qIdxTcdrm = queryCount;
-        active.forEach(f -> f.recordAccess(qIdxTcdrm));
+        recordAccessAndPopularity(active, qIdxTcdrm);
 
         // Choisir le meilleur site d'exécution (primaires + réplicas déjà créés)
         String[] optSite = findOptimalExecSite(active);
         this.execProvider = optSite[0];
         this.execRegion = optSite[1];
         placementOptimizer.recordExecution(optSite[0], optSite[1]);
+        double[] sync = syncReplicasOnWrite(active);
         QueryCloudlet query = new QueryCloudlet(queryCount, complex, active);
         query.execute(infrastructure, optSite[0], optSite[1], rnd);
 
@@ -206,7 +241,7 @@ public class TcdrmSimulation {
         double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
         double cSla = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
         boolean slaViolated = query.getTotalTimeMs() > tSla
-                || (query.getTotalCost() + maintenanceCost) > cSla;
+                || (query.getTotalCost() + maintenanceCost + sync[0]) > cSla;
         // Répliquer uniquement quand le workload est stabilisé (popularité réelle détectée)
         boolean popularEnough = isWorkloadStabilized();
 
@@ -219,16 +254,16 @@ public class TcdrmSimulation {
         QueryResult result = new QueryResult(
             queryCount,
             query.getTotalTimeMs(),
-            query.getBwCost() + creationCost,
+            query.getBwCost() + creationCost + sync[0],
             query.getCpuCost(),
             query.getIoCost() + maintenanceCost,
-            query.getTotalCost() + creationCost + maintenanceCost,
-            query.getBwInterProviderGb(),
-            query.getBwInterRegionGb(),
+            query.getTotalCost() + creationCost + maintenanceCost + sync[0],
+            query.getBwInterProviderGb() + sync[1],
+            query.getBwInterRegionGb() + sync[2],
             currentReplicaCount
         );
         queryCount++;
-        currentBudget -= query.getTotalCost() + maintenanceCost;
+        currentBudget -= query.getTotalCost() + maintenanceCost + sync[0];
         return result;
     }
 
@@ -263,7 +298,7 @@ public class TcdrmSimulation {
 
         List<DataFragment> active = selectFragmentsForQuery(queryCount);
         final int qIdxRL = queryCount;
-        active.forEach(f -> f.recordAccess(qIdxRL));
+        recordAccessAndPopularity(active, qIdxRL);
 
         // Évaluer tous les sites d'exécution possibles (provider × région) et choisir
         // celui qui minimise le temps de transfert analytique pour CES fragments.
@@ -271,6 +306,7 @@ public class TcdrmSimulation {
         this.execProvider = optSite[0];
         this.execRegion = optSite[1];
         placementOptimizer.recordExecution(optSite[0], optSite[1]);
+        double[] sync = syncReplicasOnWrite(active);
         QueryCloudlet query = new QueryCloudlet(queryCount, complex, active);
         query.execute(infrastructure, optSite[0], optSite[1], rnd);
 
@@ -279,16 +315,16 @@ public class TcdrmSimulation {
         QueryResult result = new QueryResult(
             queryCount,
             query.getTotalTimeMs(),
-            query.getBwCost() + creationCost,
+            query.getBwCost() + creationCost + sync[0],
             query.getCpuCost(),
             query.getIoCost() + maintenanceCost,
-            query.getTotalCost() + creationCost + maintenanceCost,
-            query.getBwInterProviderGb(),
-            query.getBwInterRegionGb(),
+            query.getTotalCost() + creationCost + maintenanceCost + sync[0],
+            query.getBwInterProviderGb() + sync[1],
+            query.getBwInterRegionGb() + sync[2],
             currentReplicaCount
         );
         queryCount++;
-        currentBudget -= query.getTotalCost() + maintenanceCost;
+        currentBudget -= query.getTotalCost() + maintenanceCost + sync[0];
         return result;
     }
 
@@ -301,13 +337,18 @@ public class TcdrmSimulation {
      * de l'appel {@link QueryCloudlet#execute}.
      */
     private String[] findOptimalExecSite(List<DataFragment> active) {
-        String bestProvider = MultiCloudInfrastructure.PROVIDERS[0];
-        String bestRegion   = MultiCloudInfrastructure.REGIONS[0];
-        double bestTime     = Double.MAX_VALUE;
+        String[] providers = MultiCloudInfrastructure.PROVIDERS;
+        String[] regions   = MultiCloudInfrastructure.REGIONS;
+        int nSites = providers.length * regions.length;
+        double[] times = new double[nSites];
+        double[] costs = new double[nSites];
+        double minTime = Double.MAX_VALUE;
 
-        for (String p : MultiCloudInfrastructure.PROVIDERS) {
-            for (String r : MultiCloudInfrastructure.REGIONS) {
+        int idx = 0;
+        for (String p : providers) {
+            for (String r : regions) {
                 double siteTime = 0;
+                double siteCost = 0;
                 for (DataFragment frag : active) {
                     DataFragment.LocationChoice loc = frag.bestSourceLocation(p, r);
                     double dataGb = frag.getSizeGb() * TcdrmConstants.QUERY_SELECTIVITY;
@@ -322,15 +363,38 @@ public class TcdrmSimulation {
                     siteTime = TcdrmConstants.PARALLEL_FETCH
                         ? Math.max(siteTime, t)
                         : siteTime + t;
+                    // Coût BW facturé sur la taille PLEINE de la relation (même règle
+                    // que QueryCloudlet.execute) depuis la source retenue vers ce site.
+                    siteCost += frag.getSizeGb()
+                        * infrastructure.getBandwidthCostPerGb(loc.provider(), loc.region(), p, r);
                 }
-                if (siteTime < bestTime) {
-                    bestTime    = siteTime;
-                    bestProvider = p;
-                    bestRegion   = r;
+                times[idx] = siteTime;
+                costs[idx] = siteCost;
+                minTime = Math.min(minTime, siteTime);
+                idx++;
+            }
+        }
+
+        int best = -1;
+        if (costRoutingToleranceMs <= 0.0) {
+            // Comportement historique : premier site au temps minimal (ordre d'itération).
+            for (int i = 0; i < nSites; i++) {
+                if (best < 0 || times[i] < times[best]) best = i;
+            }
+        } else {
+            // Départage lexicographique : parmi les sites à moins de
+            // `costRoutingToleranceMs` du meilleur temps, choisir le moins cher en BW
+            // (à coût égal, le plus rapide).
+            for (int i = 0; i < nSites; i++) {
+                if (times[i] <= minTime + costRoutingToleranceMs) {
+                    if (best < 0 || costs[i] < costs[best]
+                            || (costs[i] == costs[best] && times[i] < times[best])) {
+                        best = i;
+                    }
                 }
             }
         }
-        return new String[]{bestProvider, bestRegion};
+        return new String[]{providers[best / regions.length], regions[best % regions.length]};
     }
 
     /**
@@ -361,12 +425,55 @@ public class TcdrmSimulation {
     }
 
     /**
+     * Coût de MAINTENANCE DE COHÉRENCE (modèle économique standard de la réplication
+     * cloud : création + stockage + propagation des mises à jour — la littérature
+     * data grid/cloud facture chaque écriture × taille × nombre de réplicas).
+     *
+     * Avec READ_WRITE_RATIO = 0.9 (Paper Table 2, jusqu'ici inutilisé), 10 % des
+     * requêtes sont des écritures : chaque réplica des fragments touchés doit être
+     * resynchronisé depuis son primaire (transfert asynchrone — coût BW réel facturé
+     * sur la taille pleine de la relation, comme la création, sans impact latence).
+     *
+     * C'est le coût RÉCURRENT réel de détention d'un réplica : il donne des dents
+     * économiques mesurables (dans les figures) au contrat de popularité — détenir
+     * beaucoup de réplicas de données activement écrites coûte, exactement comme
+     * dans un vrai cloud pay-as-you-go. Appliqué identiquement aux trois stratégies
+     * (NoRepLc n'a pas de réplicas → coût nul par construction).
+     *
+     * @return [coût $, GB inter-provider, GB inter-région]
+     */
+    private double[] syncReplicasOnWrite(List<DataFragment> active) {
+        // Tirage unique par requête, AVANT l'exécution du cloudlet, au même point dans
+        // les trois stratégies : les séquences aléatoires restent alignées entre modèles.
+        boolean isWrite = rnd.nextDouble() >= TcdrmConstants.READ_WRITE_RATIO;
+        if (!isWrite) return new double[]{0.0, 0.0, 0.0};
+        double cost = 0.0, ipGb = 0.0, irGb = 0.0;
+        for (DataFragment f : active) {
+            for (int i = 0; i < f.getReplicaCount(); i++) {
+                String rp = f.getReplicaProviderAt(i);
+                String rr = f.getReplicaRegionAt(i);
+                cost += f.getSizeGb() * infrastructure.getBandwidthCostPerGb(
+                    f.getPrimaryProvider(), f.getPrimaryRegion(), rp, rr);
+                if (f.getPrimaryProvider().equals(rp)) irGb += f.getSizeGb();
+                else                                    ipGb += f.getSizeGb();
+            }
+        }
+        return new double[]{cost, ipGb, irGb};
+    }
+
+    /**
      * Crée un réplica via l'optimiseur multi-objectifs (Sujet 2).
-     * Aucun filtre EMA/TinyLFU — placement uniquement guidé par latence, coût, saturation.
+     *
+     * Éligibilité PAR FRAGMENT (Paper Algorithm 1 : pd_i ≥ P_SLA, condition par
+     * donnée) : seuls les fragments dont la popularité PROPRE atteint le seuil
+     * adaptatif peuvent recevoir un réplica — on ne réplique jamais une donnée
+     * froide au motif qu'une AUTRE donnée est populaire. Le placement parmi les
+     * fragments éligibles reste guidé par latence, coût, popularité, saturation.
      */
     private double createReplica() {
         ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
-            fragments, execProvider, execRegion, infrastructure, replicasPerProvider);
+            fragments, execProvider, execRegion, infrastructure, replicasPerProvider,
+            dynamicMinPopularity);
         if (c == null) return 0.0;
         double cost = c.fragment().createReplica(c.provider(), c.region());
         if (cost > 0.0) {
@@ -446,17 +553,52 @@ public class TcdrmSimulation {
     }
 
     /**
-     * Popularité normalisée [0,1] du fragment le plus accédé.
-     * 0.0 = aucune donnée observée (query 0), 1.0 = P_SLA atteint (query 200+).
-     * Utilisé comme state[7] pour que l'agent apprenne lui-même à ne pas répliquer
-     * quand les données ne sont pas encore connues — sans aucun seuil codé en dur.
+     * Popularité [0,1] = taux d'accès RÉCENT (EMA) du fragment le plus populaire
+     * (définition littérature : fréquence d'accès à décroissance exponentielle, PAS un
+     * cumul). Basse au début (peu d'accès soutenu observé → confiance faible), monte
+     * avec un accès soutenu (~q=200 pour EMA≈0.9), décroît si les données refroidissent.
+     * Utilisé comme state[7] et pour l'éligibilité : l'agent apprend à ne pas répliquer
+     * de données pas encore établies comme populaires — sans aucun seuil codé en dur.
      */
     public double getPopularityScore() {
-        int maxAccess = 0;
+        double maxEma = 0.0;
         for (DataFragment f : fragments) {
-            if (f.getAccessCount() > maxAccess) maxAccess = f.getAccessCount();
+            if (f.getPopularityEma() > maxEma) maxEma = f.getPopularityEma();
         }
-        return Math.min(1.0, (double) maxAccess / TcdrmConstants.P_SLA);
+        return TcdrmConstants.normalizedPopularity(maxEma);
+    }
+
+    /**
+     * Charge de détention des réplicas sur données froides : Σ (1 − pop_f)^k × réplicas_f,
+     * fonction LISSE et convexe de la popularité — AUCUN seuil statique (Sujet 1 :
+     * pas de valeur codée en dur).
+     *
+     * L'exposant k > 1 (REPLICA_HOLDING_CONVEXITY) est un réglage de FORME de la
+     * récompense (même famille que les poids r1..r9), pas un seuil de comportement :
+     * <ul>
+     *   <li>pop → 0 (donnée froide, ex. au tout départ) : coldness → 1 → détention
+     *       fortement pénalisée → l'agent apprend de lui-même à NE PAS répliquer avant
+     *       que les données chauffent (répond à « pas de réplication prématurée »),
+     *       sans aucun plancher codé.</li>
+     *   <li>pop moyenne (données qui chauffent) : la convexité écrase la pénalité
+     *       (0.5^k ≪ 0.5) → la réplication précoce gagnante n'est plus dissuadée
+     *       (répond à « ne pas répliquer trop tard »).</li>
+     *   <li>pop → 1 (chaud) : coldness → 0 → aucune pénalité.</li>
+     * </ul>
+     * En variable/burst, une donnée qui refroidit voit sa coldness remonter → l'agent
+     * apprend à supprimer ses réplicas (Algorithm 3).
+     */
+    public double getUnpopularReplicaLoad() {
+        double k = TcdrmConstants.REPLICA_HOLDING_CONVEXITY;
+        double load = 0.0;
+        for (DataFragment f : fragments) {
+            if (f.getReplicaCount() > 0) {
+                double pop = TcdrmConstants.normalizedPopularity(f.getPopularityEma());
+                double coldness = Math.pow(1.0 - pop, k);
+                load += coldness * f.getReplicaCount();
+            }
+        }
+        return load;
     }
 
     /** Index du provider dans {@link MultiCloudInfrastructure#PROVIDERS}. */
@@ -496,6 +638,21 @@ public class TcdrmSimulation {
         double cSla = cSlaEffective;
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
 
+        // Structure de popularité du pool (Sujet 1) : la popularité MAX seule ([7]) ne
+        // dit pas QUELS ni COMBIEN d'éléments sont populaires — l'agent ne peut pas
+        // distinguer « 1 fragment chaud → 2 réplicas utiles » de « tous chauds →
+        // couverture complète urgente ». Ces deux dimensions donnent la vision
+        // par élément : fraction éligible au seuil courant, et popularité moyenne.
+        int eligible = 0;
+        double popSum = 0.0;
+        for (DataFragment f : fragments) {
+            double pop = TcdrmConstants.normalizedPopularity(f.getPopularityEma());
+            popSum += pop;
+            if (pop >= dynamicMinPopularity) eligible++;
+        }
+        double eligibleFraction = (double) eligible / Math.max(1, fragments.size());
+        double meanPopularity   = popSum / Math.max(1, fragments.size());
+
         return new double[] {
             lastLatency / tSla,                                    // 0: latence normalisée
             currentBudget / TcdrmConstants.INITIAL_BUDGET,         // 1: budget
@@ -507,7 +664,10 @@ public class TcdrmSimulation {
             getPopularityScore(),                                  // 7: popularité normalisée [0,1]
                                                                    //    0 = données inconnues (query 0)
                                                                    //    1 = P_SLA atteint (query 200+)
-            complex ? 1.0 : 0.0                                    // 8: type de requête (0=simple, 1=complex)
+            complex ? 1.0 : 0.0,                                   // 8: type de requête (0=simple, 1=complex)
+            eligibleFraction,                                      // 9: fraction de fragments ÉLIGIBLES
+                                                                   //    (pop_f ≥ seuil adaptatif courant)
+            meanPopularity                                         // 10: popularité MOYENNE du pool
         };
     }
 
@@ -585,4 +745,14 @@ public class TcdrmSimulation {
     }
 
     public ReplicaPlacementOptimizer getPlacementOptimizer() { return placementOptimizer; }
+
+    /**
+     * Tolérance (ms) du routage sensible au coût — profil d'agent, persisté avec sa
+     * configuration d'entraînement. 0 = choix de site au temps seul.
+     */
+    public void setCostAwareRouting(double toleranceMs) {
+        this.costRoutingToleranceMs = Math.max(0.0, toleranceMs);
+    }
+
+    public double getCostRoutingToleranceMs() { return costRoutingToleranceMs; }
 }

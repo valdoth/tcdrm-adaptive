@@ -55,6 +55,34 @@ public final class TcdrmConstants {
      */
     public static final int P_SLA = 200;
 
+    /**
+     * Constante de lissage (λ) de la POPULARITÉ = EMA du taux d'accès récent par
+     * fragment (définition littérature : fréquence d'accès sur fenêtre à décroissance
+     * exponentielle — cf. DPRS, modèles time-decay). Un fragment accédé en continu voit
+     * son EMA atteindre ~0.9 après ~1/λ ≈ 200 requêtes, calé sur le P_SLA du papier
+     * (maturité de popularité). Encode la CONFIANCE (accès soutenu requis) et gère la
+     * décroissance des données qui refroidissent — sans aucun seuil statique.
+     * λ ≈ ln(10)/200 ≈ 0.0115.
+     */
+    public static final double POPULARITY_EMA_LAMBDA = 0.0115;
+
+    /**
+     * Valeur d'ÉQUILIBRE de l'EMA pour un fragment accédé à CHAQUE requête pendant
+     * P_SLA requêtes : 1 − (1−λ)^P_SLA. L'EMA brute étant asymptotique (converge vers 1
+     * sans jamais l'atteindre), on NORMALISE la popularité par cette valeur pour qu'un
+     * accès soutenu sur P_SLA requêtes corresponde à popularité = 1.0 EXACTEMENT (comme
+     * l'ancienne formule accessCount/P_SLA atteignait 1.0 à q=200). Rend le contrat
+     * (1.0) atteignable — sinon TCDRM (seuil fixe 1.0) et le contrat RL ne pourraient
+     * jamais déclencher de réplication.
+     */
+    public static final double POPULARITY_EMA_FULL =
+        1.0 - Math.pow(1.0 - POPULARITY_EMA_LAMBDA, P_SLA);
+
+    /** Popularité normalisée [0,1] à partir de l'EMA brute (taux d'accès récent). */
+    public static double normalizedPopularity(double ema) {
+        return Math.min(1.0, ema / POPULARITY_EMA_FULL);
+    }
+
     // ==================================================================
     // Replica Limits (Paper Fig. 2 — img-003.png)
     // Simple: max ~6 replicas, Complex: max ~12 replicas
@@ -151,6 +179,15 @@ public final class TcdrmConstants {
      * Valeur 0.0 pour rester fidèle au modèle économique du papier.
      */
     public static final double REPLICA_MAINTENANCE_COST_PER_QUERY = 0.0;
+
+    /**
+     * Convexité du coût de détention des réplicas (Sujet 1) : le coût est
+     * (1 − popularité)^k — fonction LISSE, sans seuil statique. k > 1 concentre la
+     * pénalité sur les données FROIDES (pop → 0) tout en l'écrasant pour les données
+     * qui chauffent (pop moyenne). Réglage de FORME de récompense (comme les poids
+     * r1..r9), pas un seuil de comportement : rien n'est codé en dur sur QUAND répliquer.
+     */
+    public static final double REPLICA_HOLDING_CONVEXITY = 2.5;
 
     // ==================================================================
     // Network Parameters

@@ -62,9 +62,11 @@ class CloudSimEnv(gym.Env):
         
 		# Espaces d'action et d'observation
 		self.action_space = spaces.Discrete(3)  # NOOP, REPLICATE, DELETE
+		# 11 dims : les 9 historiques + [9] fraction de fragments eligibles et
+		# [10] popularite moyenne du pool (structure de popularite par element).
 		self.observation_space = spaces.Box(
-			low=np.zeros(9, dtype=np.float32),
-			high=np.array([5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+			low=np.zeros(11, dtype=np.float32),
+			high=np.array([5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
 			dtype=np.float32,
 		)
         
@@ -315,7 +317,10 @@ class CloudSimQLearningEnv(CloudSimEnv):
 
 	def _discretize_state(self, state: np.ndarray) -> int:
 		"""
-		Discrétise l'état continu (9 dims) en index (0-1457).
+		Discrétise l'état continu en index (0-1457). L'état a 11 dims mais Q-Learning
+		(tabulaire) n'en discrétise qu'un sous-ensemble : les dims 9-10 (structure de
+		popularité par élément) sont réservées à Rainbow DQN, qui peut les exploiter
+		sans exploser un espace d'états — le tabulaire, lui, exploserait.
 
 		- RT       : latence normalisée          [0]
 		- COST     : coût normalisé              [3]

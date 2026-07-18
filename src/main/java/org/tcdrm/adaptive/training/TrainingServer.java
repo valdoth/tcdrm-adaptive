@@ -67,6 +67,15 @@ public class TrainingServer {
         }
         return env.reset();
     }
+
+    /**
+     * Active/désactive le mode démonstration (warm-start DQfD) sur les deux environnements :
+     * le gate de popularité est forcé ouvert pour que l'heuristique démontre la réplication.
+     */
+    public void setDemoMode(boolean on) {
+        if (simpleEnv != null) simpleEnv.setDemoMode(on);
+        if (complexEnv != null) complexEnv.setDemoMode(on);
+    }
     
     /**
      * Exécute une action dans l'environnement.
@@ -245,6 +254,7 @@ public class TrainingServer {
         if (wrp instanceof Number n) settings.setWarmupRandomProb(n.doubleValue());
         // Poids de la fonction de récompense (Sujet 1 — configurables depuis Python)
         Object rOk   = p.get("rewardSlaOk");         if (rOk   instanceof Number n) settings.setRewardSlaOk(n.doubleValue());
+        Object sMarg = p.get("slaSatisfyMargin");    if (sMarg instanceof Number n) settings.setSlaSatisfyMargin(n.doubleValue());
         Object rViol = p.get("rewardSlaViol");        if (rViol instanceof Number n) settings.setRewardSlaViol(n.doubleValue());
         Object rCost = p.get("rewardCostOver");       if (rCost instanceof Number n) settings.setRewardCostOver(n.doubleValue());
         Object rCLin = p.get("rewardCostLinear");     if (rCLin instanceof Number n) settings.setRewardCostLinear(n.doubleValue());
@@ -257,6 +267,7 @@ public class TrainingServer {
         Object rPop  = p.get("rewardLowPopularity");  if (rPop  instanceof Number n) settings.setRewardLowPopularity(n.doubleValue());
         Object rCorr = p.get("rewardCorrectTrigger"); if (rCorr instanceof Number n) settings.setRewardCorrectTrigger(n.doubleValue());
         Object rHold = p.get("rewardUnpopularHolding"); if (rHold instanceof Number n) settings.setRewardUnpopularHolding(n.doubleValue());
+        Object cRout = p.get("costRoutingToleranceMs"); if (cRout instanceof Number n) settings.setCostRoutingToleranceMs(n.doubleValue());
         // Persiste la configuration de récompense de CET agent après application des
         // overrides Python (ex: --reward-cost-over) — rechargée par le benchmark.
         saveRewardConfig();

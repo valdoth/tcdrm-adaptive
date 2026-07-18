@@ -228,7 +228,7 @@ class PrioritizedReplayBuffer:
     Poids d'importance sampling : wᵢ = (N · P(i))^{-β}, normalisés par max.
     β anneal de beta_start → 1 sur beta_frames transitions.
     """
-    def __init__(self, capacity: int = 100000, alpha: float = 0.6,
+    def __init__(self, capacity: int = 100000, alpha: float = 0.5,
                  beta_start: float = 0.4, beta_frames: int = 100000):
         self.capacity    = capacity
         self.alpha       = alpha
@@ -310,6 +310,7 @@ class RainbowDQNAgent:
         v_max:              float = 10.0,
         reward_scale:       float = 1.0,
         per_beta_frames:    int   = None,
+        updates_per_step:   int   = 1,
     ):
         if hidden_dims is None:
             hidden_dims = [128, 128]
@@ -329,6 +330,11 @@ class RainbowDQNAgent:
         # Sans elle, la distribution sature aux bornes v_min/v_max et le réseau ne
         # distingue plus les états bons des très bons.
         self.reward_scale       = reward_scale
+        # Ratio de replay : nombre de pas de gradient par transition d'environnement.
+        # Sur un état 9D avec des épisodes coûteux (1000 requêtes CloudSimPlus via
+        # Py4J), le gradient est bon marché comparé à l'échantillon : >1 accélère la
+        # convergence en NOMBRE D'ÉPISODES sans coût de simulation supplémentaire.
+        self.updates_per_step   = max(1, int(updates_per_step))
         self.use_distributional = use_distributional
         self.n_atoms            = n_atoms
         self.v_min              = v_min
@@ -350,7 +356,9 @@ class RainbowDQNAgent:
         self.policy_net = _make_net().to(self.device)
         self.target_net = _make_net().to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()   # target toujours en mode déterministe (pas de bruit actif)
+        # Rainbow (Hessel et al. 2018) : le réseau CIBLE utilise aussi ses couches
+        # bruitées, avec un bruit rééchantillonné indépendamment à chaque mise à jour
+        # (reset_noise dans _train_step) — pas de mode eval déterministe sur la cible.
 
         self.optimizer = optim.Adam(
             self.policy_net.parameters(),
@@ -359,9 +367,16 @@ class RainbowDQNAgent:
 
         # β du PER anneal jusqu'à 1 sur TOUTE la durée d'entraînement (Rainbow, Hessel 2018)
         # quand per_beta_frames est fourni — sinon heuristique historique.
-        self.replay_buffer = PrioritizedReplayBuffer(
-            buffer_capacity,
-            beta_frames=per_beta_frames if per_beta_frames else max(buffer_capacity, 100000))
+        # ÉQUILIBRAGE SIMPLE/COMPLEX : un buffer PER PAR RÉGIME + échantillonnage
+        # stratifié 50/50 par batch. Avec un buffer unique, le PER échantillonne par
+        # |erreur TD| : le régime aux erreurs les plus grandes (complex — dynamiques
+        # plus amples, 12 réplicas) monopolise les gradients et l'autre régime
+        # sous-apprend — c'est ce qui faisait sous-performer Rainbow en simple.
+        beta_frames = per_beta_frames if per_beta_frames else max(buffer_capacity, 100000)
+        self.replay_buffers = {
+            0: PrioritizedReplayBuffer(buffer_capacity // 2, beta_frames=beta_frames),
+            1: PrioritizedReplayBuffer(buffer_capacity // 2, beta_frames=beta_frames),
+        }
         self._nstep_buf    = NStepBuffer(self.n_step, self.discount_factor)
         # Normalisation de récompense séparée par régime (simple=0, complex=1) : les échelles
         # naturelles diffèrent (CSLA_COMPLEX ≈ 2.7× CSLA_SIMPLE, coûts/latences plus élevés en
@@ -397,46 +412,87 @@ class RainbowDQNAgent:
         if not np.any(action_mask > 0):
             return 0
 
-        # NoisyNet : rééchantillonner le bruit avant chaque inférence en mode training
-        # Sans ce reset, le bruit est fixe depuis __init__ → politique déterministe
+        # NoisyNet : rééchantillonner le bruit avant chaque inférence en mode training.
+        # En mode ÉVALUATION (training=False), basculer le module en eval() le temps du
+        # forward : NoisyLinear teste le flag train du MODULE, pas notre argument — sans
+        # cette bascule, l'inférence utiliserait les poids bruités avec le DERNIER bruit
+        # échantillonné figé, au lieu des poids moyens μ (greedy véritable).
         if training:
             self.policy_net.reset_noise()
+        else:
+            self.policy_net.eval()
 
-        with torch.no_grad():
-            s = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            if self.use_distributional:
-                q = self.policy_net.q_values(s).cpu().numpy()[0]
-            else:
-                q = self.policy_net(s).cpu().numpy()[0]
-            q = q.copy()
-            q[action_mask == 0] = -np.inf
-            return int(q.argmax())
+        try:
+            with torch.no_grad():
+                s = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+                if self.use_distributional:
+                    q = self.policy_net.q_values(s).cpu().numpy()[0]
+                else:
+                    q = self.policy_net(s).cpu().numpy()[0]
+                q = q.copy()
+                q[action_mask == 0] = -np.inf
+                return int(q.argmax())
+        finally:
+            if not training:
+                self.policy_net.train()
 
     # -----------------------------------------------------------------------
     # Mise à jour — stockage + apprentissage
     # -----------------------------------------------------------------------
 
     def update(self, state, action, reward, next_state, done):
+        regime = 1 if len(state) > 8 and state[8] >= 0.5 else 0
         if self._reward_stats is not None:
-            regime = 1 if len(state) > 8 and state[8] >= 0.5 else 0
             stats = self._reward_stats[regime]
             stats.update(reward)
             reward = stats.normalize(reward) * self.reward_scale
 
+        # Un épisode est mono-régime : toutes les transitions n-step de la fenêtre
+        # courante appartiennent au même régime que l'état courant.
         for transition in self._nstep_buf.push(state, action, reward, next_state, done):
-            self.replay_buffer.push(*transition)
+            self.replay_buffers[regime].push(*transition)
         if done:
             self._nstep_buf.clear()
 
-        if len(self.replay_buffer) >= self._min_buffer_size:
-            self._train_step()
+        total = len(self.replay_buffers[0]) + len(self.replay_buffers[1])
+        if total >= self._min_buffer_size:
+            for _ in range(self.updates_per_step):
+                self._train_step()
 
     # -----------------------------------------------------------------------
     # Étape d'entraînement
     # -----------------------------------------------------------------------
 
+    def _sample_stratified(self):
+        """Échantillonnage stratifié 50/50 simple/complex.
+
+        Chaque batch contient autant de transitions de chaque régime (quand les deux
+        buffers en ont) : les gradients des deux régimes pèsent pareil, quel que soit
+        le déséquilibre des priorités PER entre eux. Si un régime n'a pas encore de
+        données (début d'entraînement), tout le batch vient de l'autre.
+        """
+        n0, n1 = len(self.replay_buffers[0]), len(self.replay_buffers[1])
+        half = self.batch_size // 2
+        take0 = min(n0, half) if n1 >= half else min(n0, self.batch_size - min(n1, half))
+        take1 = min(n1, self.batch_size - take0)
+
+        parts = []
+        for regime, take in ((0, take0), (1, take1)):
+            if take > 0:
+                parts.append((regime,) + self.replay_buffers[regime].sample(take))
+
+        s  = np.concatenate([p[1] for p in parts])
+        a  = np.concatenate([p[2] for p in parts])
+        r  = np.concatenate([p[3] for p in parts])
+        ns = np.concatenate([p[4] for p in parts])
+        d  = np.concatenate([p[5] for p in parts])
+        w  = np.concatenate([p[7] for p in parts])
+        # (régime, indices, taille) pour la mise à jour des priorités par buffer
+        meta = [(p[0], p[6], len(p[2])) for p in parts]
+        return s, a, r, ns, d, w, meta
+
     def _train_step(self):
-        s, a, r, ns, d, indices, weights = self.replay_buffer.sample(self.batch_size)
+        s, a, r, ns, d, weights, sample_meta = self._sample_stratified()
         s  = torch.FloatTensor(s).to(self.device)
         a  = torch.LongTensor(a).to(self.device)
         r  = torch.FloatTensor(r).to(self.device)
@@ -444,8 +500,10 @@ class RainbowDQNAgent:
         d  = torch.FloatTensor(d).to(self.device)
         w  = torch.FloatTensor(weights).to(self.device)
 
-        # Rééchantillonner le bruit du réseau online seulement (target est en eval())
+        # Rainbow : bruit rééchantillonné INDÉPENDAMMENT pour le réseau online et le
+        # réseau cible à chaque mise à jour (Hessel et al. 2018).
         self.policy_net.reset_noise()
+        self.target_net.reset_noise()
 
         if self.use_distributional:
             loss, td_err = self._c51_loss(s, a, r, ns, d, w)
@@ -459,7 +517,12 @@ class RainbowDQNAgent:
         if self.scheduler is not None:
             self.scheduler.step()
 
-        self.replay_buffer.update_priorities(indices, td_err + 1e-6)
+        # Priorités mises à jour dans le buffer d'origine de chaque transition
+        offset = 0
+        for regime, indices, count in sample_meta:
+            self.replay_buffers[regime].update_priorities(
+                indices, td_err[offset:offset + count] + 1e-6)
+            offset += count
         self.losses.append(float(loss.item()))
         self.update_count   += 1
         self.training_steps += 1
@@ -567,7 +630,9 @@ class RainbowDQNAgent:
             'mode':             'rainbow' if self.use_distributional else 'noisy_dqn',
             'policy_params':    sum(p.numel() for p in self.policy_net.parameters()),
             'policy_grad_norm': grad_norm,
-            'buffer_size':      len(self.replay_buffer),
+            'buffer_size':      len(self.replay_buffers[0]) + len(self.replay_buffers[1]),
+            'buffer_simple':    len(self.replay_buffers[0]),
+            'buffer_complex':   len(self.replay_buffers[1]),
             'update_count':     self.update_count,
             'avg_loss':         float(np.mean(self.losses[-100:])) if self.losses else 0.0,
         }
@@ -609,7 +674,7 @@ class RainbowDQNAgent:
     def load(self, path: str):
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
 
-        # Détecter l'incompatibilité de state_dim (ex. ancien checkpoint 7D vs 8D courant)
+        # Détecter l'incompatibilité de state_dim (ex. ancien checkpoint 9D vs 11D courant)
         try:
             policy_sd = ckpt['policy_net_state_dict']
             # Utilise state_dim sauvegardé si disponible, sinon infère depuis les poids
@@ -654,7 +719,6 @@ class RainbowDQNAgent:
             self.target_net = C51NoisyDuelingNetwork(
                 self.state_dim, self.action_dim, self._hidden_dims,
                 self.n_atoms, self.v_min, self.v_max).to(self.device)
-            self.target_net.eval()
             self.optimizer = optim.Adam(
                 self.policy_net.parameters(), lr=lr, eps=1.5e-4, weight_decay=1e-5)
 
