@@ -134,11 +134,15 @@ public class TrainingEnvironment {
         deletionWindowLearner.startEpisode(1.0);
         this.dynamicMinPopularity = popularityLearner.getValue();
         this.dynamicTSla = contractTSla * tslaLearner.getValue();
-        // Régime de workload d'ENTRAÎNEMENT : variable/burst tiré de la seed de
-        // l'épisode (~50/50, reproductible) — décorrélé de l'alternance simple/complex
-        // pour couvrir toutes les combinaisons (type de requête × régime de popularité).
-        // TCDRM_WORKLOAD force un mode unique. Le BENCHMARK, lui, utilise steady par
-        // défaut (protocole du papier) — voir RuntimeConfig.
+        // Régime de workload d'ENTRAÎNEMENT : rotation steady/variable/burst tirée de
+        // la seed de l'épisode (~1/3 chacun, reproductible) — décorrélée de l'alternance
+        // simple/complex. Le STEADY (régime du protocole d'évaluation) fait partie de la
+        // rotation : mesuré à 300 ép., un entraînement variable/burst seul apprend une
+        // politique de COMPTE de réplicas calibrée pour les pools dynamiques (6 réplicas
+        // pour couvrir 9 fragments) qui se transfère mal à l'éval steady (2 suffisent) —
+        // Q-Learning compense par son adaptation online tabulaire rapide, pas le réseau
+        // de Rainbow. TCDRM_WORKLOAD force un mode unique. Le BENCHMARK, lui, reste
+        // steady par défaut (protocole du papier) — voir RuntimeConfig.
         if (!org.tcdrm.adaptive.core.RuntimeConfig.hasExplicitWorkloadMode()) {
             // splitmix64 : brassage fort de la seed — java.util.Random donne un premier
             // tirage corrélé pour des seeds consécutives (biais connu), pas ce mixeur.
@@ -146,8 +150,9 @@ public class TrainingEnvironment {
             z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
             z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
             z ^= (z >>> 31);
+            long m = Long.remainderUnsigned(z, 3L);
             org.tcdrm.adaptive.core.RuntimeConfig.setWorkloadMode(
-                ((z & 1L) == 0L) ? "variable" : "burst");
+                m == 0 ? "steady" : (m == 1 ? "variable" : "burst"));
         }
         // Passer l'optimiseur de placement persistant à la nouvelle simulation (Sujet 2)
         this.simulation = new TcdrmSimulation(seed, complex, placementOptimizer);
