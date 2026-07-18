@@ -4,7 +4,7 @@ from py4j.java_gateway import JavaGateway, GatewayParameters, CallbackServerPara
 from .rl_bridge import PythonRLBridge
 
 
-def connect_and_register(port: int, q_path: str, dqn_path: str, timeout_sec: int = 120):
+def connect_and_register(port: int, q_path: str, rainbow_path: str, timeout_sec: int = 120):
     print(f"📡 Connecting to Java Gateway (port {port})...")
     start = time.time()
     gw = None
@@ -28,19 +28,21 @@ def connect_and_register(port: int, q_path: str, dqn_path: str, timeout_sec: int
                 print(f"   ... waiting for Java gateway ({int(time.time()-start)}s/{timeout_sec}s)")
             time.sleep(1)
 
-    bridge = PythonRLBridge(qlearning_model_path=q_path, dqn_model_path=dqn_path)
+    bridge = PythonRLBridge(qlearning_model_path=q_path, rainbow_model_path=rainbow_path)
     gw.entry_point.registerPythonBridge(bridge)
 
     print("✅ Connected!")
     print(f"  - Q-Learning ready: {bridge.isQLearningReady()}")
-    print(f"  - DQN ready: {bridge.isDQNReady()}")
+    print(f"  - Rainbow DQN ready: {bridge.isRainbowReady()}")
     return gw
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--qlearning-model', default='models/qlearning_cloudsim.pkl')
-    parser.add_argument('--dqn-model', default='models/dqn_cloudsim.pt')
+    # --dqn-model conservé comme alias rétro-compatible du modèle Rainbow DQN
+    parser.add_argument('--dqn-model', '--rainbow-model', dest='dqn_model',
+                        default='models/rainbow_cloudsim.pt')
     parser.add_argument('--port', type=int, default=25333)
     args = parser.parse_args()
 

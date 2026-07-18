@@ -15,8 +15,9 @@ public class DNNEvaluation {
             TcdrmAdapter.initSimulation();
             // Même config que validation principale: RANDOM + 1000 requêtes
             TcdrmAdapter.setExecRegion("RANDOM");
-            TcdrmAdapter.setMaxQueries(3000);
-            TcdrmAdapter.runDqnBoth(TIMEOUT_SEC);
+            // 1000 requêtes — conforme au papier et à MAX_QUERIES (workloads + normalisation état RL calibrés pour 1000)
+            TcdrmAdapter.setMaxQueries(1000);
+            TcdrmAdapter.runRainbowBoth(TIMEOUT_SEC);
             System.out.println("\n✅ DQN simple+complex complete → images/ & metrics/\n");
         } catch (Exception e) {
             e.printStackTrace();
