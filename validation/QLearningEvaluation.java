@@ -15,7 +15,8 @@ public class QLearningEvaluation {
             TcdrmAdapter.initSimulation();
             // Aligner le benchmark sur la validation: région RANDOM par requête + 1000 requêtes
             TcdrmAdapter.setExecRegion("RANDOM");
-            TcdrmAdapter.setMaxQueries(3000);
+            // 1000 requêtes — conforme au papier et à MAX_QUERIES (workloads + normalisation état RL calibrés pour 1000)
+            TcdrmAdapter.setMaxQueries(1000);
             TcdrmAdapter.runQlearningBoth(TIMEOUT_SEC);
             System.out.println("\n✅ Q-Learning simple+complex complete → images/ & metrics/\n");
         } catch (Exception e) {
