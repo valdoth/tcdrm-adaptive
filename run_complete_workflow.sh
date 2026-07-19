@@ -221,12 +221,14 @@ if [ "$SKIP_TRAINING" = false ]; then
     echo "    Using CloudSimPlus for simulations"
     echo ""
 
+    # Reward IDENTIQUE à Q-Learning (défauts Java : rewardCostOver=15, rewardCostLinear=0).
+    # Toute comparaison d'algorithmes doit se faire à iso-récompense — les anciens
+    # overrides (--reward-cost-over 25 --reward-cost-linear 8) bridaient la réplication
+    # de Rainbow et biaisaient le benchmark (convergence lente, plus de violations SLA).
     uv run python train_cloudsim.py \
         --agent rainbow \
         --episodes $N_EPISODES \
         --port "$TRAIN_PORT" \
-        --reward-cost-over 25 \
-        --reward-cost-linear 8 \
         --output models/rainbow_cloudsim.pt
 
     DQN_MODEL="$PYTHON_DIR/models/rainbow_cloudsim.pt"

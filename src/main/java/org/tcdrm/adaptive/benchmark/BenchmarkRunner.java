@@ -52,9 +52,13 @@ public class BenchmarkRunner {
 
             double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
             data.addQueryResult(
-                q, result.queryTimeMs(), result.bwCost(), cumulCost,
+                q, result.queryTimeMs(),
+                result.bwCost() - result.replicaCreationCost(),   // BW pur (transfert), création exclue
+                cumulCost,
                 result.replicaCount(), result.bwInterProviderGb(), result.bwInterRegionGb(),
-                result.cpuCost(), 0, tSla
+                result.cpuCost(),
+                result.replicaCreationCost() + result.replicaMaintenanceCost(), // coût réplica = création + maintenance
+                tSla
             );
         }
 
@@ -199,9 +203,13 @@ public class BenchmarkRunner {
             }
 
             data.addQueryResult(
-                q, result.queryTimeMs(), result.bwCost(), cumulCost,
+                q, result.queryTimeMs(),
+                result.bwCost() - result.replicaCreationCost(),   // BW pur (transfert), création exclue
+                cumulCost,
                 result.replicaCount(), result.bwInterProviderGb(), result.bwInterRegionGb(),
-                result.cpuCost(), 0, tSla
+                result.cpuCost(),
+                result.replicaCreationCost() + result.replicaMaintenanceCost(), // coût réplica = création + maintenance
+                tSla
             );
         }
 

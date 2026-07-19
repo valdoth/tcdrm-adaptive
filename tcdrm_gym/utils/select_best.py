@@ -5,7 +5,7 @@ from glob import glob
 
 def find_best(logs_root: str) -> dict:
     candidates = []
-    for agent in ['qlearning', 'dqn']:
+    for agent in ['qlearning', 'rainbow']:
         pattern = os.path.join(logs_root, agent, '*', 'best_meta.json')
         for meta_path in glob(pattern):
             try:
