@@ -173,12 +173,24 @@ public final class TcdrmConstants {
     /** Storage cost: $/GB/month (Paper: ~0.02) */
     public static final double STORAGE_COST_PER_GB_PER_MONTH = 0.02;
     /**
-     * Coût de maintenance par réplica par requête.
-     * Paper Eq. 2 : C_Q = C_CPU + C_IO + C_bandwidth uniquement.
-     * Le stockage est implicitement capturé dans C_IO lors de la création.
-     * Valeur 0.0 pour rester fidèle au modèle économique du papier.
+     * Coût de stockage récurrent par réplica par requête (EXTENSION « adaptive » au-delà
+     * de l'Eq. 2 du papier de base, qui ne facturait que C_CPU + C_IO + C_bandwidth).
+     *
+     * Justification (pricing cloud réel 2025-26 + littérature RL de réplication) : détenir
+     * un réplica a un coût de stockage récurrent (~0.02 $/Go/mois, AWS/Azure/GCP), ~4-6× plus
+     * faible que l'egress mais CUMULATIF. Sans ce terme, conserver un réplica est gratuit :
+     * l'optimum dégénéré est de tout répliquer et ne jamais supprimer (DELETE inutile). Avec,
+     * l'agent apprend un vrai arbitrage stockage/egress/SLA et supprime les réplicas froids.
+     *
+     * Calibration : l'horizon de MAX_QUERIES (1000) requêtes modélise UN mois de facturation.
+     * Coût/réplica/requête = STORAGE_COST_PER_GB_PER_MONTH × AVG_RELATION_SIZE_GB / 1000
+     *                      = 0.02 × 0.45 / 1000 = 9e-6.
+     * → détenir un réplica sur tout l'horizon coûte 0.009 $ = son stockage mensuel réel
+     *   (= 2× son coût de création 0.0045), incitation nette à libérer les réplicas froids.
+     * (1000 littéral et non MAX_QUERIES : celui-ci est défini plus bas → forward-ref interdite.)
      */
-    public static final double REPLICA_MAINTENANCE_COST_PER_QUERY = 0.0;
+    public static final double REPLICA_MAINTENANCE_COST_PER_QUERY =
+            STORAGE_COST_PER_GB_PER_MONTH * AVG_RELATION_SIZE_GB / 1000.0;
 
     /**
      * Convexité du coût de détention des réplicas (Sujet 1) : le coût est
