@@ -173,7 +173,14 @@ public class TcdrmSimulation {
         }
     }
 
-    /** Résultat d'une requête. */
+    /** Résultat d'une requête.
+     *
+     * NB reporting : {@code bwCost} inclut le coût de création de réplica et {@code ioCost}
+     * inclut la maintenance — c'est ce que consomme la reward (ne pas modifier). Les deux
+     * champs {@code replicaCreationCost}/{@code replicaMaintenanceCost} exposent ces montants
+     * SÉPARÉMENT pour la couche reporting (CSV/graphes de coût empilé), sans toucher aux
+     * totaux vus par l'apprentissage.
+     */
     public record QueryResult(
         int queryNumber,
         double queryTimeMs,
@@ -183,7 +190,9 @@ public class TcdrmSimulation {
         double totalCost,
         double bwInterProviderGb,
         double bwInterRegionGb,
-        int replicaCount
+        int replicaCount,
+        double replicaCreationCost,
+        double replicaMaintenanceCost
     ) {}
 
     /** Exécute une requête NoRepLc (pas de réplication). */
@@ -207,7 +216,9 @@ public class TcdrmSimulation {
             query.getTotalCost() + sync[0],
             query.getBwInterProviderGb() + sync[1],
             query.getBwInterRegionGb() + sync[2],
-            0
+            0,
+            0.0,   // pas de création de réplica en NoRepLc
+            0.0    // pas de maintenance en NoRepLc
         );
         queryCount++;
         return result;
@@ -260,7 +271,9 @@ public class TcdrmSimulation {
             query.getTotalCost() + creationCost + maintenanceCost + sync[0],
             query.getBwInterProviderGb() + sync[1],
             query.getBwInterRegionGb() + sync[2],
-            currentReplicaCount
+            currentReplicaCount,
+            creationCost,
+            maintenanceCost
         );
         queryCount++;
         currentBudget -= query.getTotalCost() + maintenanceCost + sync[0];
@@ -321,7 +334,9 @@ public class TcdrmSimulation {
             query.getTotalCost() + creationCost + maintenanceCost + sync[0],
             query.getBwInterProviderGb() + sync[1],
             query.getBwInterRegionGb() + sync[2],
-            currentReplicaCount
+            currentReplicaCount,
+            creationCost,
+            maintenanceCost
         );
         queryCount++;
         currentBudget -= query.getTotalCost() + maintenanceCost + sync[0];
