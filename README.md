@@ -6,14 +6,18 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-Rainbow%20DQN-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![DOI](https://img.shields.io/badge/DOI-10.33168%2FJLISS.2025.0315-blue)](https://doi.org/10.33168/JLISS.2025.0315)
 
-**Réplication de données tenant-centrique pour le multi-cloud — extension par apprentissage par renforcement.**
+**Conception d'un mécanisme adaptatif et auto-apprenant pour la réplication de bases de
+données orientée budget en environnement multi-cloud.**
 
-Ce dépôt étend la stratégie **TCDRM** ([Bernardin et al., JLISS 2025](https://doi.org/10.33168/JLISS.2025.0315))
-en remplaçant ses seuils de réplication fixes par des agents d'apprentissage par renforcement
-entraînés sur des simulations CloudSimPlus.
+Le point de départ est la stratégie **TCDRM**
+([Bernardin et al., JLISS 2025](https://doi.org/10.33168/JLISS.2025.0315)), dont les seuils de
+réplication sont fixés *a priori* par l'administrateur. Ce dépôt lui substitue un mécanisme qui
+**apprend seul quand répliquer**, sous contrainte du budget du locataire, à partir de
+simulations CloudSimPlus — et l'évalue face à cette référence.
 
-- **Les actions sont apprises** — un agent RL décide de répliquer, maintenir ou supprimer un réplica à chaque requête, à partir du retour de la simulation.
-- **Les seuils aussi** — T_SLA, l'éligibilité popularité et la fenêtre d'observation ΔT ne sont pas codés en dur : des méta-contrôleurs Q-learning en choisissent la valeur à chaque requête ([Seuils adaptatifs](#seuils-adaptatifs)).
+- **Auto-apprenant à deux niveaux** — un agent RL décide à chaque requête de répliquer, maintenir ou supprimer un réplica ; en parallèle, des méta-contrôleurs Q-learning apprennent la **valeur des seuils** eux-mêmes (T_SLA, éligibilité popularité, fenêtre d'observation ΔT), qui ne sont donc jamais codés en dur ([Seuils adaptatifs](#seuils-adaptatifs)).
+- **Orienté budget** — le budget n'est pas une métrique observée après coup mais une contrainte interne à la décision : coût par requête plafonné par `C_SLA`, enveloppe globale `INITIAL_BUDGET`, et pénalité pondérée par l'**urgence budgétaire**, qui double à mesure que l'enveloppe s'épuise ([Fonction de récompense](#fonction-de-récompense)).
+- **Adaptatif à la charge** — la popularité des données évolue en cours d'exécution (stable, dérive Zipf, pics) ; la politique s'y ajuste sans reconfiguration ([Régimes de charge](#régimes-de-charge)).
 - **Évaluation à protocole égal** — les quatre stratégies partagent seed, requêtes et poids de récompense, pour que l'écart mesuré vienne de la politique et non du tirage ([Reproductibilité](#reproductibilité)).
 
 ---
