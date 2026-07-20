@@ -31,3 +31,7 @@ external/
 examples/
 _refs/
 
+#Model checkpoints and run logs (too large for git)
+*.pt
+*.log
+
