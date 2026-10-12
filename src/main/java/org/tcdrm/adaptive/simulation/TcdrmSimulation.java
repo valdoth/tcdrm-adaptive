@@ -123,6 +123,84 @@ public class TcdrmSimulation {
 
     private List<int[]> workloadSets;
 
+    /**
+     * Départ exploratoire (« exploring starts », Sutton &amp; Barto 2018, §5.3) — utilisé
+     * À L'ENTRAÎNEMENT UNIQUEMENT ({@link org.tcdrm.adaptive.training.TrainingEnvironment}),
+     * jamais par le benchmark : l'épisode démarre dans une situation tirée au hasard au
+     * lieu du départ habituel (budget plein, aucun réplica, popularité nulle, requête 0).
+     *
+     * Sans lui, la grille d'états du Q-Learning est en majorité inatteignable (mesuré :
+     * 8 % des 1458 états pour une politique aléatoire) : le budget ne descend jamais
+     * sous ~52 %, la popularité maximale monte en ~50 requêtes et ne redescend pas, et
+     * sans réplica la dispersion des primaires impose latence et coût élevés.
+     * Tirages STRATIFIÉS sur les niveaux de la grille Q-Learning (tcdrm_gym/envs/
+     * state_grid.py) : chaque niveau est tiré avec probabilité 1/3, puis la valeur est
+     * tirée uniformément dans ce niveau — un tirage uniforme sur les valeurs brutes
+     * sur-représente certains niveaux (ex. 0 réplica n'est tiré qu'une fois sur 7).
+     *   1. progression de départ : [0, 0.33) | [0.33, 0.67) | [0.67, 0.9] ;
+     *   2. budget restant        : [2 %, 30 %) | [30 %, 60 %) | [60 %, 100 %] ;
+     *   3. réplicas en place (chauffés, sans coût) : 0 | moins de la moitié | au moins la moitié ;
+     *   4. popularité maximale   : [0, 0.2) | [0.2, 0.6) | [0.6, 1], les autres fragments
+     *      étant tirés sous ce maximum ;
+     *   5. avec probabilité {@code EXPLORING_COLOCATE_PROB}, une fraction tirée au hasard des
+     *      primaires est regroupée sur un même site : sans réplica, latence et coût dépendent
+     *      tous deux de la dispersion des données, et un regroupement partiel produit les
+     *      situations intermédiaires entre « tout local » et « tout distant ».
+     */
+    public void applyExploringStart(Random r) {
+        int n = effectiveMaxQueries();
+        this.queryCount = (int) Math.round(n * stratified(r, 0.0, 0.33, 0.67, EXPLORING_MAX_START_FRACTION));
+        this.currentBudget = TcdrmConstants.INITIAL_BUDGET
+            * stratified(r, EXPLORING_MIN_BUDGET_FRACTION, 0.3, 0.6, 1.0);
+
+        if (r.nextDouble() < EXPLORING_COLOCATE_PROB) {
+            String p = MultiCloudInfrastructure.PROVIDERS[r.nextInt(MultiCloudInfrastructure.PROVIDERS.length)];
+            String g = MultiCloudInfrastructure.REGIONS[r.nextInt(MultiCloudInfrastructure.REGIONS.length)];
+            double share = r.nextDouble();
+            for (int i = 0; i < fragments.size(); i++) {
+                if (r.nextDouble() >= share) continue;
+                DataFragment f = fragments.get(i);
+                fragments.set(i, new DataFragment(f.getId(), f.getName(), f.getSizeGb(), p, g));
+            }
+        }
+
+        // EMA saturée après P_SLA accès consécutifs : popularité normalisée = ema / saturation.
+        double saturation = 1.0 - Math.pow(1.0 - TcdrmConstants.POPULARITY_EMA_LAMBDA, TcdrmConstants.P_SLA);
+        double maxPop = stratified(r, 0.0, 0.2, 0.6, 1.0);
+        int hottest = r.nextInt(fragments.size());
+        for (int i = 0; i < fragments.size(); i++) {
+            double pop = (i == hottest) ? maxPop : maxPop * r.nextDouble();
+            fragments.get(i).setPopularityEma(saturation * pop);
+        }
+
+        int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
+        int half = (maxReplicas + 1) / 2;   // premier nombre de réplicas ≥ la moitié du maximum
+        int level = r.nextInt(3);
+        int k = level == 0 ? 0
+              : level == 1 ? 1 + r.nextInt(Math.max(1, half - 1))
+              : half + r.nextInt(maxReplicas - half + 1);
+        for (int i = 0; i < k; i++) {
+            ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
+                fragments, execProvider, execRegion, infrastructure, replicasPerProvider, 0.0);
+            if (c == null || c.fragment().createReplica(c.provider(), c.region()) <= 0.0) break;
+            currentReplicaCount++;
+            replicasPerProvider[providerIndex(c.provider())]++;
+        }
+        fragments.forEach(DataFragment::markReplicasWarm);
+    }
+
+    /** Valeur uniforme dans l'un des trois intervalles [a,b), [b,c), [c,d], choisi avec probabilité 1/3. */
+    private static double stratified(Random r, double a, double b, double c, double d) {
+        int level = r.nextInt(3);
+        double lo = level == 0 ? a : (level == 1 ? b : c);
+        double hi = level == 0 ? b : (level == 1 ? c : d);
+        return lo + (hi - lo) * r.nextDouble();
+    }
+
+    private static final double EXPLORING_MAX_START_FRACTION = 0.9;
+    private static final double EXPLORING_MIN_BUDGET_FRACTION = 0.02;
+    private static final double EXPLORING_COLOCATE_PROB = 0.5;
+
     /** Nombre effectif de requêtes du run : override runtime sinon MAX_QUERIES (papier: 1000). */
     private static int effectiveMaxQueries() {
         Integer override = org.tcdrm.adaptive.core.RuntimeConfig.getMaxQueries();

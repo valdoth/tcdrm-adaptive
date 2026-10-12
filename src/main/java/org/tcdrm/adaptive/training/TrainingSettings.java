@@ -78,6 +78,11 @@ public class TrainingSettings {
     // Défaut 1 ms (aligné sur l'infrastructure) : départage des égalités analytiques
     // exactes par le coût — BW −42 % mesuré en variable, neutre en steady.
     private double costRoutingToleranceMs = 1.0;
+    // Probabilité qu'un épisode d'ENTRAÎNEMENT démarre par un départ exploratoire
+    // (TcdrmSimulation.applyExploringStart). 0 = départ habituel (défaut, historique).
+    // Réglage d'entraînement uniquement : non persisté dans la config de récompense,
+    // donc jamais appliqué par le benchmark.
+    private double exploringStartProb = 0.0;
 
     public int getMaxEpisodeLength() { return maxEpisodeLength; }
     public void setMaxEpisodeLength(int v) { this.maxEpisodeLength = v; }
@@ -107,6 +112,7 @@ public class TrainingSettings {
     public double getRewardCorrectTrigger()    { return rewardCorrectTrigger; }
     public double getRewardUnpopularHolding()  { return rewardUnpopularHolding; }
     public double getCostRoutingToleranceMs()  { return costRoutingToleranceMs; }
+    public double getExploringStartProb()      { return exploringStartProb; }
 
     public void setRewardSlaOk(double v)             { rewardSlaOk           = Math.max(0, v); }
     public void setSlaSatisfyMargin(double v)        { slaSatisfyMargin      = Math.max(0.01, Math.min(1.0, v)); }
@@ -123,6 +129,7 @@ public class TrainingSettings {
     public void setRewardCorrectTrigger(double v)     { rewardCorrectTrigger  = Math.max(0, v); }
     public void setRewardUnpopularHolding(double v)   { rewardUnpopularHolding = Math.max(0, v); }
     public void setCostRoutingToleranceMs(double v)   { costRoutingToleranceMs = Math.max(0, v); }
+    public void setExploringStartProb(double v)       { exploringStartProb = Math.max(0.0, Math.min(1.0, v)); }
 
     // === Persistance des poids de récompense (alignement train/eval par agent) ===
 

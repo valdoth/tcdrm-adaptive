@@ -15,6 +15,8 @@ import numpy as np
 from gymnasium import spaces
 from py4j.java_gateway import JavaGateway, GatewayParameters
 
+from envs.state_grid import N_STATES, discretize
+
 
 class CloudSimEnv(gym.Env):
 	"""
@@ -313,83 +315,12 @@ class CloudSimQLearningEnv(CloudSimEnv):
 		super().__init__(port=port, complex=complex, seed=seed, config=config)
 
 		# Espace d'observation discret pour Q-Learning : 3^6 × 2 = 1458 états
-		self.observation_space = spaces.Discrete(1458)
+		self.observation_space = spaces.Discrete(N_STATES)
 
 	def _discretize_state(self, state: np.ndarray) -> int:
-		"""
-		Discrétise l'état continu en index (0-1457). L'état a 11 dims mais Q-Learning
-		(tabulaire) n'en discrétise qu'un sous-ensemble : les dims 9-10 (structure de
-		popularité par élément) sont réservées à Rainbow DQN, qui peut les exploiter
-		sans exploser un espace d'états — le tabulaire, lui, exploserait.
-
-		- RT       : latence normalisée          [0]
-		- COST     : coût normalisé              [3]
-		- PROGRESS : avancement épisode          [6]
-		- BUD      : budget restant              [1]
-		- NET      : taux réplicas actifs        [2]
-		- GAIN     : popularityScore normalisé   [7]  — 0.0 query 0, 1.0 à P_SLA (query 200+)
-		- COMPLEX  : type de requête             [8]  — 0=simple, 1=complex
-		"""
-		latency  = float(state[0])
-		budget   = float(state[1])
-		replicas = float(state[2])
-		cost     = float(state[3])
-		progress = float(state[6]) if len(state) > 6 else 0.0
-		gain     = float(state[7]) if len(state) > 7 else 0.0
-		complex_bit = 1 if len(state) > 8 and float(state[8]) >= 0.5 else 0
-
-		# RT
-		if latency < 0.4:
-			rt = 0
-		elif latency < 0.7:
-			rt = 1
-		else:
-			rt = 2
-
-		# COST
-		if cost < 0.4:
-			cost_bin = 0
-		elif cost < 0.7:
-			cost_bin = 1
-		else:
-			cost_bin = 2
-
-		# PROGRESS : tiers de l'épisode (début / milieu / fin)
-		if progress < 0.33:
-			prog_bin = 0
-		elif progress < 0.67:
-			prog_bin = 1
-		else:
-			prog_bin = 2
-
-		# BUD
-		if budget >= 0.6:
-			bud = 0
-		elif budget >= 0.3:
-			bud = 1
-		else:
-			bud = 2
-
-		# NET
-		if replicas >= 0.5:
-			net = 0
-		elif replicas > 0:
-			net = 1
-		else:
-			net = 2
-
-		# GAIN — popularityScore [0,1] : 0 si données inconnues (query 0), 1 si P_SLA atteint
-		# 0 = données peu connues (< 0.2), l'agent apprend à ne pas répliquer
-		# 1 = popularité modérée (0.2-0.6)
-		# 2 = données bien connues (> 0.6, P_SLA proche ou atteint)
-		if gain < 0.2:
-			gain_bin = 0
-		elif gain < 0.6:
-			gain_bin = 1
-		else:
-			gain_bin = 2
-
-		return (rt * 243 + cost_bin * 81 + prog_bin * 27 + bud * 9 + net * 3 + gain_bin) + complex_bit * 729
+		"""Index (0-1457) de l'état continu — voir envs/state_grid.py (source unique,
+		partagée avec l'évaluation et le diagnostic de couverture)."""
+		return discretize(state)
     
 	def reset(self, seed=None, options=None):
 		"""Reset et retourne l'état discret."""

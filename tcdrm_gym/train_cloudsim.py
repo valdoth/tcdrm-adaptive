@@ -13,6 +13,7 @@ import torch
 import yaml
 
 from envs.cloudsim_env import CloudSimEnv, CloudSimQLearningEnv
+from envs.state_grid import N_STATES, CoverageTracker
 from agents.simple_qlearning_agent import SimpleQLearningAgent
 from agents.rainbow_dqn_agent import RainbowDQNAgent
 
@@ -109,7 +110,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	print("=" * 70)
 
 	agent = SimpleQLearningAgent(
-		n_states=1458,
+		n_states=N_STATES,
 		n_actions=3,
 		learning_rate=float(os.environ.get('TCDRM_Q_LR', 0.08)),
 		discount_factor=float(os.environ.get('TCDRM_Q_GAMMA', 0.99)),
@@ -119,7 +120,9 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 		use_double_q=bool(int(os.environ.get('TCDRM_Q_DOUBLE', '1'))),
 		adaptive_lr=bool(int(os.environ.get('TCDRM_Q_ADAPTIVE_LR', '1'))),
 		epsilon_schedule=os.environ.get('TCDRM_Q_EPS_SCHED', 'linear'),
-		epsilon_linear_steps=int(os.environ.get('TCDRM_Q_EPS_STEPS', '5000')),
+		# Décroissance de ε sur 80 % des épisodes RÉELLEMENT entraînés (l'ancien défaut
+		# fixe de 5000 laissait ε ≈ 0.72 en fin d'un entraînement de 1500 épisodes).
+		epsilon_linear_steps=int(os.environ.get('TCDRM_Q_EPS_STEPS', max(1, int(0.8 * episodes)))),
 		lambda_trace=float(os.environ.get('TCDRM_Q_LAMBDA', '0.6')),
 		optimistic_init=float(os.environ.get('TCDRM_Q_OPT_INIT', '1.0'))
 	)
@@ -130,7 +133,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	csv_logger = CSVLogger(
 		os.path.join(log_dir, 'progress.csv'),
 		[
-			'episode','reward','avg10','epsilon','states_explored',
+			'episode','reward','avg10','epsilon','states_explored','grid_coverage_pct',
 			'sla_violations','cumulative_cost','replica_count','budget_remaining',
 			'reward_wait_time','reward_unutilization','reward_queue_penalty','reward_invalid_action',
 			'dynamic_tsla','dynamic_min_popularity'
@@ -144,11 +147,13 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	except Exception:
 		tb_writer = None
     
+	coverage = CoverageTracker()
 	for episode in range(episodes):
 		use_complex = (env_complex is not None) and (episode % 2 == 1)
 		active_env = env_complex if use_complex else env
 		state, info = active_env.reset(seed=seed_base + episode)
 		agent.start_episode()
+		coverage.add(state)
 		episode_reward = 0
 		done = False
 		last_info = info
@@ -163,6 +168,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 			action = agent.select_action(state, valid_actions=valid_actions, training=True)
 			next_state, reward, done, truncated, info = active_env.step(action)
 			agent.update(state, action, reward, next_state, done)
+			coverage.add(next_state)
 			state = next_state
 			episode_reward += reward
 			last_info = info
@@ -179,7 +185,8 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 			'reward': episode_reward,
 			'avg10': avg_reward,
 			'epsilon': stats['epsilon'],
-			'states_explored': stats['states_explored']
+			'states_explored': stats['states_explored'],
+			'grid_coverage_pct': coverage.coverage_pct()
 		}
 		if isinstance(last_info, dict):
 			for k in ['sla_violations','cumulative_cost','replica_count','budget_remaining',
@@ -214,10 +221,9 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 					f"Budget: {last_info.get('budget_remaining','?')}"
 				)
 			# Ajouter pourcentage d'exploration
-			exploration_pct = stats['states_explored'] / agent.n_states * 100
 			print(
 				f"Episode {episode:4d}/{episodes} | Reward: {episode_reward:8.2f} | Avg(10): {avg_reward:8.2f} | "
-				f"ε: {stats['epsilon']:.3f} | States: {stats['states_explored']} ({exploration_pct:.1f}%){metrics_tail}"
+				f"ε: {stats['epsilon']:.3f} | Couverture: {coverage.coverage_pct():.1f}%{metrics_tail}"
 			)
         
 		if avg_reward > best_reward and episode >= 10:
@@ -237,6 +243,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
     
 	final_path = save_path.replace('.pkl', '_final.pkl')
 	agent.save(final_path)
+	coverage.save(save_path.replace('.pkl', '_coverage.npy'))
 	# Le chemin canonique (chargé par le benchmark) garde le MEILLEUR checkpoint
 	# (avg10) sauvé en cours d'entraînement — le final ne l'écrase plus : évaluer la
 	# photo de fin de run (souvent en plein creux d'exploration) rendait les runs
@@ -256,7 +263,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	print("TRAINING COMPLETE")
 	print(f"  Best avg reward: {best_reward:.2f}")
 	print(f"  Final epsilon: {agent.epsilon:.4f}")
-	print(f"  States explored: {stats['states_explored']}/{agent.n_states}")
+	print(f"  Couverture de la grille: {coverage.summary()}")
 	print(f"  Model saved to: {save_path}")
 	print("=" * 70)
     
@@ -410,7 +417,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 	csv_logger = CSVLogger(
 		os.path.join(log_dir, 'progress.csv'),
 		[
-			'episode', 'reward', 'avg10', 'buffer', 'avg_noisy_sigma',
+			'episode', 'reward', 'avg10', 'buffer', 'avg_noisy_sigma', 'grid_coverage_pct',
 			'sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
 			'reward_wait_time', 'reward_unutilization', 'reward_queue_penalty',
 			'reward_invalid_action', 'avg_loss',
@@ -427,10 +434,12 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 	# Warm-start par démonstrations TCDRM (DQfD-lite) — AVANT l'entraînement RL.
 	_run_demonstrations(agent, env, env_complex, demo_episodes, seed_base, max_episode_length)
 
+	coverage = CoverageTracker()
 	for episode in range(episodes):
 		use_complex = (env_complex is not None) and (episode % 2 == 1)
 		active_env = env_complex if use_complex else env
 		state, info = active_env.reset(seed=seed_base + episode)
+		coverage.add(state)
 		episode_reward = 0
 		done = False
 		last_info = info
@@ -445,6 +454,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			action = agent.select_action(state, training=True, action_mask=action_mask)
 			next_state, reward, done, truncated, info = active_env.step(action)
 			agent.update(state, action, reward, next_state, done)
+			coverage.add(next_state)
 			state = next_state
 			episode_reward += reward
 			last_info = info
@@ -461,7 +471,8 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			'avg10': avg_reward,
 			'buffer': (len(agent.replay_buffers[0]) + len(agent.replay_buffers[1])),
 			'avg_noisy_sigma': net_stats.get('avg_noisy_sigma', 0),
-			'avg_loss': net_stats.get('avg_loss', 0)
+			'avg_loss': net_stats.get('avg_loss', 0),
+			'grid_coverage_pct': coverage.coverage_pct()
 		}
 		if isinstance(last_info, dict):
 			for k in ['sla_violations', 'cumulative_cost', 'replica_count', 'budget_remaining',
@@ -500,7 +511,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 			print(
 				f"Episode {episode:4d}/{episodes} | Reward: {episode_reward:8.2f} | "
 				f"Avg(10): {avg_reward:8.2f} | Buffer: {(len(agent.replay_buffers[0]) + len(agent.replay_buffers[1]))}"
-				f"{sigma_str}{metrics_tail}"
+				f" | Couverture: {coverage.coverage_pct():.1f}%{sigma_str}{metrics_tail}"
 			)
 
 		if avg_reward > best_reward and episode >= 10:
@@ -519,6 +530,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 
 	final_path = save_path.replace('.pt', '_final.pt')
 	agent.save(final_path)
+	coverage.save(save_path.replace('.pt', '_coverage.npy'))
 	# Le canonique = MEILLEUR checkpoint (voir train_qlearning) ; final -> _final only.
 	if best_reward == float('-inf'):
 		agent.save(save_path)
@@ -534,6 +546,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 	print("RAINBOW TRAINING COMPLETE")
 	print(f"  Best avg reward: {best_reward:.2f}")
 	print(f"  Mode: {net_stats.get('mode', 'rainbow')}")
+	print(f"  Couverture de la grille (référence Q-Learning): {coverage.summary()}")
 	print(f"  Model saved to: {save_path}")
 	print("=" * 70)
 
@@ -563,6 +576,9 @@ def main():
 					   help='Random warmup probability for replicate/delete actions (0..1)')
 	parser.add_argument('--seed-base', type=int, default=42,
 					   help='Base seed; episode seed = seed_base + episode (decorrelate agents)')
+	parser.add_argument('--exploring-start-prob', type=float, default=0.5,
+	                    help="Probabilité qu'un épisode d'entraînement démarre par un départ exploratoire "
+	                         "(budget, réplicas, popularité et instant tirés au hasard) — 0 = départ habituel")
 	parser.add_argument('--cost-routing-tolerance', type=float, default=None,
 	                    help='Tolerance (ms) du routage sensible au cout : a temps quasi egal, prefere le site le moins cher — 0 = temps seul')
 	parser.add_argument('--reward-correct-trigger', type=float, default=None,
@@ -601,6 +617,7 @@ def main():
 		cfg['warmupQueries'] = int(max(0, args.warmup_queries))
 		cfg['warmupStrategy'] = str(args.warmup_strategy)
 		cfg['warmupRandomProb'] = float(max(0.0, min(1.0, args.warmup_random_prob)))
+		cfg['exploringStartProb'] = float(max(0.0, min(1.0, args.exploring_start_prob)))
 		if args.reward_cost_over is not None:
 			cfg['rewardCostOver'] = float(args.reward_cost_over)
 		if args.reward_cost_linear is not None:

@@ -163,15 +163,28 @@ public class TrainingEnvironment {
         // en mode démonstration, gate forcé ouvert (minPop=0) dès le 1er pas.
         this.simulation.setDynamicThresholds(dynamicTSla, demoMode ? 0.0 : dynamicMinPopularity);
         this.simulation.setDynamicDeletionWindow(deletionWindowLearner.getValue());
+        // Départ exploratoire (entraînement seulement, désactivé par défaut) : rend
+        // atteignables les états que le départ habituel n'atteint jamais (budget bas,
+        // popularité faible en cours d'épisode, réplicas déjà en place, données groupées).
+        // splitmix64 : java.util.Random donne un premier tirage corrélé pour des seeds
+        // consécutives (même raison que pour le régime de workload ci-dessus).
+        long es = seed + 0x6A09E667F3BCC909L;
+        es = (es ^ (es >>> 30)) * 0xBF58476D1CE4E5B9L;
+        es = (es ^ (es >>> 27)) * 0x94D049BB133111EBL;
+        es ^= (es >>> 31);
+        java.util.Random esRnd = new java.util.Random(es);
+        boolean exploringStart = settings.getExploringStartProb() > 0.0
+            && esRnd.nextDouble() < settings.getExploringStartProb();
+        if (exploringStart) simulation.applyExploringStart(esRnd);
         this.tSla = this.dynamicTSla;
-        this.currentQuery = 0;
+        this.currentQuery = simulation.getQueryCount();
         this.lastLatency = 0.0;
         this.lastCost = 0.0;
         this.cumulativeReward = 0.0;
         this.slaViolations = 0;
         this.cumulativeCost = 0.0;
         this.replicaChanges = 0;
-        this.lastReplicaCount = 0;
+        this.lastReplicaCount = simulation.getCurrentReplicaCount();
         this.lastInvalidAction = false;
         this.lastAssignmentSuccess = false;
         this.rewardWaitTime = 0.0;

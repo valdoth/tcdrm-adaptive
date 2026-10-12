@@ -244,6 +244,14 @@ public class DataFragment {
     /** Popularité = taux d'accès récent (EMA) ∈ [0,1]. Définition littérature. */
     public double getPopularityEma() { return popularityEma; }
 
+    /** Fixe la popularité initiale (départ exploratoire d'entraînement uniquement). */
+    public void setPopularityEma(double ema) { this.popularityEma = Math.max(0.0, Math.min(1.0, ema)); }
+
+    /** Marque tous les réplicas actifs comme déjà chauffés (départ exploratoire). */
+    public void markReplicasWarm() {
+        for (int i = 0; i < replicaCount; i++) queriesSinceRep[i] = TcdrmConstants.WARMUP_QUERIES;
+    }
+
     /** Nombre total d'accès depuis la création de cet épisode. */
     public int getAccessCount() { return accessCount; }
 

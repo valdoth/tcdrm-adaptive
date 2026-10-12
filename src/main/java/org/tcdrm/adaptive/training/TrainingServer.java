@@ -268,6 +268,7 @@ public class TrainingServer {
         Object rCorr = p.get("rewardCorrectTrigger"); if (rCorr instanceof Number n) settings.setRewardCorrectTrigger(n.doubleValue());
         Object rHold = p.get("rewardUnpopularHolding"); if (rHold instanceof Number n) settings.setRewardUnpopularHolding(n.doubleValue());
         Object cRout = p.get("costRoutingToleranceMs"); if (cRout instanceof Number n) settings.setCostRoutingToleranceMs(n.doubleValue());
+        Object eStart = p.get("exploringStartProb"); if (eStart instanceof Number n) settings.setExploringStartProb(n.doubleValue());
         // Persiste la configuration de récompense de CET agent après application des
         // overrides Python (ex: --reward-cost-over) — rechargée par le benchmark.
         saveRewardConfig();

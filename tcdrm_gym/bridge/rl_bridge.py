@@ -9,6 +9,7 @@ import numpy as np
 
 from agents.simple_qlearning_agent import SimpleQLearningAgent
 from agents.rainbow_dqn_agent import RainbowDQNAgent
+from envs.state_grid import N_STATES, discretize
 
 
 class PythonRLBridge:
@@ -20,7 +21,7 @@ class PythonRLBridge:
         # pure + apprentissage online continu. Toute exploration résiduelle en éval
         # injecterait des actions aléatoires dans les courbes du benchmark.
         self.qlearning_agent = SimpleQLearningAgent(
-            n_states=1458,
+            n_states=N_STATES,
             n_actions=3,
             learning_rate=0.15,
             discount_factor=0.95,
@@ -160,36 +161,10 @@ class PythonRLBridge:
             print(f"Rainbow DQN saved to {self._rainbow_model_path}")
 
     def _discretize_state_for_qlearning(self, state: dict) -> int:
-        """Miroir exact de CloudSimQLearningEnv._discretize_state (cloudsim_env.py) : mêmes
-        dimensions, mêmes seuils, même encodage — sans cela, le Q-table appris à l'entraînement
-        (via TrainingServer/py4j) ne correspondrait à rien de cohérent une fois réutilisé ici
-        pour l'évaluation (BenchmarkRunner.runRL)."""
-        latency = state['latency']
-        if latency < 0.4:   rt = 0
-        elif latency < 0.7: rt = 1
-        else:                rt = 2
-        cost = state['total_cost']
-        if cost < 0.4:   cost_bin = 0
-        elif cost < 0.7: cost_bin = 1
-        else:             cost_bin = 2
-        progress = state['query_progress']
-        if progress < 0.33:   prog_bin = 0
-        elif progress < 0.67: prog_bin = 1
-        else:                  prog_bin = 2
-        budget = state['budget']
-        if budget >= 0.6:  bud = 0
-        elif budget >= 0.3: bud = 1
-        else:               bud = 2
-        replicas = state['replicas_normalized']
-        if replicas >= 0.5: net = 0
-        elif replicas > 0:  net = 1
-        else:               net = 2
-        gain = state['normalized_popularity']
-        if gain < 0.2:   gain_bin = 0
-        elif gain < 0.6: gain_bin = 1
-        else:             gain_bin = 2
-        complex_bit = 1 if state.get('is_complex', 0.0) >= 0.5 else 0
-        return (rt * 243 + cost_bin * 81 + prog_bin * 27 + bud * 9 + net * 3 + gain_bin) + complex_bit * 729
+        """Même encodage qu'à l'entraînement (envs/state_grid.py, source unique) : sans
+        cela, la Q-table apprise via TrainingServer/py4j ne correspondrait à rien de
+        cohérent une fois réutilisée ici pour l'évaluation (BenchmarkRunner.runRL)."""
+        return discretize(self._build_rainbow_state(state))
 
     def _build_rainbow_state(self, state: dict) -> np.ndarray:
         """Construit le vecteur d'état 9D pour Rainbow DQN (aligné buildRLState Java)."""
