@@ -164,13 +164,25 @@ public class TcdrmSimulation {
             }
         }
 
-        // EMA saturée après P_SLA accès consécutifs : popularité normalisée = ema / saturation.
-        double saturation = 1.0 - Math.pow(1.0 - TcdrmConstants.POPULARITY_EMA_LAMBDA, TcdrmConstants.P_SLA);
+        // Popularité : chaque fragment reçoit un HISTORIQUE d'accès (n requêtes consécutives
+        // terminées g requêtes avant le départ) qui produit la popularité tirée — EMA,
+        // compteur, dernier accès et tendance restent cohérents. Une fois sur deux, la
+        // donnée est en train de refroidir (g > 0) : cas où des réplicas existent sur des
+        // données qui ne sont plus lues (apprentissage de la suppression, Algorithm 3).
+        double lambda = TcdrmConstants.POPULARITY_EMA_LAMBDA;
+        double saturation = TcdrmConstants.POPULARITY_EMA_FULL;
         double maxPop = stratified(r, 0.0, 0.2, 0.6, 1.0);
         int hottest = r.nextInt(fragments.size());
         for (int i = 0; i < fragments.size(); i++) {
-            double pop = (i == hottest) ? maxPop : maxPop * r.nextDouble();
-            fragments.get(i).setPopularityEma(saturation * pop);
+            double target = saturation * ((i == hottest) ? maxPop : maxPop * r.nextDouble());
+            int gap = (r.nextDouble() < 0.5 || queryCount < 2) ? 0 : 1 + r.nextInt(queryCount / 2);
+            // n tel que (1 − (1−λ)^n)·(1−λ)^g = target ; si la cible est inatteignable avec
+            // cet écart, la donnée n'a pas refroidi (g = 0).
+            double x = target / Math.pow(1.0 - lambda, gap);
+            if (x >= 1.0) { gap = 0; x = target; }
+            int accesses = x <= 0.0 ? 0
+                : (int) Math.round(Math.log(1.0 - Math.min(x, 1.0 - 1e-9)) / Math.log(1.0 - lambda));
+            fragments.get(i).seedAccessHistory(queryCount, accesses, gap, lambda);
         }
 
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
@@ -305,8 +317,9 @@ public class TcdrmSimulation {
     /**
      * Exécute une requête TCDRM v1 — stratégie réactive fidèle au papier.
      *
-     * Réplique si : SLA violé ET queryCount >= P_SLA (200 requêtes).
-     * Aucun EMA ni TinyLFU — cohérent avec la suppression de ces mécanismes.
+     * Réplique si : SLA violé ET la donnée a reçu au moins P_SLA (200) requêtes.
+     * La popularité est le compteur d'accès du papier : l'EMA des agents RL est tenue
+     * à jour (état RL, warm-up) mais n'intervient dans aucune décision TCDRM.
      */
     public QueryResult executeTcdrmQuery() {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
@@ -336,7 +349,7 @@ public class TcdrmSimulation {
 
         double creationCost = 0.0;
         if (slaViolated && currentReplicaCount < maxReplicas && popularEnough) {
-            creationCost = createReplica();
+            creationCost = createReplicaTcdrm();
             currentBudget -= creationCost;
         }
 
@@ -567,6 +580,25 @@ public class TcdrmSimulation {
         ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
             fragments, execProvider, execRegion, infrastructure, replicasPerProvider,
             dynamicMinPopularity);
+        if (c == null) return 0.0;
+        double cost = c.fragment().createReplica(c.provider(), c.region());
+        if (cost > 0.0) {
+            currentReplicaCount++;
+            replicasPerProvider[providerIndex(c.provider())]++;
+        }
+        return cost;
+    }
+
+    /**
+     * Création de réplica de la référence TCDRM (Paper Algorithm 1) : seules les données
+     * dont le nombre de requêtes atteint P_SLA sont éligibles, sans EMA. Le placement
+     * parmi elles suit le même optimiseur que les agents RL, pondéré par ce compteur.
+     */
+    private double createReplicaTcdrm() {
+        ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
+            fragments, execProvider, execRegion, infrastructure, replicasPerProvider,
+            f -> f.getAccessCount() >= TcdrmConstants.P_SLA,
+            DataFragment::getAccessCount);
         if (c == null) return 0.0;
         double cost = c.fragment().createReplica(c.provider(), c.region());
         if (cost > 0.0) {

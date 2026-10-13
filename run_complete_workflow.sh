@@ -50,6 +50,7 @@ cleanup_initial() {
     fi
     
     rm -f /tmp/java_benchmark.log /tmp/python_client.log /tmp/training_server.log 2>/dev/null || true
+    rm -f "$PYTHON_DIR/models/"*_benchmark_coverage.npy 2>/dev/null || true
     echo -e "${GREEN}✅ Initial cleanup done${NC}"
     echo ""
 }
@@ -362,12 +363,12 @@ if [ "$SKIP_SIMULATION" = false ]; then
     cd "$PYTHON_DIR"
     
         if [ -f "$DQN_MODEL" ]; then
-        uv run python connect_to_java.py \
+        uv run python -u connect_to_java.py \
             --qlearning-model "$QLEARNING_MODEL" \
             --rainbow-model "$DQN_MODEL" \
             --port "$GATEWAY_PORT" > /tmp/python_client.log 2>&1 &
     else
-        uv run python connect_to_java.py \
+        uv run python -u connect_to_java.py \
             --qlearning-model "$QLEARNING_MODEL" \
             --port "$GATEWAY_PORT" > /tmp/python_client.log 2>&1 &
     fi
@@ -402,6 +403,10 @@ if [ "$SKIP_SIMULATION" = false ]; then
     echo ""
     if [ $JAVA_EXIT -eq 0 ]; then
         echo -e "${GREEN}✅ Benchmark completed successfully${NC}"
+        # Cohérence entraînement / benchmark : états du benchmark déjà vus à l'entraînement
+        echo ""
+        echo ">>> États du benchmark vus à l'entraînement :"
+        (cd "$PYTHON_DIR" && uv run python -m utils.state_coverage --benchmark-overlap models) || true
     else
         echo -e "${RED}❌ Benchmark error (exit code: $JAVA_EXIT)${NC}"
         echo ""

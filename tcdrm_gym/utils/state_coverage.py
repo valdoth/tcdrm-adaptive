@@ -7,7 +7,9 @@ mesure :
     via CloudSimQLearningEnv._discretize_state) ;
   - la distribution de chaque dimension de l'état continu (11 dims) ;
   - pour un modèle Q-Learning, la couverture issue de ses compteurs de visites
-    d'entraînement (sans simulateur, option --from-visits).
+    d'entraînement (sans simulateur, option --from-visits) ;
+  - la cohérence entraînement / benchmark : part des états rencontrés au benchmark
+    qui ont été vus à l'entraînement (option --benchmark-overlap, sans simulateur).
 
 Le serveur Java réécrit les Q-tables des méta-contrôleurs à chaque fin d'épisode : lancer
 le TrainingServer depuis une COPIE du répertoire des modèles pour ne pas les modifier.
@@ -29,7 +31,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from envs.cloudsim_env import CloudSimEnv  # noqa: E402
-from envs.state_grid import GRID_DIMS, N_STATES, discretize  # noqa: E402
+from envs.state_grid import GRID_DIMS, N_STATES, decode, discretize  # noqa: E402
 
 DIM_NAMES = ["latence", "budget", "réplicas", "coût", "viol_T", "viol_C",
              "progression", "popularité", "complexe", "frac_éligible", "pop_moyenne"]
@@ -67,6 +69,30 @@ def continuous_report(states: np.ndarray, bins: int = 10) -> dict:
 	return out
 
 
+def benchmark_overlap(models_dir: str) -> dict:
+	"""États du benchmark (models/<agent>_benchmark_coverage.npy, écrit par le pont
+	d'évaluation) comparés aux états vus à l'entraînement (<agent>_cloudsim_coverage.npy)."""
+	out = {}
+	for agent in ("qlearning", "rainbow"):
+		bench_f = os.path.join(models_dir, f"{agent}_benchmark_coverage.npy")
+		train_f = os.path.join(models_dir, f"{agent}_cloudsim_coverage.npy")
+		if not (os.path.exists(bench_f) and os.path.exists(train_f)):
+			continue
+		bench, train = np.load(bench_f), np.load(train_f)
+		seen = bench > 0
+		known = seen & (train > 0)
+		unseen = np.flatnonzero(seen & (train == 0))
+		unseen = unseen[np.argsort(-bench[unseen])][:5]
+		out[agent] = {
+			"etats_benchmark": int(seen.sum()),
+			"etats_connus_entrainement_pct": round(100.0 * known.sum() / max(1, seen.sum()), 1),
+			"pas_benchmark_en_etat_connu_pct": round(100.0 * bench[known].sum() / max(1, bench.sum()), 1),
+			"etats_inconnus_les_plus_joues": [
+				{"etat": int(i), "pas": int(bench[i]), **decode(int(i))} for i in unseen],
+		}
+	return out
+
+
 def load_policy(agent: str, model: str | None, training: bool):
 	if agent == "random":
 		rng = np.random.default_rng(0)
@@ -77,8 +103,8 @@ def load_policy(agent: str, model: str | None, training: bool):
 		q.load(model)
 		return lambda obs, valid: q.select_action(discretize(obs), valid_actions=valid, training=training)
 	if agent == "rainbow":
-		from agents.rainbow_dqn_agent import RainbowDQNAgent
-		r = RainbowDQNAgent(state_dim=11, action_dim=3)
+		from agents.rainbow_dqn_agent import make_rainbow_agent
+		r = make_rainbow_agent()
 		r.load(model)
 		def act(obs, valid):
 			mask = np.zeros(3, dtype=np.float32)
@@ -120,6 +146,8 @@ def rollout(agent: str, model: str | None, episodes: int, port: int, seed_base: 
 def main():
 	p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	p.add_argument("--from-visits", help="modèle Q-Learning (.pkl) : couverture d'entraînement")
+	p.add_argument("--benchmark-overlap", metavar="MODELS_DIR",
+	               help="dossier des modèles : états du benchmark vus ou non à l'entraînement")
 	p.add_argument("--agent", choices=["random", "qlearning", "rainbow"])
 	p.add_argument("--model")
 	p.add_argument("--episodes", type=int, default=20)
@@ -132,7 +160,9 @@ def main():
 	               help="probabilité de départ exploratoire par épisode (entraînement)")
 	a = p.parse_args()
 
-	if a.from_visits:
+	if a.benchmark_overlap:
+		report = benchmark_overlap(a.benchmark_overlap)
+	elif a.from_visits:
 		with open(a.from_visits, "rb") as f:
 			d = pickle.load(f)
 		v = d["visit_counts"]
@@ -144,7 +174,7 @@ def main():
 		report = rollout(a.agent, a.model, a.episodes, a.port, a.seed_base, training=not a.greedy,
 		                 save_states=a.save_states, exploring_start_prob=a.exploring_start_prob)
 	else:
-		p.error("--from-visits ou --agent requis")
+		p.error("--benchmark-overlap, --from-visits ou --agent requis")
 
 	text = json.dumps(report, ensure_ascii=False, indent=2)
 	print(text)

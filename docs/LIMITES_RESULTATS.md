@@ -91,6 +91,29 @@ atteints ; les 159 autres sont des combinaisons rares de configurations observé
 latence et un coût nuls ; elle place l'agent dans un état « latence basse, coût bas » qui
 n'existe pas physiquement pour certaines configurations (par exemple complexe sans réplica).
 
+### 1.6 Popularité et cohérence entraînement / benchmark
+
+- **Seuil de popularité appris sans voir la popularité.** Le méta-contrôleur du seuil
+  P_SLA ne voyait que violations et coût : en charge stable, il ouvrait l'éligibilité dès
+  la première requête (réplication de données lues une seule fois). Son état inclut
+  désormais la popularité des données (5 niveaux) et sa récompense la charge de réplicas
+  froids (`COLD_REPLICA_WEIGHT = 1.0`). Mesuré sur 10 épisodes : premier réplica entre
+  les requêtes 23 et 49 (popularité ≈ 0,25 à 0,47) au lieu de 1 à 31. Le point
+  d'ouverture dépend de ce poids : sensibilité non mesurée.
+- **Départs exploratoires incohérents.** La popularité était fixée sans historique
+  (compteur d'accès nul, aucune tendance) ; elle est maintenant produite par un historique
+  d'accès rejoué (`DataFragment.seedAccessHistory`), dont une fois sur deux une donnée qui
+  refroidit.
+- **Démonstrations (warm-start Rainbow).** Elles forçaient le seuil de popularité à 0 ;
+  elles jouent désormais avec le seuil appris, comme l'agent.
+- **Hyperparamètres du benchmark.** Le benchmark recréait Rainbow avec d'autres réglages
+  (batch, τ, pas de gradient, taux d'apprentissage) et rechargeait Q-Learning sans ses
+  traces d'éligibilité. Configuration unique (`make_rainbow_agent`), état du scheduler et
+  du PER sauvegardés, λ et initialisation optimiste sauvegardés.
+- **États nouveaux au benchmark.** Le benchmark mesure la part de ses décisions prises
+  dans des états vus à l'entraînement (`utils.state_coverage --benchmark-overlap`) ; dans
+  un état jamais vu, l'agent explore avec probabilité 5 %.
+
 ## 2. Entraînement
 
 - **Calendrier d'exploration ε du Q-Learning inadapté.** ε décroît linéairement sur
@@ -129,8 +152,17 @@ n'existe pas physiquement pour certaines configurations (par exemple complexe sa
 
 ## 4. Modèle et simulateur
 
-- **Baseline TCDRM réimplémentée** avec une popularité EMA au lieu du taux cumulatif de
-  l'article : reproduction qualitative, pas stricte.
+- **Popularité de la baseline TCDRM.** TCDRM n'utilise pas l'EMA : une donnée n'est
+  éligible à la réplication que si elle a reçu au moins P_SLA = 200 requêtes
+  (`TcdrmSimulation.createReplicaTcdrm`), ce qui reproduit le démarrage de la
+  réplication à la requête 200 de la Fig. 2 du papier. L'équation 1 du papier (taux
+  #Requêtes / (T_courant − T_premier + 1)) ne peut pas être comparée littéralement à
+  P_SLA = 200 : avec un accès par requête, ce taux ne dépasse jamais 1. En charge stable,
+  les deux métriques donnent exactement les mêmes résultats (vérifié : coût 5,51 $ /
+  17,49 $, 192 / 204 violations, premier réplica à la requête 199). Le placement, en
+  revanche, utilise le même optimiseur multi-objectifs que les agents RL, et non
+  l'heuristique « premier fournisseur conforme » de l'Algorithme 2 ; la suppression
+  (Algorithme 3) n'est pas implémentée dans la référence TCDRM.
 - **Coût de stockage par requête** fondé sur la convention 1 000 requêtes = 1 mois.
 - **Détection d'oscillation globale** (fenêtre de 10 actions, tous fragments
   confondus) : peut sanctionner des opérations légitimes sur des fragments distincts.

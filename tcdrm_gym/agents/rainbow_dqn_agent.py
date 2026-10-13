@@ -650,6 +650,11 @@ class RainbowDQNAgent:
             'policy_net_state_dict': self.policy_net.state_dict(),
             'target_net_state_dict': self.target_net.state_dict(),
             'optimizer_state_dict':  self.optimizer.state_dict(),
+            # Le benchmark poursuit l'apprentissage là où l'entraînement s'est arrêté :
+            # même taux d'apprentissage (cosinus) et même β du PER.
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler is not None else None,
+            'per_frames': {r: b.frame for r, b in self.replay_buffers.items()},
+            'per_beta_frames': {r: b.beta_frames for r, b in self.replay_buffers.items()},
             'state_dim':         self.state_dim,
             'update_count':      self.update_count,
             'training_steps':    self.training_steps,
@@ -728,6 +733,13 @@ class RainbowDQNAgent:
             self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         except (ValueError, KeyError):
             print('[RainbowDQN] Optimizer state incompatible with rebuilt networks — using fresh optimizer')
+        sched = ckpt.get('scheduler_state_dict')
+        if sched is not None and self.scheduler is not None:
+            self.scheduler.load_state_dict(sched)
+        for r, frame in (ckpt.get('per_frames') or {}).items():
+            buf = self.replay_buffers[int(r)]
+            buf.frame = int(frame)
+            buf.beta_frames = int((ckpt.get('per_beta_frames') or {}).get(r, buf.beta_frames))
         self.update_count       = ckpt.get('update_count', 0)
         self.training_steps     = ckpt.get('training_steps', 0)
         self.episode_rewards    = ckpt.get('episode_rewards', [])
@@ -758,3 +770,54 @@ class RainbowDQNAgent:
                         self._reward_stats[key].mean  = regime_rs['mean']
                         self._reward_stats[key].var   = regime_rs['var']
                         self._reward_stats[key].count = regime_rs['count']
+
+
+# ---------------------------------------------------------------------------
+# Configuration unique de l'agent — partagée par l'entraînement (train_cloudsim.py)
+# et le benchmark (bridge/rl_bridge.py) : l'apprentissage online du benchmark
+# poursuit exactement le même algorithme que l'entraînement.
+# ---------------------------------------------------------------------------
+
+def make_rainbow_agent(total_steps: int = 20000) -> RainbowDQNAgent:
+    """Rainbow complet (6/6) avec les paramètres du mémoire (Tableau des paramètres
+    d'entraînement Rainbow). ``total_steps`` = nombre de PAS DE GRADIENT prévus
+    (épisodes × requêtes × updates_per_step) : durée du cosinus et de l'anneal β-PER.
+    Au benchmark, l'état du scheduler et du PER est restauré par ``load()``."""
+    return RainbowDQNAgent(
+        # 11 dims : structure de popularite par element ([9] fraction eligible,
+        # [10] popularite moyenne) — l'agent VOIT quels volumes sont populaires.
+        state_dim=11,
+        action_dim=3,
+        # Réseau [128,128] : sur un état 11-dim / 3 actions, [256,256] est sur-
+        # paramétré et lent à converger (Data-Efficient Rainbow, van Hasselt et al. 2019).
+        hidden_dims=[128, 128],
+        # LR 3e-4 (cosine -> 1e-6) + batch 128 (64 simples + 64 complexes).
+        learning_rate=0.0003,
+        discount_factor=0.99,
+        buffer_capacity=100000,
+        batch_size=128,
+        # Double DQN : mise à jour douce du réseau cible, tau = 0.005 (mémoire).
+        tau=0.005,
+        gradient_clip=10.0,
+        lr_scheduler='cosine',
+        scheduler_params={'T_max': total_steps, 'eta_min': 1e-6},
+        # n_step=5 : l'effet d'un REPLICATE n'apparaît qu'après le warmup du réplica
+        # (~10 requêtes) — un retour multi-pas plus long propage ce crédit différé.
+        n_step=5,
+        min_buffer_size=1500,
+        normalize_rewards=True,
+        # NoisyNet : sigma0=0.5, valeur du papier Rainbow (Fortunato/Hessel).
+        sigma_init=0.5,
+        # C51 : 51 atomes sur [-12, 12] ; avec reward_scale=0.04, les retours soutenus
+        # (r̃/(1−γ) ≈ ±4×r̃) tiennent dans le support sans saturer les bornes.
+        use_distributional=True,
+        n_atoms=51,
+        v_min=-12.0,
+        v_max=12.0,
+        reward_scale=0.04,
+        # PER : β anneal jusqu'à 1 sur toute la durée (Rainbow, Hessel 2018).
+        per_beta_frames=total_steps,
+        # 4 pas de gradient par transition : la simulation (Py4J) est le goulot,
+        # le gradient est bon marché (replay ratio élevé = data-efficient RL).
+        updates_per_step=4,
+    )

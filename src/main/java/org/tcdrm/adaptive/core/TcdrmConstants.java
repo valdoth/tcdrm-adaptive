@@ -120,6 +120,12 @@ public final class TcdrmConstants {
      * le méta-contrôleur peut passer de n'importe quel niveau à n'importe quel autre.
      */
     public static final double META_POPULARITY_RESOLUTION = 0.10;
+    /**
+     * Nombre de buckets de popularité (popularité max normalisée, [0,1]) dans l'état du
+     * méta-contrôleur du seuil de popularité : il décide d'ouvrir l'éligibilité en
+     * connaissant la popularité réelle des données, pas seulement les violations.
+     */
+    public static final int META_POPULARITY_BUCKETS = 5;
     /** Résolution de discrétisation du multiplicateur T_SLA (grille, pas une limite). */
     public static final double META_TSLA_RESOLUTION = 0.05;
     /** Borne basse du multiplicateur T_SLA appris (fraction du contrat). */

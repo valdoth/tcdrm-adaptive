@@ -244,8 +244,22 @@ public class DataFragment {
     /** Popularité = taux d'accès récent (EMA) ∈ [0,1]. Définition littérature. */
     public double getPopularityEma() { return popularityEma; }
 
-    /** Fixe la popularité initiale (départ exploratoire d'entraînement uniquement). */
-    public void setPopularityEma(double ema) { this.popularityEma = Math.max(0.0, Math.min(1.0, ema)); }
+    /**
+     * Reconstitue un historique d'accès (départ exploratoire d'entraînement uniquement) :
+     * le fragment a été lu à chacune des {@code accesses} requêtes consécutives qui se
+     * terminent {@code gap} requêtes avant {@code currentQuery}. Popularité (EMA),
+     * compteur, dernier accès et fenêtres de tendance sont tous dérivés de ce même
+     * historique, donc cohérents entre eux (une popularité élevée implique un accès
+     * récent et un compteur élevé).
+     */
+    public void seedAccessHistory(int currentQuery, int accesses, int gap, double lambda) {
+        int end = currentQuery - gap;              // première requête sans accès
+        int start = Math.max(0, end - accesses);   // première requête avec accès
+        resetAccessStats();
+        for (int q = start; q < end; q++) recordAccess(q);   // compteur, dernier accès, tendance
+        int n = Math.max(0, end - start);
+        this.popularityEma = (1.0 - Math.pow(1.0 - lambda, n)) * Math.pow(1.0 - lambda, gap);
+    }
 
     /** Marque tous les réplicas actifs comme déjà chauffés (départ exploratoire). */
     public void markReplicasWarm() {

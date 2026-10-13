@@ -8,8 +8,28 @@ import os
 import numpy as np
 
 from agents.simple_qlearning_agent import SimpleQLearningAgent
-from agents.rainbow_dqn_agent import RainbowDQNAgent
-from envs.state_grid import N_STATES, discretize
+from agents.rainbow_dqn_agent import make_rainbow_agent
+from envs.state_grid import N_STATES, CoverageTracker, discretize
+
+
+# Exploration au benchmark dans les états JAMAIS vus à l'entraînement : 5 % d'actions
+# valides tirées au hasard, comme le ε_min de l'entraînement Q-Learning et l'ε des
+# méta-contrôleurs. Dans un état appris, l'agent exploite (greedy) : l'évaluation
+# reste celle de la politique apprise, mais un état nouveau n'est plus joué uniquement
+# sur la valeur d'initialisation de la Q-table (ou une extrapolation du réseau).
+NOVEL_STATE_EPSILON = 0.05
+
+
+def _trained_states(model_path):
+    """États de la grille vus à l'entraînement (<modèle>_coverage.npy, écrit par
+    train_cloudsim.py à côté du modèle), ou None si le fichier est absent."""
+    if not model_path:
+        return None
+    path = os.path.splitext(model_path)[0] + "_coverage.npy"
+    if not os.path.exists(path):
+        print(f"Couverture d'entraînement absente ({path}) : pas d'exploration des états nouveaux")
+        return None
+    return np.load(path) > 0
 
 
 class PythonRLBridge:
@@ -40,21 +60,9 @@ class PythonRLBridge:
         else:
             print("Q-Learning: no trained model, using fresh agent")
 
-        # Mêmes hyperparamètres que train_cloudsim.py (le load() réconcilie de toute
-        # façon support C51 / n_step / reward_scale depuis le checkpoint).
-        self.rainbow_agent = RainbowDQNAgent(
-            state_dim=11,
-            action_dim=3,
-            hidden_dims=[128, 128],
-            n_step=5,
-            min_buffer_size=500,
-            normalize_rewards=True,
-            use_distributional=True,
-            n_atoms=51,
-            v_min=-12.0,
-            v_max=12.0,
-            reward_scale=0.04,
-        )
+        # Même configuration que l'entraînement (make_rainbow_agent) ; load() restaure en
+        # plus l'état du scheduler (taux d'apprentissage) et l'avancement β du PER.
+        self.rainbow_agent = make_rainbow_agent()
         if rainbow_model_path and os.path.exists(rainbow_model_path):
             print(f"Loading Rainbow DQN model: {rainbow_model_path}")
             self.rainbow_agent.load(rainbow_model_path)
@@ -68,6 +76,14 @@ class PythonRLBridge:
         self._rainbow_last_action = None
         self._ql_episode       = 0
         self._rainbow_episode  = 0
+        # États rencontrés AU BENCHMARK (grille de 1458 états, simple + complexe) : comparés
+        # aux états vus à l'entraînement (*_coverage.npy) par utils.state_coverage
+        # --benchmark-overlap — un état jamais vu à l'entraînement est joué sans apprentissage.
+        self._bench_coverage = {"qlearning": CoverageTracker(), "rainbow": CoverageTracker()}
+        self._trained = {"qlearning": _trained_states(qlearning_model_path),
+                         "rainbow": _trained_states(rainbow_model_path)}
+        self._explore_rng = np.random.default_rng(0)
+        self._explorations = {"qlearning": 0, "rainbow": 0}
         print("Python bridge initialized")
 
     def resetCounters(self):
@@ -86,6 +102,7 @@ class PythonRLBridge:
         # et reproductibles. Graine fixe : aucun impact sur la politique apprise, seulement
         # sur le déterminisme des tirages.
         self.qlearning_agent.reset_rng(0)
+        self._explore_rng = np.random.default_rng(0)
         np.random.seed(0)
         try:
             import torch
@@ -100,8 +117,11 @@ class PythonRLBridge:
         try:
             state = self._parse_state(state_array)
             discrete_state = self._discretize_state_for_qlearning(state)
+            self._record_benchmark_state("qlearning", discrete_state)
             valid_actions = self._valid_actions(can_replicate, can_delete)
-            action = self.qlearning_agent.select_action(discrete_state, valid_actions=valid_actions, training=True)
+            action = self._explore_if_novel("qlearning", discrete_state, valid_actions)
+            if action is None:
+                action = self.qlearning_agent.select_action(discrete_state, valid_actions=valid_actions, training=True)
             self._ql_last_state  = discrete_state
             self._ql_last_action = int(action)
             return int(action)
@@ -113,11 +133,16 @@ class PythonRLBridge:
         try:
             state = self._parse_state(state_array)
             continuous_state = self._build_rainbow_state(state)
+            grid_state = discretize(continuous_state)
+            self._record_benchmark_state("rainbow", grid_state)
             action_mask = self._action_mask(can_replicate, can_delete)
+            explored = self._explore_if_novel("rainbow", grid_state,
+                                              self._valid_actions(can_replicate, can_delete))
             # training=False : inférence déterministe (poids moyens, sans bruit NoisyNet) —
             # symétrique du ε=0 de Q-Learning. L'apprentissage online (updateRainbow)
             # continue d'entraîner le réseau, seule la SÉLECTION est greedy.
-            action = self.rainbow_agent.select_action(continuous_state, training=False, action_mask=action_mask)
+            action = explored if explored is not None else \
+                self.rainbow_agent.select_action(continuous_state, training=False, action_mask=action_mask)
             self._rainbow_last_state  = continuous_state
             self._rainbow_last_action = int(action)
             return int(action)
@@ -159,6 +184,26 @@ class PythonRLBridge:
         if self._rainbow_model_path:
             self.rainbow_agent.save(self._rainbow_model_path)
             print(f"Rainbow DQN saved to {self._rainbow_model_path}")
+
+    def _explore_if_novel(self, agent: str, index: int, valid_actions):
+        """Action aléatoire valide avec probabilité NOVEL_STATE_EPSILON si l'état n'a
+        jamais été vu à l'entraînement ; None sinon (l'agent exploite)."""
+        trained = self._trained[agent]
+        if trained is None or trained[index] or self._explore_rng.random() >= NOVEL_STATE_EPSILON:
+            return None
+        self._explorations[agent] += 1
+        return int(self._explore_rng.choice(valid_actions))
+
+    def _record_benchmark_state(self, agent: str, index: int) -> None:
+        """Compte l'état et sauvegarde les comptes à chaque fin de run (1000 requêtes) :
+        le processus est arrêté par le workflow sans hook de fin."""
+        tracker = self._bench_coverage[agent]
+        tracker.add(index)
+        if tracker.counts.sum() % 1000 == 0:
+            tracker.save(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                       "models", f"{agent}_benchmark_coverage.npy"))
+            print(f"{agent}: {int(tracker.counts.sum())} décisions de benchmark, "
+                  f"{self._explorations[agent]} explorations en état nouveau", flush=True)
 
     def _discretize_state_for_qlearning(self, state: dict) -> int:
         """Même encodage qu'à l'entraînement (envs/state_grid.py, source unique) : sans

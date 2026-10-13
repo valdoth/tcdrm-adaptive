@@ -15,7 +15,7 @@ import yaml
 from envs.cloudsim_env import CloudSimEnv, CloudSimQLearningEnv
 from envs.state_grid import N_STATES, CoverageTracker
 from agents.simple_qlearning_agent import SimpleQLearningAgent
-from agents.rainbow_dqn_agent import RainbowDQNAgent
+from agents.rainbow_dqn_agent import RainbowDQNAgent, make_rainbow_agent
 
 
 def load_config(config_path):
@@ -299,8 +299,8 @@ def _run_demonstrations(agent, env, env_complex, demo_episodes, seed_base, max_e
 	print(f"  Warm-start : {demo_episodes} épisodes de démonstration TCDRM (DQfD-lite)...")
 
 	def _set_demo(env_obj, on):
-		# Force le gate de popularité ouvert côté Java pour que la démo puisse répliquer
-		# (indispensable en complex où un seul réplica aide peu).
+		# Mode démonstration côté Java : la démo joue avec les mêmes règles que l'agent
+		# (seuil de popularité appris), pour ne produire que des transitions possibles au benchmark.
 		try:
 			env_obj._connect()
 			env_obj._server.setDemoMode(bool(on))
@@ -365,51 +365,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 		# ×4 : scheduler cosine et β-PER comptent en PAS DE GRADIENT, et
 		# updates_per_step=4 en fait quatre par transition d'environnement.
 		total_steps_estimate = max(20000, episodes * max_episode_length * 4)
-		agent = RainbowDQNAgent(
-			# 11 dims : structure de popularite par element ([9] fraction eligible,
-			# [10] popularite moyenne) — l'agent VOIT quels volumes sont populaires.
-			state_dim=11,
-			action_dim=3,
-			# Réseau [128,128] : sur un état 11-dim / 3 actions, [256,256] est sur-
-			# paramétré et lent à converger. Un réseau plus compact atteint une bonne
-			# politique avec BEAUCOUP moins d'épisodes (Data-Efficient Rainbow, van
-			# Hasselt et al. 2019) — priorité à la vitesse de convergence.
-			hidden_dims=[128, 128],
-			# LR 3e-4 (cosine -> 1e-6) + batch 128 : réseau compact → apprentissage
-			# plus rapide sans instabilité C51.
-			learning_rate=0.0003,
-			discount_factor=0.99,
-			buffer_capacity=100000,
-			batch_size=128,
-			# tau 0.01 : cible qui suit plus vite — cohérent avec le ratio de replay
-			# accru (2 gradients/transition) sur ce petit espace d'état.
-			tau=0.01,
-			gradient_clip=10.0,
-			lr_scheduler='cosine',
-			scheduler_params={'T_max': total_steps_estimate, 'eta_min': 1e-6},
-			# n_step=5 : l'effet d'un REPLICATE n'apparaît qu'après le warmup du réplica
-			# (~10 requêtes) — un retour multi-pas plus long propage ce crédit différé.
-			n_step=5,
-			min_buffer_size=1500,
-			normalize_rewards=True,
-			# sigma0=0.5 : valeur du papier Rainbow (Fortunato/Hessel) — l'exploration
-			# NoisyNet s'auto-adapte par gradient, pas besoin de sur-bruiter.
-			sigma_init=0.5,
-			use_distributional=True,
-			# Support C51 recalibré : avec reward_scale=0.04, les valeurs d'état soutenues
-			# (r̃/(1−γ) ≈ ±4×r̃) tiennent dans [−12, 12] sans saturer les bornes —
-			# l'ancien support [−15, 6] écrasait toute la masse aux extrêmes.
-			n_atoms=51,
-			v_min=-12.0,
-			v_max=12.0,
-			reward_scale=0.04,
-			# β du PER anneal jusqu'à 1 sur toute la durée (Rainbow, Hessel 2018)
-			per_beta_frames=total_steps_estimate,
-			# 4 pas de gradient par transition : la simulation CloudSimPlus (Py4J) est
-			# le goulot, le gradient est bon marché — quadruple l'apprentissage par
-			# échantillon (replay ratio élevé = data-efficient RL).
-			updates_per_step=4,
-		)
+		agent = make_rainbow_agent(total_steps_estimate)
 
 	best_reward = float('-inf')
 	rewards_history = []

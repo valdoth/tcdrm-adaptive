@@ -31,7 +31,11 @@ import java.util.Random;
  * (T_SLA et éligibilité popularité P_SLA — Sujet 1).
  *
  * <ul>
- *   <li>État : (bucket violations × bucket coût × bucket valeur courante).</li>
+ *   <li>État : (bucket violations × bucket coût × bucket popularité × bucket valeur
+ *       courante). Le bucket popularité n'existe que pour le seuil de popularité
+ *       ({@code popBuckets} &gt; 1) : sans lui, le méta-contrôleur ne voit pas si les
+ *       données sont populaires et apprend à ouvrir l'éligibilité dès les premières
+ *       violations, c'est-à-dire sur des données lues une seule fois.</li>
  *   <li>Actions : choisir le niveau du seuil (un niveau par cran de résolution).</li>
  *   <li>Récompense : r = −violationRate − max(0, costRatio − 1)
  *       − w_fid·(écart au contrat normalisé). Le terme de fidélité enseigne que
@@ -91,11 +95,20 @@ public final class ThresholdMetaLearner {
      * réellement le coût moyen (liens inter-région vs inter-provider) est appris.
      */
     private static final double COST_LINEAR_WEIGHT = 0.3;
+    /**
+     * Poids de la charge de réplicas FROIDS (Σ (1 − pop_f)^k × réplicas_f / max, dans
+     * [0,1]) dans la récompense du seuil de popularité — même échelle que le taux de
+     * violations. Ouvrir l'éligibilité sur des données qui ne sont pas encore populaires
+     * crée des réplicas froids : ce terme rend ce coût visible au méta-contrôleur, qui
+     * apprend lui-même à partir de quelle popularité l'ouverture est rentable.
+     */
+    private static final double COLD_REPLICA_WEIGHT = 1.0;
 
     private final double minValue;
     private final double maxValue;
     private final double resolution;
     private final int nLevels;
+    private final int popBuckets;
     private final Random rnd;
     private final double[][] q;
 
@@ -108,6 +121,12 @@ public final class ThresholdMetaLearner {
 
     public ThresholdMetaLearner(double initialValue, double minValue, double maxValue,
                                 double resolution, double epsilon, long seed) {
+        this(initialValue, minValue, maxValue, resolution, epsilon, seed, 1);
+    }
+
+    /** @param popBuckets nombre de buckets de popularité dans l'état (1 = popularité non observée). */
+    public ThresholdMetaLearner(double initialValue, double minValue, double maxValue,
+                                double resolution, double epsilon, long seed, int popBuckets) {
         if (maxValue <= minValue || resolution <= 0) {
             throw new IllegalArgumentException("Invalid threshold bounds/resolution");
         }
@@ -115,9 +134,10 @@ public final class ThresholdMetaLearner {
         this.maxValue = maxValue;
         this.resolution = resolution;
         this.nLevels = (int) Math.round((maxValue - minValue) / resolution) + 1;
+        this.popBuckets = Math.max(1, popBuckets);
         this.epsilon = epsilon;
         this.rnd = new Random(seed);
-        this.q = new double[VIOL_BUCKETS * COST_BUCKETS * nLevels][nLevels];
+        this.q = new double[VIOL_BUCKETS * COST_BUCKETS * this.popBuckets * nLevels][nLevels];
         // Prior informé : la récompense méta contient un terme de fidélité au contrat
         // connu a priori (−FIDELITY_WEIGHT × assouplissement). L'encoder dans la
         // Q-table initiale (au lieu de 0 partout) évite qu'une table VIERGE en greedy
@@ -144,7 +164,17 @@ public final class ThresholdMetaLearner {
      * @return la nouvelle valeur du seuil
      */
     public double observeAndAdjust(double violationRate, double costRatio) {
-        int s = stateOf(violationRate, costRatio);
+        return observeAndAdjust(violationRate, costRatio, 0.0, 0.0);
+    }
+
+    /**
+     * Variante du seuil de popularité : observe aussi la popularité des données
+     * (normalisée [0,1]) et la charge de réplicas froids (normalisée [0,1]), pénalisée
+     * dans la récompense.
+     */
+    public double observeAndAdjust(double violationRate, double costRatio,
+                                   double popularity, double coldReplicaLoad) {
+        int s = stateOf(violationRate, costRatio, popularity);
         // Fidélité au contrat : s'éloigner du seuil contractuel (maxValue) coûte —
         // l'assouplissement doit se payer en violations évitées. Le coût d'événement
         // (CHANGE_WEIGHT × baisse introduite par la dernière action) rend les
@@ -153,7 +183,8 @@ public final class ThresholdMetaLearner {
         double reward = -violationRate - Math.max(0.0, costRatio - 1.0)
             - COST_LINEAR_WEIGHT * costRatio
             - FIDELITY_WEIGHT * relaxation
-            - CHANGE_WEIGHT * lastDrop;
+            - CHANGE_WEIGHT * lastDrop
+            - COLD_REPLICA_WEIGHT * coldReplicaLoad;
 
         if (lastState >= 0 && lastAction >= 0) {
             double best = maxQ(s);
@@ -186,7 +217,7 @@ public final class ThresholdMetaLearner {
 
     // === Discrétisation de l'état (buckets standards, pas des règles de décision) ===
 
-    private int stateOf(double violationRate, double costRatio) {
+    private int stateOf(double violationRate, double costRatio, double popularity) {
         int vb;
         if (violationRate <= 0.001)     vb = 0;
         else if (violationRate < 0.05)  vb = 1;
@@ -201,7 +232,8 @@ public final class ThresholdMetaLearner {
 
         int valB = (int) Math.round((value - minValue) / resolution);
         valB = Math.max(0, Math.min(nLevels - 1, valB));
-        return (vb * COST_BUCKETS + cb) * nLevels + valB;
+        int pb = Math.max(0, Math.min(popBuckets - 1, (int) (popularity * popBuckets)));
+        return ((vb * COST_BUCKETS + cb) * popBuckets + pb) * nLevels + valB;
     }
 
     private double clamp(double v) { return Math.max(minValue, Math.min(maxValue, v)); }
@@ -257,7 +289,13 @@ public final class ThresholdMetaLearner {
      */
     public static ThresholdMetaLearner loadOrCreate(File file, double initialValue, double minValue,
                                                     double maxValue, double resolution, double epsilon, long seed) {
-        ThresholdMetaLearner learner = new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed);
+        return loadOrCreate(file, initialValue, minValue, maxValue, resolution, epsilon, seed, 1);
+    }
+
+    public static ThresholdMetaLearner loadOrCreate(File file, double initialValue, double minValue,
+                                                    double maxValue, double resolution, double epsilon, long seed,
+                                                    int popBuckets) {
+        ThresholdMetaLearner learner = new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed, popBuckets);
         if (file == null || !file.isFile()) return learner;
         try (BufferedReader r = new BufferedReader(new FileReader(file))) {
             String header = r.readLine();
@@ -267,14 +305,14 @@ public final class ThresholdMetaLearner {
             }
             for (int s = 0; s < learner.q.length; s++) {
                 String line = r.readLine();
-                if (line == null) return new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed);
+                if (line == null) return new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed, popBuckets);
                 String[] parts = line.trim().split("\\s+");
                 for (int a = 0; a < learner.nLevels && a < parts.length; a++) {
                     learner.q[s][a] = Double.parseDouble(parts[a]);
                 }
             }
         } catch (IOException | NumberFormatException e) {
-            return new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed);
+            return new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed, popBuckets);
         }
         return learner;
     }

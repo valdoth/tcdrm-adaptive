@@ -106,7 +106,7 @@ public class BenchmarkRunner {
             org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
                 TcdrmConstants.metaQtableFile(modelType, "pop", complex),
                 1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_RESOLUTION, 0.0,
-                seed ^ modelType.hashCode());
+                seed ^ modelType.hashCode(), TcdrmConstants.META_POPULARITY_BUCKETS);
         org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaMetaLearner =
             org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
                 TcdrmConstants.metaQtableFile(modelType, "tsla", complex),
@@ -175,12 +175,15 @@ public class BenchmarkRunner {
             // Méta-adaptation continue (Sujet 1) : à CHAQUE requête, les Q-learners
             // observent le stress lissé (EMA), apprennent et choisissent les seuils,
             // propagés immédiatement à la simulation (état RL + éligibilité popularité).
+            // Le seuil de popularité voit aussi la popularité des données et paie les
+            // réplicas froids (même observation qu'à l'entraînement).
             // Aucune cadence fixe — le moment du déclenchement est appris par agent.
             double alpha = TcdrmConstants.META_EMA_ALPHA;
             violEma = (1.0 - alpha) * violEma + alpha * (lastLatency > dynTSla ? 1.0 : 0.0);
             costRatioEma = (1.0 - alpha) * costRatioEma
                 + alpha * (lastCost / Math.max(1e-9, cSlaRef));
-            double minPop = popLearner.observeAndAdjust(violEma, costRatioEma);
+            double minPop = popLearner.observeAndAdjust(violEma, costRatioEma,
+                sim.getPopularityScore(), Math.min(1.0, sim.getUnpopularReplicaLoad() / maxReplicas));
             dynTSla = contractTSla * tslaMetaLearner.observeAndAdjust(violEma, costRatioEma);
             sim.setDynamicThresholds(dynTSla, minPop);
             sim.setDynamicDeletionWindow(deletionWindowLearner.observeAndAdjust(violEma, costRatioEma));

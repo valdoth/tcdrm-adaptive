@@ -35,12 +35,14 @@ public class TrainingEnvironment {
     // "Q-Threshold"). CSLA reste statique (contrat budget). dynamicMinPopularity =
     // éligibilité popularité du papier (Algorithm 1 : pd_i ≥ P_SLA), repart du contrat
     // (1.0) à chaque épisode ; la POLITIQUE d'ajustement est dans les Q-tables
-    // persistées, aucune règle codée en dur. Au-dessus du seuil, l'agent principal
-    // décide librement quand/combien répliquer.
+    // persistées, aucune règle codée en dur. Le méta-contrôleur observe la popularité
+    // des données et paie les réplicas froids : il apprend à quelle popularité ouvrir.
+    // Au-dessus du seuil, l'agent principal décide librement quand/combien répliquer.
     private double dynamicTSla;
     private double dynamicMinPopularity = 1.0;
-    // Mode démonstration (warm-start DQfD) : gate popularité forcé ouvert pour que
-    // l'heuristique de démonstration puisse réellement répliquer et enseigner le bénéfice.
+    // Mode démonstration (warm-start DQfD) : l'heuristique de démonstration joue avec
+    // EXACTEMENT les mêmes règles que l'agent (seuil de popularité appris, même état) —
+    // aucune transition de démonstration n'est impossible au benchmark.
     private boolean demoMode = false;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner popularityLearner;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaLearner;
@@ -100,7 +102,7 @@ public class TrainingEnvironment {
         this.popularityLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
             TcdrmConstants.metaQtableFile(this.agentTag, "pop", complex),
             1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_RESOLUTION, metaEps,
-            seed ^ this.agentTag.hashCode());
+            seed ^ this.agentTag.hashCode(), TcdrmConstants.META_POPULARITY_BUCKETS);
         this.tslaLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
             TcdrmConstants.metaQtableFile(this.agentTag, "tsla", complex),
             1.0, TcdrmConstants.META_TSLA_MIN_MULTIPLIER, 1.0,
@@ -159,9 +161,8 @@ public class TrainingEnvironment {
         // Profil de routage de l'agent (0 = temps seul) — même valeur qu'au benchmark
         // via la config persistée : cohérence train/eval.
         this.simulation.setCostAwareRouting(settings.getCostRoutingToleranceMs());
-        // Injecter les seuils adaptatifs (T_SLA, éligibilité popularité, ΔT suppression) ;
-        // en mode démonstration, gate forcé ouvert (minPop=0) dès le 1er pas.
-        this.simulation.setDynamicThresholds(dynamicTSla, demoMode ? 0.0 : dynamicMinPopularity);
+        // Injecter les seuils adaptatifs (T_SLA, éligibilité popularité, ΔT suppression).
+        this.simulation.setDynamicThresholds(dynamicTSla, dynamicMinPopularity);
         this.simulation.setDynamicDeletionWindow(deletionWindowLearner.getValue());
         // Départ exploratoire (entraînement seulement, désactivé par défaut) : rend
         // atteignables les états que le départ habituel n'atteint jamais (budget bas,
@@ -517,7 +518,7 @@ public class TrainingEnvironment {
         return new boolean[] { true, canReplicate, canDelete };
     }
 
-    // === Méta-adaptation des seuils T_SLA et popularité (P_SLA) — APPRISE (Sujet 1) ===
+    // === Méta-adaptation des seuils T_SLA, popularité (P_SLA) et ΔT — APPRISE (Sujet 1) ===
     // CSLA reste statique (contrat budget du locataire). L'ajustement des seuils est
     // décidé par deux méta-contrôleurs Q-learning (approche "Q-Threshold", Horovitz &
     // Arian FiCloud 2018) : aucune règle "si stress alors ±X%" codée en dur — la
@@ -529,7 +530,12 @@ public class TrainingEnvironment {
      * d'un changement est donc entièrement déterminé par sa politique apprise.
      */
     private void adaptThresholds(double violationRate, double avgCostRatio) {
-        dynamicMinPopularity = popularityLearner.observeAndAdjust(violationRate, avgCostRatio);
+        if (simulation != null) {
+            int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
+            dynamicMinPopularity = popularityLearner.observeAndAdjust(violationRate, avgCostRatio,
+                simulation.getPopularityScore(),
+                Math.min(1.0, simulation.getUnpopularReplicaLoad() / maxReplicas));
+        }
 
         double contractTSla = complex
             ? (settings.getTSlaComplexMs() > 0 ? settings.getTSlaComplexMs() : TcdrmConstants.TSLA_COMPLEX_MS)
@@ -580,21 +586,19 @@ public class TrainingEnvironment {
      * requête), tSla (récompense), l'état RL normalisé et l'éligibilité popularité
      * doivent suivre en temps réel.
      *
-     * MODE DÉMONSTRATION (warm-start DQfD) : le gate de popularité est forcé OUVERT
-     * (minPop=0) pour que l'heuristique de démonstration puisse réellement RÉPLIQUER et
-     * montrer à l'agent le bénéfice — indispensable en complex où un seul réplica aide
-     * peu (l'agent ne découvrirait jamais la réplication seul). Le méta continue
-     * d'observer/apprendre du stress ; seul le gate est court-circuité pendant les démos.
+     * Le MODE DÉMONSTRATION (warm-start DQfD) n'y fait pas exception : l'ancien gate
+     * forcé ouvert (minPop=0) produisait des transitions impossibles au benchmark
+     * (réplication de données froides, état [9] toujours à 1). La démonstration montre
+     * désormais le bénéfice de la réplication dès que le seuil appris l'autorise.
      */
     private void applyThresholds() {
         this.tSla = this.dynamicTSla;
         if (this.simulation != null) {
-            double effMinPop = demoMode ? 0.0 : this.dynamicMinPopularity;
-            this.simulation.setDynamicThresholds(this.dynamicTSla, effMinPop);
+            this.simulation.setDynamicThresholds(this.dynamicTSla, this.dynamicMinPopularity);
         }
     }
 
-    /** Active le mode démonstration (gate popularité forcé ouvert pour le warm-start). */
+    /** Active le mode démonstration (warm-start DQfD, mêmes règles que l'agent). */
     public void setDemoMode(boolean on) { this.demoMode = on; }
 
     public double getDynamicTSla() { return dynamicTSla; }

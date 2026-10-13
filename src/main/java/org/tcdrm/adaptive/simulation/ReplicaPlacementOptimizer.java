@@ -4,6 +4,8 @@ import org.tcdrm.adaptive.cloudsim.DataFragment;
 import org.tcdrm.adaptive.cloudsim.MultiCloudInfrastructure;
 
 import java.util.List;
+import java.util.function.Predicate;
+import java.util.function.ToDoubleFunction;
 
 /**
  * TCDRM v2 — Sujet 2 (PREDICTIVE): Optimisation multi-objectifs du placement de réplicas.
@@ -85,13 +87,33 @@ public class ReplicaPlacementOptimizer {
         int[] replicasPerProvider,
         double minPopularityNorm
     ) {
+        return selectBest(fragments, execProvider, execRegion, infra, replicasPerProvider,
+            f -> org.tcdrm.adaptive.core.TcdrmConstants.normalizedPopularity(f.getPopularityEma())
+                    >= minPopularityNorm,
+            DataFragment::getPopularityEma);
+    }
+
+    /**
+     * Variante à métrique de popularité explicite : {@code eligible} décide si un fragment
+     * peut recevoir un réplica, {@code popularity} donne le poids relatif (SPEA2) des
+     * fragments éligibles. Permet à la référence TCDRM d'utiliser le compteur d'accès
+     * du papier au lieu de l'EMA des agents RL.
+     */
+    public Candidate selectBest(
+        List<DataFragment> fragments,
+        String execProvider, String execRegion,
+        MultiCloudInfrastructure infra,
+        int[] replicasPerProvider,
+        Predicate<DataFragment> eligible,
+        ToDoubleFunction<DataFragment> popularity
+    ) {
         String[] providers = MultiCloudInfrastructure.PROVIDERS;
         String[] regions   = MultiCloudInfrastructure.REGIONS;
 
         // Popularité max observée — pour normalisation SPEA2
-        double maxEma = 1e-9;
+        double maxPop = 1e-9;
         for (DataFragment f : fragments) {
-            maxEma = Math.max(maxEma, f.getPopularityEma());
+            maxPop = Math.max(maxPop, popularity.applyAsDouble(f));
         }
 
         // Charge moyenne par provider — pour équilibrage NSGA-II
@@ -104,12 +126,10 @@ public class ReplicaPlacementOptimizer {
 
         for (DataFragment f : fragments) {
             if (!f.canAddReplica() || f.hasRecreateCooldown()) continue;
-            // Éligibilité par donnée (Algorithm 1) : la popularité de CE fragment,
-            // normalisée par le contrat P_SLA, doit atteindre le seuil adaptatif.
-            double popNorm = org.tcdrm.adaptive.core.TcdrmConstants.normalizedPopularity(f.getPopularityEma());
-            if (popNorm < minPopularityNorm) continue;
+            // Éligibilité par donnée (Algorithm 1) : la popularité de CE fragment.
+            if (!eligible.test(f)) continue;
 
-            double popularityFactor = f.getPopularityEma() / maxEma;  // relatif (SPEA2), pas de normalisation absolue nécessaire
+            double popularityFactor = popularity.applyAsDouble(f) / maxPop;  // relatif (SPEA2), pas de normalisation absolue nécessaire
 
             for (int pi = 0; pi < providers.length; pi++) {
                 String tp = providers[pi];

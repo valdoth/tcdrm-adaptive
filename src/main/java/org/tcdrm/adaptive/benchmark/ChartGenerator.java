@@ -19,6 +19,11 @@ import java.util.stream.Collectors;
  */
 public class ChartGenerator {
 
+    /** Rotation (degrés) des étiquettes de l'axe des requêtes : XChart 3.8.8 place une
+     *  graduation tous les ~60 requêtes sans tenir compte de la largeur des étiquettes,
+     *  qui se chevauchaient (« 1832443053… ») sur les graphiques de 500 px de large. */
+    private static final int X_LABEL_ROTATION = 45;
+
     // Couleurs du PDF (exactes)
     public static final Color COLOR_TCDRM = new Color(31, 119, 180);    // Bleu
     public static final Color COLOR_NOREP = new Color(214, 39, 40);     // Rouge
@@ -60,6 +65,8 @@ public class ChartGenerator {
 
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         chart.getStyler().setPlotGridLinesVisible(true);
         
         List<Integer> x = tcdrm.getQueryNumbers();
@@ -86,6 +93,8 @@ public class ChartGenerator {
 
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         
         List<Integer> x = tcdrmSimple.getQueryNumbers();
         chart.addSeries("Simple", x, toDoubleList(tcdrmSimple.getReplicaCount())).setLineColor(COLOR_TCDRM);
@@ -101,6 +110,8 @@ public class ChartGenerator {
             .title("Replica Factor — RL (2 models)").xAxisTitle("Number of queries").yAxisTitle("Number of replica").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, toDoubleList(ql.getReplicaCount())).setLineColor(COLOR_QLEARNING);
         chart.addSeries("Rainbow DQN", x, toDoubleList(rainbow.getReplicaCount())).setLineColor(COLOR_DQN);
@@ -112,6 +123,8 @@ public class ChartGenerator {
             .title("Impact on Response Times — RL (2 models)").xAxisTitle("Number of Queries").yAxisTitle("Response time (ms)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, smooth(ql.getResponseTimeMs(), 20)).setLineColor(COLOR_QLEARNING);
         chart.addSeries("Rainbow DQN", x, smooth(rainbow.getResponseTimeMs(), 20)).setLineColor(COLOR_DQN);
@@ -123,6 +136,8 @@ public class ChartGenerator {
             .title("Avg. BW Price — RL (2 models)").xAxisTitle("Number of Queries").yAxisTitle("Price ($)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, ql.getAvgBwPrice()).setLineColor(COLOR_QLEARNING);
         chart.addSeries("Rainbow DQN", x, rainbow.getAvgBwPrice()).setLineColor(COLOR_DQN);
@@ -134,6 +149,8 @@ public class ChartGenerator {
             .title("Cumulative BW Price — RL (2 models)").xAxisTitle("Number of Queries").yAxisTitle("Price ($)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, ql.getCumulativeBwCostList()).setLineColor(COLOR_QLEARNING);
         chart.addSeries("Rainbow DQN", x, rainbow.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
@@ -180,6 +197,8 @@ public class ChartGenerator {
 
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         chart.getStyler().setPlotGridLinesVisible(true);
         
         List<Integer> x = norep.getQueryNumbers();
@@ -233,6 +252,8 @@ public class ChartGenerator {
 
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         chart.getStyler().setPlotGridLinesVisible(true);
         
         List<Integer> x = norep.getQueryNumbers();
@@ -266,6 +287,8 @@ public class ChartGenerator {
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         chart.getStyler().setMarkerSize(0);
 
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
+
         List<Integer> x = norep.getQueryNumbers();
         chart.addSeries("NoRepLc", x, norep.getCumulativeBwCostList()).setLineColor(COLOR_NOREP);
         chart.addSeries("TCDRM", x, tcdrm.getCumulativeBwCostList()).setLineColor(COLOR_TCDRM);
@@ -291,6 +314,8 @@ public class ChartGenerator {
         
         timeChart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         timeChart.getStyler().setMarkerSize(0);
+
+        timeChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = norep.getQueryNumbers();
         
         timeChart.addSeries("NoRepLc", x, smooth(norep.getResponseTimeMs(), 20))
@@ -314,6 +339,8 @@ public class ChartGenerator {
         
         replicaChart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         replicaChart.getStyler().setMarkerSize(0);
+
+        replicaChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         
         replicaChart.addSeries("TCDRM", x, toDoubleList(tcdrm.getReplicaCount()))
             .setLineColor(COLOR_TCDRM);
@@ -334,6 +361,8 @@ public class ChartGenerator {
         
         costChart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         costChart.getStyler().setMarkerSize(0);
+
+        costChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         
         costChart.addSeries("NoRepLc", x, norep.getCumulativeBwCostList())
             .setLineColor(COLOR_NOREP);
@@ -458,6 +487,8 @@ public class ChartGenerator {
 
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         chart.getStyler().setPlotGridLinesVisible(true);
         
         List<Integer> x = norep.getQueryNumbers();
@@ -492,6 +523,8 @@ public class ChartGenerator {
 
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         chart.getStyler().setPlotGridLinesVisible(true);
         
         List<Integer> x = norep.getQueryNumbers();
@@ -529,6 +562,8 @@ public class ChartGenerator {
 
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         chart.getStyler().setPlotGridLinesVisible(true);
 
         List<Integer> x = norep.getQueryNumbers();
@@ -681,6 +716,8 @@ public class ChartGenerator {
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
 
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
+
         List<Integer> x = norep.getQueryNumbers();
         chart.addSeries("NoRepLc", x, norep.getAvgBwPrice()).setLineColor(COLOR_NOREP);
         chart.addSeries("TCDRM", x, tcdrm.getAvgBwPrice()).setLineColor(COLOR_TCDRM);
@@ -744,6 +781,8 @@ public class ChartGenerator {
             .xAxisTitle("Query Number").yAxisTitle("Response Time (ms)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, smooth(ql.getResponseTimeMs(), 20)).setLineColor(COLOR_QLEARNING);
         chart.addSeries("Rainbow DQN", x, smooth(rainbow.getResponseTimeMs(), 20)).setLineColor(COLOR_DQN);
@@ -760,6 +799,8 @@ public class ChartGenerator {
             .xAxisTitle("Query Number").yAxisTitle("Replicas").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, toDoubleList(ql.getReplicaCount())).setLineColor(COLOR_QLEARNING);
         chart.addSeries("Rainbow DQN", x, toDoubleList(rainbow.getReplicaCount())).setLineColor(COLOR_DQN);
@@ -776,6 +817,8 @@ public class ChartGenerator {
             .xAxisTitle("Query Number").yAxisTitle("Cumulative BW Cost ($)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, ql.getCumulativeBwCostList()).setLineColor(COLOR_QLEARNING);
         chart.addSeries("Rainbow DQN", x, rainbow.getCumulativeBwCostList()).setLineColor(COLOR_DQN);
@@ -792,6 +835,8 @@ public class ChartGenerator {
             .xAxisTitle("Query Number").yAxisTitle("Avg Cost ($/query)").build();
         chart.getStyler().setLegendPosition(Styler.LegendPosition.InsideNE);
         chart.getStyler().setMarkerSize(0);
+
+        chart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         List<Integer> x = ql.getQueryNumbers();
         chart.addSeries("Q-Learning", x, ql.getAvgBwPrice()).setLineColor(COLOR_QLEARNING);
         chart.addSeries("Rainbow DQN", x, rainbow.getAvgBwPrice()).setLineColor(COLOR_DQN);
@@ -819,6 +864,8 @@ public class ChartGenerator {
         XYChart timeChart = new XYChartBuilder().width(500).height(350)
             .title("Response Time").xAxisTitle("Query").yAxisTitle("Time (ms)").build();
         timeChart.getStyler().setMarkerSize(0);
+
+        timeChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         timeChart.addSeries("Response Time", x, smooth(data.getResponseTimeMs(), 20)).setLineColor(COLOR_TCDRM);
         g.drawImage(BitmapEncoder.getBufferedImage(timeChart), 30, 40, null);
         
@@ -826,6 +873,8 @@ public class ChartGenerator {
         XYChart costChart = new XYChartBuilder().width(500).height(350)
             .title("Cumulative BW Cost").xAxisTitle("Query").yAxisTitle("Cost ($)").build();
         costChart.getStyler().setMarkerSize(0);
+
+        costChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         costChart.addSeries("Cumulative BW Cost", x, data.getCumulativeBwCostList()).setLineColor(COLOR_TCDRM);
         g.drawImage(BitmapEncoder.getBufferedImage(costChart), 550, 40, null);
         
@@ -833,6 +882,8 @@ public class ChartGenerator {
         XYChart slaChart = new XYChartBuilder().width(500).height(350)
             .title("Cumulative SLA Violations").xAxisTitle("Query").yAxisTitle("Violations").build();
         slaChart.getStyler().setMarkerSize(0);
+
+        slaChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         slaChart.addSeries("SLA Violations", x, toDoubleList(data.getSlaViolations())).setLineColor(Color.RED);
         g.drawImage(BitmapEncoder.getBufferedImage(slaChart), 1070, 40, null);
         
@@ -840,6 +891,8 @@ public class ChartGenerator {
         XYChart replicaChart = new XYChartBuilder().width(500).height(350)
             .title("Replica Count").xAxisTitle("Query").yAxisTitle("Replicas").build();
         replicaChart.getStyler().setMarkerSize(0);
+
+        replicaChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         replicaChart.addSeries("Replicas", x, toDoubleList(data.getReplicaCount())).setLineColor(COLOR_QLEARNING);
         g.drawImage(BitmapEncoder.getBufferedImage(replicaChart), 30, 420, null);
         
@@ -852,6 +905,8 @@ public class ChartGenerator {
         XYChart compChart = new XYChartBuilder().width(500).height(350)
             .title("SLA Compliance Rate").xAxisTitle("Query").yAxisTitle("Compliance (%)").build();
         compChart.getStyler().setMarkerSize(0);
+
+        compChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         compChart.addSeries("Compliance", x, complianceRate).setLineColor(new Color(0, 128, 0));
         g.drawImage(BitmapEncoder.getBufferedImage(compChart), 550, 420, null);
         
@@ -886,6 +941,8 @@ public class ChartGenerator {
         XYChart popChart = new XYChartBuilder().width(750).height(380)
             .title("Normalized Popularity").xAxisTitle("Query").yAxisTitle("Normalized Popularity").build();
         popChart.getStyler().setMarkerSize(0);
+
+        popChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         popChart.addSeries("Popularity", x, normPop).setLineColor(COLOR_TCDRM);
         popChart.addSeries("Threshold", Arrays.asList(0, x.size()-1), Arrays.asList(1.0, 1.0)).setLineColor(Color.RED);
         g.drawImage(BitmapEncoder.getBufferedImage(popChart), 30, 40, null);
@@ -894,6 +951,8 @@ public class ChartGenerator {
         XYChart replicaChart = new XYChartBuilder().width(750).height(380)
             .title("Replica Creation Timeline").xAxisTitle("Query").yAxisTitle("Replicas").build();
         replicaChart.getStyler().setMarkerSize(0);
+
+        replicaChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         replicaChart.addSeries("Replicas", x, toDoubleList(data.getReplicaCount())).setLineColor(COLOR_QLEARNING);
         g.drawImage(BitmapEncoder.getBufferedImage(replicaChart), 810, 40, null);
         
@@ -901,6 +960,8 @@ public class ChartGenerator {
         XYChart timeChart = new XYChartBuilder().width(750).height(380)
             .title("Response Time & Replica Impact").xAxisTitle("Query").yAxisTitle("Time (ms)").build();
         timeChart.getStyler().setMarkerSize(0);
+
+        timeChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
         timeChart.addSeries("Response Time", x, smooth(data.getResponseTimeMs(), 20)).setLineColor(COLOR_TCDRM);
         g.drawImage(BitmapEncoder.getBufferedImage(timeChart), 30, 450, null);
         

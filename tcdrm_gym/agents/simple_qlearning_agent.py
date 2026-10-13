@@ -80,6 +80,7 @@ class SimpleQLearningAgent:
 
 		# Eligibility traces (Q(λ))
 		self.lambda_trace = float(lambda_trace)
+		self.optimistic_init = float(optimistic_init)
 		self.traces = np.zeros((n_states, n_actions)) if self.lambda_trace > 0 else None
         
 		# Statistiques
@@ -229,6 +230,10 @@ class SimpleQLearningAgent:
 			'epsilon_decay': self.epsilon_decay,
 			'use_double_q': self.use_double_q,
 			'adaptive_lr': self.adaptive_lr,
+			# Traces d'éligibilité et initialisation optimiste : sans elles, le benchmark
+			# (apprentissage online) poursuivait avec λ = 0, contrairement à l'entraînement.
+			'lambda_trace': self.lambda_trace,
+			'optimistic_init': self.optimistic_init,
 			'training_steps': self.training_steps,
 			'episodes_completed': self.episodes_completed,
 			'visit_counts': self.visit_counts,
@@ -257,6 +262,9 @@ class SimpleQLearningAgent:
 		self.epsilon_decay = data.get('epsilon_decay', 0.995)
 		self.use_double_q = data.get('use_double_q', False)
 		self.adaptive_lr = data.get('adaptive_lr', False)
+		self.lambda_trace = float(data.get('lambda_trace', self.lambda_trace))
+		self.optimistic_init = float(data.get('optimistic_init', self.optimistic_init))
+		self.traces = np.zeros((self.n_states, self.n_actions)) if self.lambda_trace > 0 else None
 		self.training_steps = data.get('training_steps', 0)
 		self.episodes_completed = data.get('episodes_completed', 0)
 		self.visit_counts = data.get('visit_counts', np.zeros((self.n_states, self.n_actions)))
