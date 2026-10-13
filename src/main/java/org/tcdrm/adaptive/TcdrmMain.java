@@ -218,6 +218,8 @@ public class TcdrmMain {
             ChartGenerator.generatePopularityAnalysis(rainbowSimple, "images/popularity_rainbow_simple.png", false);
             
             System.out.println("\n✅ Phase 2 complete: RL extension graphs generated (RL-2 to RL-7 + Metrics + Popularity)");
+
+            runSeedRobustness(bridge);
         } else {
             System.err.println("  Python client not connected. Phase 2 skipped.");
         }
@@ -225,6 +227,39 @@ public class TcdrmMain {
         printFooter();
     }
     
+    /**
+     * Robustesse des résultats : TCDRM et les deux agents rejoués sur plusieurs graines
+     * (bruit réseau de la simulation), chaque run repartant du modèle entraîné
+     * (resetCounters recharge les modèles). Exporte chaque run et la moyenne ± écart-type
+     * par stratégie : un écart entre stratégies inférieur à l'écart-type n'est pas
+     * significatif. Graines : TCDRM_EVAL_SEEDS (défaut 42..46 ; « 0 » désactive).
+     */
+    private static void runSeedRobustness(PythonRLBridge bridge) throws IOException {
+        String env = System.getenv().getOrDefault("TCDRM_EVAL_SEEDS", "42,43,44,45,46").trim();
+        if (env.isEmpty() || "0".equals(env)) return;
+        java.util.List<Long> seeds = new java.util.ArrayList<>();
+        for (String s : env.split(",")) if (!s.isBlank()) seeds.add(Long.parseLong(s.trim()));
+        System.out.println("\n━━━ ROBUSTESSE : " + seeds.size() + " graines " + seeds + " ━━━");
+
+        java.util.List<BenchmarkExporter.SeedRun> runs = new java.util.ArrayList<>();
+        for (long seed : seeds) {
+            for (boolean complex : new boolean[] {false, true}) {
+                String regime = complex ? "Complex" : "Simple";
+                runs.add(new BenchmarkExporter.SeedRun(seed, "TCDRM", regime,
+                    BenchmarkRunner.runTcdrm(seed, complex, "TCDRM_" + regime)));
+                bridge.resetCounters();
+                runs.add(new BenchmarkExporter.SeedRun(seed, "QLearning", regime,
+                    BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_" + regime, complex, seed)));
+                bridge.resetCounters();
+                runs.add(new BenchmarkExporter.SeedRun(seed, "Rainbow", regime,
+                    BenchmarkRunner.runRL(bridge, "rainbow", "Rainbow_" + regime, complex, seed)));
+                System.out.println("  graine " + seed + " / " + regime + " : terminé");
+            }
+        }
+        BenchmarkExporter.exportSeedSummaryCsv(runs, "metrics/summary_seeds.csv", "metrics/summary_seeds_agg.csv");
+        System.out.println("✅ Robustesse : metrics/summary_seeds.csv, metrics/summary_seeds_agg.csv");
+    }
+
     private static void printHeader(TcdrmMainArgs opts) {
         System.out.println("=".repeat(80));
         System.out.println("  TCDRM-ADAPTIVE — CloudSimPlus Simulation");

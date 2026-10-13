@@ -43,9 +43,13 @@ public class TrainingSettings {
     // Coût LINÉAIRE continu : pénalité proportionnelle au coût réel de chaque requête
     // (cQ/C_SLA), même SOUS le contrat — contrairement à rewardCostOver qui ne se
     // déclenche qu'en dépassement (inerte en simple où cQ < C_SLA en permanence).
-    // 0 par défaut (comportement historique) ; à activer PAR AGENT pour une politique
-    // qui priorise le coût (ex: Rainbow via --reward-cost-linear).
-    private double rewardCostLinear   =  0.0;
+    // Sans lui (ancien défaut 0), l'agent est indifférent au coût tant qu'il reste sous
+    // C_SLA : en régime établi, Q-Learning et Rainbow gardaient 12 réplicas en complexe
+    // pour un coût par requête +11 à +23 % au-dessus de TCDRM (5 réplicas), sans gain
+    // utile (latence déjà sous T_SLA). Poids = 0.3 × rewardSlaViol : même arbitrage
+    // coût / violation que les méta-contrôleurs (COST_LINEAR_WEIGHT = 0.3 face à un
+    // taux de violations de poids 1). Réglable par --reward-cost-linear.
+    private double rewardCostLinear   =  6.0;
     private double rewardReplCost     =  5.0;
     // Pénalités symétriques REPLICATE/DELETE prématurés : dissuadent d'agir sans pression SLA.
     // slaMargin ∈ [0,1] : 1 = loin de la violation (très prématuré), 0 = SLA violé (justifié).

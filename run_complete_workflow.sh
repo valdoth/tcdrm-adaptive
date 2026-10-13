@@ -222,7 +222,7 @@ if [ "$SKIP_TRAINING" = false ]; then
     echo "    Using CloudSimPlus for simulations"
     echo ""
 
-    # Reward IDENTIQUE à Q-Learning (défauts Java : rewardCostOver=15, rewardCostLinear=0).
+    # Reward IDENTIQUE à Q-Learning (défauts Java : rewardCostOver=15, rewardCostLinear=6).
     # Toute comparaison d'algorithmes doit se faire à iso-récompense — les anciens
     # overrides (--reward-cost-over 25 --reward-cost-linear 8) bridaient la réplication
     # de Rainbow et biaisaient le benchmark (convergence lente, plus de violations SLA).

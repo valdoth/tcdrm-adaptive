@@ -37,38 +37,11 @@ class PythonRLBridge:
         self._ql_model_path      = qlearning_model_path
         self._rainbow_model_path = rainbow_model_path
 
-        # ε=0 : protocole d'évaluation documenté (BenchmarkRunner) — exploitation greedy
-        # pure + apprentissage online continu. Toute exploration résiduelle en éval
-        # injecterait des actions aléatoires dans les courbes du benchmark.
-        self.qlearning_agent = SimpleQLearningAgent(
-            n_states=N_STATES,
-            n_actions=3,
-            learning_rate=0.15,
-            discount_factor=0.95,
-            epsilon_start=0.0,
-            epsilon_min=0.0,
-            epsilon_decay=1.0,
-            use_double_q=True,
-            adaptive_lr=True
-        )
-        if qlearning_model_path and os.path.exists(qlearning_model_path):
-            print(f"Loading Q-Learning model: {qlearning_model_path}")
-            self.qlearning_agent.load(qlearning_model_path)
-            self.qlearning_agent.epsilon = 0.0
-            stats = self.qlearning_agent.get_stats()
-            print(f"Q-Learning loaded (states explored: {stats['states_explored']}/{self.qlearning_agent.n_states})")
-        else:
-            print("Q-Learning: no trained model, using fresh agent")
-
-        # Même configuration que l'entraînement (make_rainbow_agent) ; load() restaure en
-        # plus l'état du scheduler (taux d'apprentissage) et l'avancement β du PER.
-        self.rainbow_agent = make_rainbow_agent()
-        if rainbow_model_path and os.path.exists(rainbow_model_path):
-            print(f"Loading Rainbow DQN model: {rainbow_model_path}")
-            self.rainbow_agent.load(rainbow_model_path)
-            print("Rainbow DQN loaded")
-        else:
-            print("Rainbow DQN: no trained model, using fresh agent")
+        # Apprentissage online pendant le benchmark (protocole du mémoire) ; 0 = politique
+        # FIGÉE, pour évaluer le modèle entraîné seul (TCDRM_EVAL_ONLINE=0).
+        self._online = os.environ.get("TCDRM_EVAL_ONLINE", "1") != "0"
+        self._load_models(verbose=True)
+        print(f"Évaluation : apprentissage online {'actif' if self._online else 'désactivé (politique figée)'}")
 
         self._ql_last_state    = None
         self._ql_last_action   = None
@@ -86,7 +59,38 @@ class PythonRLBridge:
         self._explorations = {"qlearning": 0, "rainbow": 0}
         print("Python bridge initialized")
 
+    def _load_models(self, verbose=False):
+        """(Re)charge les modèles ENTRAÎNÉS. Appelé avant chaque run du benchmark
+        (resetCounters) : chaque run évalue le modèle issu de l'entraînement, sans
+        hériter de l'apprentissage online d'un run précédent (simple → complexe,
+        graine précédente)."""
+        # ε=0 : exploitation greedy (exploration seulement en état nouveau, voir
+        # NOVEL_STATE_EPSILON) ; load() restaure α, γ, λ et l'init. optimiste.
+        self.qlearning_agent = SimpleQLearningAgent(
+            n_states=N_STATES, n_actions=3, epsilon_start=0.0, epsilon_min=0.0,
+            epsilon_decay=1.0, use_double_q=True, adaptive_lr=True)
+        if self._ql_model_path and os.path.exists(self._ql_model_path):
+            self.qlearning_agent.load(self._ql_model_path)
+            self.qlearning_agent.epsilon = 0.0
+            if verbose:
+                stats = self.qlearning_agent.get_stats()
+                print(f"Q-Learning loaded: {self._ql_model_path} "
+                      f"({stats['training_steps']} pas d'entraînement)")
+        elif verbose:
+            print("Q-Learning: no trained model, using fresh agent")
+        # Même configuration que l'entraînement (make_rainbow_agent) ; load() restaure en
+        # plus l'état du scheduler (taux d'apprentissage) et l'avancement β du PER.
+        self.rainbow_agent = make_rainbow_agent()
+        if self._rainbow_model_path and os.path.exists(self._rainbow_model_path):
+            self.rainbow_agent.load(self._rainbow_model_path)
+            if verbose:
+                print(f"Rainbow DQN loaded: {self._rainbow_model_path} "
+                      f"({self.rainbow_agent.update_count} pas de gradient)")
+        elif verbose:
+            print("Rainbow DQN: no trained model, using fresh agent")
+
     def resetCounters(self):
+        self._load_models()
         self._ql_last_state    = None
         self._ql_last_action   = None
         self._rainbow_last_state  = None
@@ -151,7 +155,7 @@ class PythonRLBridge:
             return 0
 
     def updateQLearning(self, reward, next_state_array, done):
-        if self._ql_last_state is None:
+        if self._ql_last_state is None or not self._online:
             return
         next_state = self._parse_state(next_state_array)
         next_discrete = self._discretize_state_for_qlearning(next_state)
@@ -164,7 +168,7 @@ class PythonRLBridge:
                 print(f"Q-Learning ep={self._ql_episode} eps={stats['epsilon']:.3f} explored={stats['states_explored']}")
 
     def updateRainbow(self, reward, next_state_array, done):
-        if self._rainbow_last_state is None:
+        if self._rainbow_last_state is None or not self._online:
             return
         next_state = self._parse_state(next_state_array)
         next_continuous = self._build_rainbow_state(next_state)

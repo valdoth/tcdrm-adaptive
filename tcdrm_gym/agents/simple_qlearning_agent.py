@@ -131,30 +131,26 @@ class SimpleQLearningAgent:
 		else:
 			alpha = self.alpha
 
-		# If using eligibility traces — Q(λ) avec support Double-Q cohérent
+		# Traces d'éligibilité — Q(λ), et Double Q(λ) quand use_double_q : une table tirée
+		# au hasard est mise à jour, l'autre évalue l'action qu'elle choisit (van Hasselt
+		# 2010), avec la même trace. L'ancienne version appliquait la MÊME correction aux
+		# deux tables (cible = moyenne), d'où Q_A == Q_B et un Double Q-learning inactif.
 		if self.lambda_trace > 0.0 and self.traces is not None:
 			# Accumulating traces
 			self.traces[state, action] += 1.0
-			# TD error — utilise la moyenne des deux tables pour le calcul de la cible
-			if done:
-				target_q = reward
-			else:
-				if self.use_double_q:
-					max_next = np.max((self.q_table_a[next_state] + self.q_table_b[next_state]) / 2.0)
+			if self.use_double_q:
+				upd, ev = (self.q_table_a, self.q_table_b) if self.rng.random() < 0.5 \
+					else (self.q_table_b, self.q_table_a)
+				if done:
+					target_q = reward
 				else:
-					max_next = np.max(self.q_table[next_state])
-				target_q = reward + self.gamma * max_next
-			if self.use_double_q:
-				current_q = (self.q_table_a[state, action] + self.q_table_b[state, action]) / 2.0
-			else:
-				current_q = self.q_table[state, action]
-			delta = target_q - current_q
-			# Appliquer les traces aux DEUX tables pour rester cohérent avec select_action
-			if self.use_double_q:
-				self.q_table_a += alpha * delta * self.traces
-				self.q_table_b += alpha * delta * self.traces
+					target_q = reward + self.gamma * ev[next_state, int(np.argmax(upd[next_state]))]
+				delta = target_q - upd[state, action]
+				upd += alpha * delta * self.traces
 				self.q_table = (self.q_table_a + self.q_table_b) / 2.0
 			else:
+				target_q = reward if done else reward + self.gamma * np.max(self.q_table[next_state])
+				delta = target_q - self.q_table[state, action]
 				self.q_table += alpha * delta * self.traces
 			# Decay traces
 			self.traces *= self.gamma * self.lambda_trace

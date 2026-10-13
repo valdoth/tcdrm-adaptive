@@ -101,8 +101,19 @@ public final class ThresholdMetaLearner {
      * violations. Ouvrir l'éligibilité sur des données qui ne sont pas encore populaires
      * crée des réplicas froids : ce terme rend ce coût visible au méta-contrôleur, qui
      * apprend lui-même à partir de quelle popularité l'ouverture est rentable.
+     * Réglable par TCDRM_META_COLD_WEIGHT (analyse de sensibilité) : la même valeur doit
+     * être utilisée à l'entraînement et au benchmark (variable héritée par les deux JVM).
      */
-    private static final double COLD_REPLICA_WEIGHT = 1.0;
+    private static final double COLD_REPLICA_WEIGHT = coldReplicaWeight();
+
+    private static double coldReplicaWeight() {
+        try {
+            return Math.max(0.0, Double.parseDouble(
+                System.getenv().getOrDefault("TCDRM_META_COLD_WEIGHT", "1.0")));
+        } catch (NumberFormatException e) {
+            return 1.0;
+        }
+    }
 
     private final double minValue;
     private final double maxValue;

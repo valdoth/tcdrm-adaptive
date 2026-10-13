@@ -113,6 +113,21 @@ n'existe pas physiquement pour certaines configurations (par exemple complexe sa
 - **États nouveaux au benchmark.** Le benchmark mesure la part de ses décisions prises
   dans des états vus à l'entraînement (`utils.state_coverage --benchmark-overlap`) ; dans
   un état jamais vu, l'agent explore avec probabilité 5 %.
+- **Sur-réplication.** En régime établi (requêtes 500 à 999), les agents payaient plus
+  cher par requête que TCDRM (complexe : 15,5 à 17,3 m$ contre 14,0 m$, 12 réplicas
+  contre 5) : la récompense ignorait le coût sous C_SLA (`rewardCostLinear = 0`). Poids
+  porté à 6 (= 0,3 × `rewardSlaViol`, même arbitrage que les méta-contrôleurs).
+- **Double Q-Learning inactif** (section 2) : corrigé, une table tirée au hasard est
+  mise à jour avec la valeur de l'autre (Q_A ≠ Q_B vérifié).
+- **Runs du benchmark dépendants.** L'apprentissage online du run simple se reportait sur
+  le run complexe. Chaque run recharge désormais le modèle entraîné ; `TCDRM_EVAL_ONLINE=0`
+  évalue la politique figée.
+- **Graine unique** (sections 2 et 3) : le benchmark rejoue TCDRM et les deux agents sur
+  5 graines (`TCDRM_EVAL_SEEDS`) et exporte `metrics/summary_seeds*.csv` (moyenne ±
+  écart-type). Le résumé du benchmark donne aussi les violations du T_SLA et du C_SLA du
+  contrat et la requête du premier réplica.
+- **Sensibilité du poids des réplicas froids** : réglable par `TCDRM_META_COLD_WEIGHT`
+  (même valeur à l'entraînement et au benchmark) ; à mesurer sur 2 ou 3 valeurs.
 
 ## 2. Entraînement
 
