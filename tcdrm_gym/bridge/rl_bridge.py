@@ -204,8 +204,11 @@ class PythonRLBridge:
         tracker = self._bench_coverage[agent]
         tracker.add(index)
         if tracker.counts.sum() % 1000 == 0:
-            tracker.save(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                       "models", f"{agent}_benchmark_coverage.npy"))
+            # TCDRM_COVERAGE_DIR : la validation écrit dans son propre dossier pour ne pas
+            # écraser la couverture du benchmark du workflow (tcdrm_gym/models).
+            out_dir = os.environ.get("TCDRM_COVERAGE_DIR") or os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
+            tracker.save(os.path.join(out_dir, f"{agent}_benchmark_coverage.npy"))
             print(f"{agent}: {int(tracker.counts.sum())} décisions de benchmark, "
                   f"{self._explorations[agent]} explorations en état nouveau", flush=True)
 

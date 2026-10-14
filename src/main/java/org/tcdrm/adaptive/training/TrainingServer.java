@@ -28,6 +28,9 @@ public class TrainingServer {
     // Q-tables de méta-seuils (meta_threshold_<tag>_*.qtable).
     private String agentTag = "shared";
     
+    // Mode évaluation courant, appliqué aussi aux environnements recréés.
+    private boolean evalMode = false;
+
     /**
      * Crée un nouvel environnement d'entraînement.
      * 
@@ -41,9 +44,11 @@ public class TrainingServer {
         saveRewardConfig();
         if (complex) {
             complexEnv = new TrainingEnvironment(seed, true, settings, agentTag);
+            complexEnv.setEvalMode(evalMode);
             return complexEnv;
         } else {
             simpleEnv = new TrainingEnvironment(seed, false, settings, agentTag);
+            simpleEnv.setEvalMode(evalMode);
             return simpleEnv;
         }
     }
@@ -75,6 +80,16 @@ public class TrainingServer {
     public void setDemoMode(boolean on) {
         if (simpleEnv != null) simpleEnv.setDemoMode(on);
         if (complexEnv != null) complexEnv.setDemoMode(on);
+    }
+
+    /**
+     * Active/désactive le mode évaluation sur les deux environnements : épisodes sans
+     * départ exploratoire, joués en greedy par Python pour choisir le meilleur modèle.
+     */
+    public void setEvalMode(boolean on) {
+        evalMode = on;
+        if (simpleEnv != null) simpleEnv.setEvalMode(on);
+        if (complexEnv != null) complexEnv.setEvalMode(on);
     }
     
     /**
@@ -258,6 +273,7 @@ public class TrainingServer {
         Object rViol = p.get("rewardSlaViol");        if (rViol instanceof Number n) settings.setRewardSlaViol(n.doubleValue());
         Object rCost = p.get("rewardCostOver");       if (rCost instanceof Number n) settings.setRewardCostOver(n.doubleValue());
         Object rCLin = p.get("rewardCostLinear");     if (rCLin instanceof Number n) settings.setRewardCostLinear(n.doubleValue());
+        Object rCStp = p.get("rewardCostViolStep");   if (rCStp instanceof Number n) settings.setRewardCostViolStep(n.doubleValue());
         Object rRepl = p.get("rewardReplCost");       if (rRepl instanceof Number n) settings.setRewardReplCost(n.doubleValue());
         Object rPrem = p.get("rewardPrematureRepl");   if (rPrem instanceof Number n) settings.setRewardPrematureRepl(n.doubleValue());
         Object rDel  = p.get("rewardPrematureDelete"); if (rDel  instanceof Number n) settings.setRewardPrematureDelete(n.doubleValue());

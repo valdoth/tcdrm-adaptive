@@ -44,6 +44,9 @@ public class TrainingEnvironment {
     // EXACTEMENT les mêmes règles que l'agent (seuil de popularité appris, même état) —
     // aucune transition de démonstration n'est impossible au benchmark.
     private boolean demoMode = false;
+    // Mode ÉVALUATION (sélection du meilleur modèle) : départ habituel, sans départ
+    // exploratoire — l'épisode mesure la politique sur la trajectoire du benchmark.
+    private boolean evalMode = false;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner popularityLearner;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaLearner;
     // Fenêtre ΔT de suppression (Paper Algorithm 3), apprise — fraction de P_SLA.
@@ -174,7 +177,7 @@ public class TrainingEnvironment {
         es = (es ^ (es >>> 27)) * 0x94D049BB133111EBL;
         es ^= (es >>> 31);
         java.util.Random esRnd = new java.util.Random(es);
-        boolean exploringStart = settings.getExploringStartProb() > 0.0
+        boolean exploringStart = !evalMode && settings.getExploringStartProb() > 0.0
             && esRnd.nextDouble() < settings.getExploringStartProb();
         if (exploringStart) simulation.applyExploringStart(esRnd);
         this.tSla = this.dynamicTSla;
@@ -261,7 +264,10 @@ public class TrainingEnvironment {
         if (action == 1 && !popularityEligible) action = 0;
         boolean canReplicate = popularityEligible && lastReplicaCount < maxReplicas
             && simulation.getCurrentBudget() > 0;
-        boolean canDelete = lastReplicaCount > 0;
+        // DELETE n'est possible que si un réplica est réellement supprimable (ΔT,
+        // Algorithm 3) : en charge stable, toutes les données répliquées restent
+        // accédées et DELETE était un NOOP silencieux annoncé comme valide.
+        boolean canDelete = simulation.canDeleteReplica();
         lastInvalidAction = (action == 1 && !canReplicate) || (action == 2 && !canDelete);
         lastAssignmentSuccess = !lastInvalidAction;
 
@@ -370,6 +376,9 @@ public class TrainingEnvironment {
         // inerte tant que cQ < C_SLA). 0 par défaut ; activé par agent pour une
         // politique qui priorise le coût.
         double costLinearPenalty = -settings.getRewardCostLinear() * cQ_norm;
+        // COST_VIOL : pénalité forfaitaire si la requête dépasse le C_SLA du contrat
+        // (miroir de la perte de SLA_OK sur la clause T_SLA).
+        double costViolPenalty = cQ_norm > 1.0 ? -settings.getRewardCostViolStep() : 0.0;
 
         // LOW_POPULARITY : pénalité proportionnelle à (1 - popularityScore) lors d'une réplication.
         // Enseigne à l'agent de ne pas répliquer avant que les données soient connues,
@@ -403,7 +412,11 @@ public class TrainingEnvironment {
             // CORRECT_TRIGGER continu : bonus proportionnel à la popularité observée quand
             // l'agent réplique sous violation SLA. Aucun seuil statique — combiné à
             // lowPopularityPenalty, le point de bascule net est APPRIS par l'agent.
-            boolean slaViolated = latency > tSla || result.totalCost() > cSla;
+            // T_SLA seul : dans ce simulateur, un dépassement du C_SLA ne vient que de la
+            // synchronisation des réplicas sur écriture (sans réplica, le coût reste sous
+            // le contrat) — répliquer l'aggrave. L'inclure récompensait chaque nouveau
+            // réplica créé pendant une écriture déjà hors contrat.
+            boolean slaViolated = latency > tSla;
             if (slaViolated) {
                 // Utilité MARGINALE décroissante : bonus plein pour les PREMIÈRES
                 // réplications (timing préservé), décroissant linéairement avec le taux
@@ -444,7 +457,7 @@ public class TrainingEnvironment {
         // Action invalide
         rewardInvalidAction = lastInvalidAction ? -settings.getRewardInvalid() : 0.0;
 
-        return rewardWaitTime + rewardQueuePenalty + costOverPenalty + costLinearPenalty
+        return rewardWaitTime + rewardQueuePenalty + costOverPenalty + costLinearPenalty + costViolPenalty
             + replCostPenalty + lowPopularityPenalty + prematureReplPenalty + prematureDeletePenalty
             + correctTriggerBonus + thrashPenalty + rewardUnutilization + unpopularHoldingPenalty
             + rewardInvalidAction;
@@ -514,7 +527,7 @@ public class TrainingEnvironment {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
         boolean canReplicate = simulation.isReplicationAllowed()
             && lastReplicaCount < maxReplicas && simulation.getCurrentBudget() > 0;
-        boolean canDelete = lastReplicaCount > 0;
+        boolean canDelete = simulation.canDeleteReplica();
         return new boolean[] { true, canReplicate, canDelete };
     }
 
@@ -600,6 +613,9 @@ public class TrainingEnvironment {
 
     /** Active le mode démonstration (warm-start DQfD, mêmes règles que l'agent). */
     public void setDemoMode(boolean on) { this.demoMode = on; }
+
+    /** Active le mode évaluation (pas de départ exploratoire). */
+    public void setEvalMode(boolean on) { this.evalMode = on; }
 
     public double getDynamicTSla() { return dynamicTSla; }
     /** Seuil de popularité adaptatif courant (P_SLA normalisé, appris — Sujet 1). */

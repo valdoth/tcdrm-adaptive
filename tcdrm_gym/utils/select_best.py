@@ -19,12 +19,12 @@ def find_best(logs_root: str) -> dict:
                 pass
     if not candidates:
         return {}
-    # Primary: highest best_avg10_reward
-    candidates.sort(key=lambda m: (m.get('best_avg10_reward', float('-inf'))), reverse=True)
+    # Primary: highest best score (évaluation greedy ; avg10 pour les anciens runs)
+    candidates.sort(key=_best_score, reverse=True)
     top = candidates[0]
     # Try to enrich with cost/sla if available
     mt = top.get('metrics_tail', {}) or {}
-    score = top.get('best_avg10_reward', 0)
+    score = _best_score(top)
     # Optionally penalize SLA violations and cost
     try:
         sla = float(mt.get('sla_violations', 0))
@@ -34,6 +34,10 @@ def find_best(logs_root: str) -> dict:
     except Exception:
         top['_score_adjusted'] = score
     return top
+
+
+def _best_score(meta):
+    return meta.get('best_greedy_eval_reward', meta.get('best_avg10_reward', float('-inf')))
 
 
 def main():
@@ -49,7 +53,7 @@ def main():
     print('Best model selection written to', out_path)
     print('Agent:', best.get('_agent'))
     print('From:', best.get('_log_dir'))
-    print('Score (avg10):', best.get('best_avg10_reward'))
+    print('Score:', _best_score(best))
     print('Adjusted:', best.get('_score_adjusted'))
     return 0
 

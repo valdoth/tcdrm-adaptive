@@ -9,7 +9,7 @@ public class QLearningEvaluation {
     private static final int TIMEOUT_SEC = 300;
 
     public static void main(String[] args) {
-        System.out.println("Begin simulation (Q-Learning: simple + complex, EMA)...");
+        System.out.println("Begin simulation (Q-Learning: simple + complex)...");
         try {
             // Reset config (defaults to EMA); no createArchitecture() needed
             TcdrmAdapter.initSimulation();

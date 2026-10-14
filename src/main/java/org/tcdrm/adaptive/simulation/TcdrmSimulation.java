@@ -837,6 +837,15 @@ public class TcdrmSimulation {
      * Éligibilité popularité (Paper Algorithm 1) : vrai si les données observées sont
      * suffisamment populaires pour autoriser une réplication.
      */
+    /**
+     * Vrai si une action DELETE supprimerait réellement un réplica : au moins un réplica
+     * a dépassé la fenêtre ΔT apprise et porte une donnée qui n'est plus accédée
+     * (Algorithm 3). Sinon DELETE est sans effet — le masque d'action le dit à l'agent.
+     */
+    public boolean canDeleteReplica() {
+        return currentReplicaCount > 0 && findDeletableReplicaIndex() >= 0;
+    }
+
     public boolean isReplicationAllowed() {
         return getPopularityScore() >= dynamicMinPopularity;
     }

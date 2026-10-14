@@ -50,6 +50,12 @@ public class TrainingSettings {
     // coût / violation que les méta-contrôleurs (COST_LINEAR_WEIGHT = 0.3 face à un
     // taux de violations de poids 1). Réglable par --reward-cost-linear.
     private double rewardCostLinear   =  6.0;
+    // Dépassement du C_SLA du contrat : pénalité FORFAITAIRE par requête qui dépasse,
+    // symétrique de la clause T_SLA (où l'agent perd toute la récompense SLA_OK, 10).
+    // Sans elle, un dépassement sur une écriture (synchronisation des réplicas) ne
+    // coûtait que rewardCostOver × excès ≈ 1.6 : l'agent gardait un réplica de trop et
+    // dépassait le C_SLA à presque chaque écriture (83 à 95 requêtes sur 1000).
+    private double rewardCostViolStep =  10.0;
     private double rewardReplCost     =  5.0;
     // Pénalités symétriques REPLICATE/DELETE prématurés : dissuadent d'agir sans pression SLA.
     // slaMargin ∈ [0,1] : 1 = loin de la violation (très prématuré), 0 = SLA violé (justifié).
@@ -106,6 +112,7 @@ public class TrainingSettings {
     public double getRewardSlaViol()           { return rewardSlaViol; }
     public double getRewardCostOver()          { return rewardCostOver; }
     public double getRewardCostLinear()        { return rewardCostLinear; }
+    public double getRewardCostViolStep()      { return rewardCostViolStep; }
     public double getRewardReplCost()          { return rewardReplCost; }
     public double getRewardPrematureRepl()     { return rewardPrematureRepl; }
     public double getRewardPrematureDelete()   { return rewardPrematureDelete; }
@@ -123,6 +130,7 @@ public class TrainingSettings {
     public void setRewardSlaViol(double v)            { rewardSlaViol         = Math.max(0, v); }
     public void setRewardCostOver(double v)           { rewardCostOver        = Math.max(0, v); }
     public void setRewardCostLinear(double v)         { rewardCostLinear      = Math.max(0, v); }
+    public void setRewardCostViolStep(double v)       { rewardCostViolStep    = Math.max(0, v); }
     public void setRewardReplCost(double v)           { rewardReplCost        = Math.max(0, v); }
     public void setRewardPrematureRepl(double v)      { rewardPrematureRepl   = Math.max(0, v); }
     public void setRewardPrematureDelete(double v)    { rewardPrematureDelete = Math.max(0, v); }
@@ -147,6 +155,7 @@ public class TrainingSettings {
         p.setProperty("rewardSlaViol",         Double.toString(rewardSlaViol));
         p.setProperty("rewardCostOver",        Double.toString(rewardCostOver));
         p.setProperty("rewardCostLinear",      Double.toString(rewardCostLinear));
+        p.setProperty("rewardCostViolStep",    Double.toString(rewardCostViolStep));
         p.setProperty("rewardReplCost",        Double.toString(rewardReplCost));
         p.setProperty("rewardPrematureRepl",   Double.toString(rewardPrematureRepl));
         p.setProperty("rewardPrematureDelete", Double.toString(rewardPrematureDelete));
@@ -180,6 +189,7 @@ public class TrainingSettings {
         s.rewardSlaViol         = parse(p, "rewardSlaViol",         s.rewardSlaViol);
         s.rewardCostOver        = parse(p, "rewardCostOver",        s.rewardCostOver);
         s.rewardCostLinear      = parse(p, "rewardCostLinear",      s.rewardCostLinear);
+        s.rewardCostViolStep    = parse(p, "rewardCostViolStep",    s.rewardCostViolStep);
         s.rewardReplCost        = parse(p, "rewardReplCost",        s.rewardReplCost);
         s.rewardPrematureRepl   = parse(p, "rewardPrematureRepl",   s.rewardPrematureRepl);
         s.rewardPrematureDelete = parse(p, "rewardPrematureDelete", s.rewardPrematureDelete);

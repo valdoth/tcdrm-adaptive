@@ -116,6 +116,11 @@ if [ -d "../tcdrm_gym/models" ]; then
   # Also keep _final variants for reference
   cp -f ../tcdrm_gym/models/qlearning_cloudsim_final.pkl models/ 2>/dev/null || true
   cp -f ../tcdrm_gym/models/rainbow_cloudsim_final.pt    models/ 2>/dev/null || true
+  # Couverture d'entraînement (<modèle>_coverage.npy) : le pont s'en sert pour explorer
+  # (ε = 5 %) dans les états jamais vus à l'entraînement, comme au benchmark. Sans elle,
+  # l'exploration des états nouveaux serait désactivée.
+  cp -f ../tcdrm_gym/models/qlearning_cloudsim_coverage.npy models/ 2>/dev/null || true
+  cp -f ../tcdrm_gym/models/rainbow_cloudsim_coverage.npy   models/ 2>/dev/null || true
   # Méta-Q-tables des seuils appris (Sujet 1) + configs de récompense PAR AGENT :
   # BenchmarkRunner les charge via le chemin RELATIF tcdrm_gym/models/ (depuis le CWD
   # = validation/), donc on réplique la structure ici. Sans elles, les seuils
@@ -145,6 +150,9 @@ fi
 # Clean previous RL-only outputs
 rm -f images/*.png 2>/dev/null || true
 rm -f metrics/rl_* metrics/summary_phase2_rl.csv 2>/dev/null || true
+# États rencontrés en validation : écrits ici, pas dans tcdrm_gym/models (benchmark)
+rm -f models/*_benchmark_coverage.npy 2>/dev/null || true
+export TCDRM_COVERAGE_DIR="$PWD/models"
 # keep log_overtime.csv as history
 
 # Compile validation runners at repo root (no subfolders)
@@ -202,6 +210,10 @@ case "$SCENARIO" in
     ;;
   *) echo "❌ Scénario inconnu: $SCENARIO (attendu: all|qlearning|dqn|comparison)"; exit 1 ;;
 esac
+
+printf "\n🧭 États de la validation vus à l'entraînement :\n"
+(cd ../tcdrm_gym && uv run python -m utils.state_coverage --benchmark-overlap "$TCDRM_COVERAGE_DIR") || true
+grep -E "explorations en état nouveau" /tmp/tcdrm_py4j.log | tail -2 || true
 
 printf "\n📊 Generated files:\n"
 echo "Images:"

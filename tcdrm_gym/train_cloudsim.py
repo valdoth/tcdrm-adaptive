@@ -226,31 +226,44 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 				f"ε: {stats['epsilon']:.3f} | Couverture: {coverage.coverage_pct():.1f}%{metrics_tail}"
 			)
         
-		if avg_reward > best_reward and episode >= 10:
-			best_reward = avg_reward
+		# Sélection seulement une fois l'exploration terminée (ε au minimum) : avant, la
+		# Q-table n'est qu'une ébauche — le run précédent retenait le modèle de l'épisode
+		# 99 (ε ≈ 0.92), bien noté sur 4 épisodes d'évaluation mais pas entraîné.
+		exploration_done = agent.epsilon <= agent.epsilon_min + 1e-9
+		if exploration_done and ((episode + 1) % EVAL_EVERY == 0 or episode == episodes - 1):
+			eval_reward = _greedy_eval(agent, env, env_complex, seed_base, 'qlearning')
+			print(f"  Évaluation greedy (épisode {episode}) : {eval_reward:.2f}")
+		else:
+			eval_reward = None
+		if eval_reward is not None and eval_reward > best_reward:
+			best_reward = eval_reward
 			agent.save(save_path)
+			# Couverture À LA DATE du modèle retenu : le pont s'en sert pour savoir quels
+			# états CE modèle a appris (exploration ε = 5 % ailleurs).
+			coverage.save(save_path.replace('.pkl', '_coverage.npy'))
 			# Save meta
 			best_meta = to_builtin({
 				'episode': episode,
-				'best_avg10_reward': best_reward,
+				'best_greedy_eval_reward': best_reward,
 				'epsilon': stats['epsilon'],
 				'states_explored': stats['states_explored'],
 				'metrics_tail': last_info if isinstance(last_info, dict) else {}
 			})
 			with open(os.path.join(log_dir, 'best_meta.json'), 'w') as f:
 				json.dump(best_meta, f, indent=2)
-			print(f"  💾 New best model saved (avg reward: {best_reward:.2f}) → {save_path}")
+			print(f"  💾 New best model saved (greedy eval: {best_reward:.2f}) → {save_path}")
     
 	final_path = save_path.replace('.pkl', '_final.pkl')
 	agent.save(final_path)
-	coverage.save(save_path.replace('.pkl', '_coverage.npy'))
+	coverage.save(save_path.replace('.pkl', '_final_coverage.npy'))
 	# Le chemin canonique (chargé par le benchmark) garde le MEILLEUR checkpoint
-	# (avg10) sauvé en cours d'entraînement — le final ne l'écrase plus : évaluer la
+	# (évaluation greedy) sauvé en cours d'entraînement — le final ne l'écrase plus : évaluer la
 	# photo de fin de run (souvent en plein creux d'exploration) rendait les runs
-	# courts trompeurs. Fallback : si aucun best n'a été sauvé (run < 10 épisodes),
+	# courts trompeurs. Fallback : si aucun best n'a été sauvé,
 	# le final sert de canonique.
 	if best_reward == float('-inf'):
 		agent.save(save_path)
+		coverage.save(save_path.replace('.pkl', '_coverage.npy'))
 
 	csv_logger.close()
 	if tb_writer is not None:
@@ -261,7 +274,7 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	print()
 	print("=" * 70)
 	print("TRAINING COMPLETE")
-	print(f"  Best avg reward: {best_reward:.2f}")
+	print(f"  Meilleure évaluation greedy: {best_reward:.2f}")
 	print(f"  Final epsilon: {agent.epsilon:.4f}")
 	print(f"  Couverture de la grille: {coverage.summary()}")
 	print(f"  Model saved to: {save_path}")
@@ -270,16 +283,67 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	return agent, rewards_history
 
 
+# Sélection du meilleur modèle : toutes les EVAL_EVERY épisodes, l'agent joue en greedy,
+# sans apprendre, EVAL_EPISODES épisodes fixes (moitié simple, moitié complexe) sans
+# départ exploratoire. La moyenne glissante des épisodes d'entraînement mélangeait
+# départs aléatoires, régimes et exploration : un « meilleur » modèle choisi sur elle
+# reflétait surtout des épisodes faciles.
+EVAL_EVERY = int(os.environ.get('TCDRM_EVAL_EVERY', '50'))
+EVAL_EPISODES = int(os.environ.get('TCDRM_EVAL_EPISODES', '4'))
+EVAL_SEED_OFFSET = 200000  # graines disjointes de l'entraînement et des démonstrations
+
+
+def _set_eval(env_obj, on):
+	if env_obj is None:
+		return
+	try:
+		env_obj._connect()
+		env_obj._server.setEvalMode(bool(on))
+	except Exception as e:
+		print(f"  (setEvalMode indisponible: {e})")
+
+
+def _greedy_eval(agent, env, env_complex, seed_base, kind):
+	"""Récompense moyenne de la politique greedy sur les épisodes d'évaluation fixes."""
+	_set_eval(env, True)
+	_set_eval(env_complex, True)
+	total = 0.0
+	try:
+		for k in range(EVAL_EPISODES):
+			use_complex = (env_complex is not None) and (k % 2 == 1)
+			active_env = env_complex if use_complex else env
+			state, info = active_env.reset(seed=seed_base + EVAL_SEED_OFFSET + k)
+			last_info = info
+			done = False
+			while not done:
+				mask = None
+				if isinstance(last_info, dict) and 'action_mask' in last_info:
+					mask = np.array(last_info['action_mask'], dtype=np.float32)
+				if kind == 'qlearning':
+					valid = None if mask is None else [i for i, m in enumerate(mask) if m]
+					action = agent.select_action(state, valid_actions=valid, training=False)
+				else:
+					action = agent.select_action(state, training=False, action_mask=mask)
+				state, reward, done, truncated, last_info = active_env.step(action)
+				total += reward
+	finally:
+		_set_eval(env, False)
+		_set_eval(env_complex, False)
+	return total / max(1, EVAL_EPISODES)
+
+
 def _tcdrm_demo_action(state, action_mask):
 	"""Heuristique de DÉMONSTRATION type TCDRM (Paper Algorithm 1) pour le warm-start :
-	répliquer quand le SLA est violé ET les données sont populaires ET la réplication est
+	répliquer quand le T_SLA est violé ET les données sont populaires ET la réplication est
 	possible ; supprimer si un réplica est inutile (SLA très confortable) ; sinon NOOP.
 	état : [0]lat/tSla [4]viol_tSla [5]viol_cSla [7]popularité [9]fraction_éligible.
 	"""
 	can_repl = action_mask is None or action_mask[1] > 0.5
 	can_del  = action_mask is not None and action_mask[2] > 0.5
 	lat_norm   = float(state[0])
-	viol       = float(state[4]) >= 0.5 or float(state[5]) >= 0.5 or lat_norm >= 1.0
+	# T_SLA seul (comme le bonus CORRECT_TRIGGER) : un dépassement du C_SLA vient de la
+	# synchronisation des réplicas, répliquer l'aggraverait.
+	viol       = float(state[4]) >= 0.5 or lat_norm >= 1.0
 	# Éligible dès qu'un fragment franchit le seuil courant (state[9]>0), OU données
 	# clairement populaires — démontre l'ouverture PRÉCOCE gagnante, pas seulement à 0.9.
 	eligible   = float(state[9]) > 0.0 or float(state[7]) >= 0.9
@@ -470,26 +534,33 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 				f" | Couverture: {coverage.coverage_pct():.1f}%{sigma_str}{metrics_tail}"
 			)
 
-		if avg_reward > best_reward and episode >= 10:
-			best_reward = avg_reward
+		if (episode + 1) % EVAL_EVERY == 0 or episode == episodes - 1:
+			eval_reward = _greedy_eval(agent, env, env_complex, seed_base, 'rainbow')
+			print(f"  Évaluation greedy (épisode {episode}) : {eval_reward:.2f}")
+		else:
+			eval_reward = None
+		if eval_reward is not None and eval_reward > best_reward:
+			best_reward = eval_reward
 			agent.save(save_path)
+			coverage.save(save_path.replace('.pt', '_coverage.npy'))  # couverture du modèle retenu
 			best_meta = to_builtin({
 				'episode': episode,
-				'best_avg10_reward': best_reward,
+				'best_greedy_eval_reward': best_reward,
 				'buffer': (len(agent.replay_buffers[0]) + len(agent.replay_buffers[1])),
 				'network': net_stats,
 				'metrics_tail': last_info if isinstance(last_info, dict) else {}
 			})
 			with open(os.path.join(log_dir, 'best_meta.json'), 'w') as f:
 				json.dump(best_meta, f, indent=2)
-			print(f"  New best model saved (avg reward: {best_reward:.2f}) -> {save_path}")
+			print(f"  New best model saved (greedy eval: {best_reward:.2f}) -> {save_path}")
 
 	final_path = save_path.replace('.pt', '_final.pt')
 	agent.save(final_path)
-	coverage.save(save_path.replace('.pt', '_coverage.npy'))
+	coverage.save(save_path.replace('.pt', '_final_coverage.npy'))
 	# Le canonique = MEILLEUR checkpoint (voir train_qlearning) ; final -> _final only.
 	if best_reward == float('-inf'):
 		agent.save(save_path)
+		coverage.save(save_path.replace('.pt', '_coverage.npy'))
 
 	csv_logger.close()
 	if tb_writer is not None:
@@ -500,7 +571,7 @@ def train_rainbow(env: CloudSimEnv, episodes: int, save_path: str, seed_base: in
 	print()
 	print("=" * 70)
 	print("RAINBOW TRAINING COMPLETE")
-	print(f"  Best avg reward: {best_reward:.2f}")
+	print(f"  Meilleure évaluation greedy: {best_reward:.2f}")
 	print(f"  Mode: {net_stats.get('mode', 'rainbow')}")
 	print(f"  Couverture de la grille (référence Q-Learning): {coverage.summary()}")
 	print(f"  Model saved to: {save_path}")
@@ -543,6 +614,8 @@ def main():
 	                    help='Poids du coût de détention (défaut 5) ; PLUS BAS = agent plus proactif, réplique plus tôt les données qui chauffent (profil par agent, pas un seuil)')
 	parser.add_argument('--reward-cost-linear', type=float, default=None,
 	                    help='Poids du coût linéaire continu (pénalité ∝ coût réel/C_SLA, même sous contrat) — priorise le coût')
+	parser.add_argument('--reward-cost-viol-step', type=float, default=None,
+	                    help='Pénalité forfaitaire par requête qui dépasse le C_SLA du contrat (défaut Java : 10)')
 	parser.add_argument('--reward-cost-over', type=float, default=None,
 					   help='Override rewardCostOver weight (default Java: 15.0) — plus élevé pénalise davantage le coût récurrent, encourage plus de réplication')
     
@@ -578,6 +651,8 @@ def main():
 			cfg['rewardCostOver'] = float(args.reward_cost_over)
 		if args.reward_cost_linear is not None:
 			cfg['rewardCostLinear'] = float(args.reward_cost_linear)
+		if args.reward_cost_viol_step is not None:
+			cfg['rewardCostViolStep'] = float(args.reward_cost_viol_step)
 		if args.reward_unpopular_holding is not None:
 			cfg['rewardUnpopularHolding'] = float(args.reward_unpopular_holding)
 		if args.reward_correct_trigger is not None:

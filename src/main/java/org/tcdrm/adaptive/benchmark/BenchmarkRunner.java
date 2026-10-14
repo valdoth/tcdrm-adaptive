@@ -146,7 +146,7 @@ public class BenchmarkRunner {
             boolean popularityEligible = sim.isReplicationAllowed();
             boolean canReplicate = popularityEligible && lastReplicaCount < maxReplicas
                 && sim.getCurrentBudget() > 0;
-            boolean canDelete = lastReplicaCount > 0;
+            boolean canDelete = sim.canDeleteReplica();  // miroir de TrainingEnvironment
 
             // Get action from Python RL bridge — le masque de validité (éligibilité
             // popularité + limites physiques) est transmis pour présenter à l'agent le
@@ -225,6 +225,7 @@ public class BenchmarkRunner {
      * Les poids proviennent de la configuration PERSISTÉE À L'ENTRAÎNEMENT de cet agent
      * ({@link TrainingSettings#loadRewardConfig}) — aucun poids codé en dur ici.
      *   R = r_slaOk·SLA_OK − r_slaViol·SLA_VIOL − r_costOver·COST_OVER(budgetUrgency)
+     *       − r_costLinear·COST_LINEAR − r_costViol·COST_VIOL
      *       − r_replCost·REPL_COST − r_premature·PREMATURE_REPL + r_correct·CORRECT_TRIGGER
      *       − r_thrash·THRASH − r_maint·MAINT − r_invalid·INVALID
      */
@@ -256,6 +257,8 @@ public class BenchmarkRunner {
         // COST_LINEAR (miroir de TrainingEnvironment) : coût réel de chaque requête,
         // même sous C_SLA — sensibilité continue au prix de la bande passante.
         double costLinearPenalty = -rw.getRewardCostLinear() * cQ_norm;
+        // COST_VIOL (miroir de TrainingEnvironment) : forfait par dépassement du C_SLA.
+        double costViolPenalty = cQ_norm > 1.0 ? -rw.getRewardCostViolStep() : 0.0;
 
         // REPL_COST, LOW_POPULARITY, PREMATURE_REPL, CORRECT_TRIGGER
         double popularityScore = sim.getPopularityScore();
@@ -282,7 +285,9 @@ public class BenchmarkRunner {
             // l'agent réplique sous violation SLA. Aucun seuil statique — combiné à
             // lowPopularityPenalty, le point de bascule net est APPRIS par
             // l'agent au lieu d'être imposé par un gate codé en dur.
-            boolean slaViolated = latency > tSla || result.totalCost() > cSla;
+            // T_SLA seul (miroir de TrainingEnvironment) : répliquer aggrave un
+            // dépassement du C_SLA dû à la synchronisation.
+            boolean slaViolated = latency > tSla;
             if (slaViolated) {
                 // Utilité marginale décroissante (miroir de TrainingEnvironment) :
                 // bonus plein pour les premières réplications, décroissant avec le
@@ -315,7 +320,7 @@ public class BenchmarkRunner {
         // Invalid action signal
         double rewardInvalidAction = lastAssignmentSuccess ? 0.0 : -rw.getRewardInvalid();
 
-        return rewardWaitTime + rewardQueuePenalty + costOverPenalty + costLinearPenalty
+        return rewardWaitTime + rewardQueuePenalty + costOverPenalty + costLinearPenalty + costViolPenalty
             + replCostPenalty + lowPopularityPenalty + prematureReplPenalty + prematureDeletePenalty
             + correctTriggerBonus + thrashPenalty + rewardUnutilization + unpopularHoldingPenalty
             + rewardInvalidAction;
