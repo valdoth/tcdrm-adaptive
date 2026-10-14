@@ -30,6 +30,10 @@ public class DataFragment {
     private final String[] replicaProviders = new String[MAX_REPLICAS];
     private final String[] replicaRegions   = new String[MAX_REPLICAS];
     private final int[]    queriesSinceRep  = new int[MAX_REPLICAS];
+    // Requêtes écoulées depuis que ce réplica a servi de SOURCE à une requête : un
+    // réplica que plus aucune requête ne lit (donnée refroidie, ou copie placée là où
+    // rien ne s'exécute) est inutile même si sa donnée reste accédée ailleurs.
+    private final int[]    queriesSinceUsed = new int[MAX_REPLICAS];
     private int replicaCount = 0;
 
     // Cooldown before re-creating a replica after deletion
@@ -76,6 +80,7 @@ public class DataFragment {
         replicaProviders[replicaCount] = provider;
         replicaRegions[replicaCount]   = region;
         queriesSinceRep[replicaCount]  = 0;
+        queriesSinceUsed[replicaCount] = 0;
         replicaCount++;
         return TcdrmConstants.replicationCost(sizeGb);
     }
@@ -93,11 +98,26 @@ public class DataFragment {
     }
 
     /**
+     * Supprime le réplica du slot {@code idx} (les slots suivants sont décalés).
+     */
+    public void deleteReplicaAt(int idx) {
+        if (idx < 0 || idx >= replicaCount) return;
+        for (int i = idx; i < replicaCount - 1; i++) {
+            replicaProviders[i] = replicaProviders[i + 1];
+            replicaRegions[i]   = replicaRegions[i + 1];
+            queriesSinceRep[i]  = queriesSinceRep[i + 1];
+            queriesSinceUsed[i] = queriesSinceUsed[i + 1];
+        }
+        deleteReplica();
+    }
+
+    /**
      * Incrémente le compteur de requêtes sur tous les réplicas actifs (pour warm-up).
      */
     public void incrementQueryCount() {
         for (int i = 0; i < replicaCount; i++) {
             queriesSinceRep[i]++;
+            queriesSinceUsed[i]++;
         }
         if (recreateCooldown > 0) recreateCooldown--;
     }
@@ -122,7 +142,8 @@ public class DataFragment {
      * @param usingReplica true si un réplica est sélectionné (meilleur que le primaire)
      * @param warmupEff   efficacité de warm-up du réplica sélectionné (0 si primaire)
      */
-    public record LocationChoice(String provider, String region, boolean usingReplica, double warmupEff) {}
+    public record LocationChoice(String provider, String region, boolean usingReplica, double warmupEff,
+                                 int replicaIndex, int usableReplicas) {}
 
     /**
      * Retourne la meilleure source (primaire ou réplica) pour servir la requête depuis
@@ -149,9 +170,17 @@ public class DataFragment {
 
         if (bestIdx >= 0) {
             double warmup = TcdrmConstants.warmupEfficiency(queriesSinceRep[bestIdx]);
-            return new LocationChoice(replicaProviders[bestIdx], replicaRegions[bestIdx], true, warmup);
+            // Partage de charge : seules les copies AUSSI proches que la source retenue
+            // peuvent servir cette lecture. Un réplica d'une autre région/d'un autre
+            // provider ne soulage pas le transfert vers ce site d'exécution.
+            int usable = 0;
+            for (int i = 0; i < replicaCount; i++) {
+                if (locationRank(replicaProviders[i], replicaRegions[i], execProvider, execRegion) == bestRank) usable++;
+            }
+            return new LocationChoice(replicaProviders[bestIdx], replicaRegions[bestIdx], true, warmup,
+                bestIdx, usable);
         }
-        return new LocationChoice(primaryProvider, primaryRegion, false, 0.0);
+        return new LocationChoice(primaryProvider, primaryRegion, false, 0.0, -1, 0);
     }
 
     /**
@@ -174,6 +203,17 @@ public class DataFragment {
     public int getQueriesSinceReplication() {
         if (replicaCount == 0) return 0;
         return queriesSinceRep[replicaCount - 1];
+    }
+
+    /** Âge (en requêtes) du réplica du slot {@code i}. */
+    public int getReplicaAge(int i) { return queriesSinceRep[i]; }
+
+    /** Requêtes écoulées depuis que le réplica du slot {@code i} a servi de source. */
+    public int getQueriesSinceUsed(int i) { return queriesSinceUsed[i]; }
+
+    /** Le réplica du slot {@code i} vient de servir de source à une requête. */
+    public void markReplicaUsed(int i) {
+        if (i >= 0 && i < replicaCount) queriesSinceUsed[i] = 0;
     }
 
     public boolean hasReplica()    { return replicaCount > 0; }
@@ -263,7 +303,10 @@ public class DataFragment {
 
     /** Marque tous les réplicas actifs comme déjà chauffés (départ exploratoire). */
     public void markReplicasWarm() {
-        for (int i = 0; i < replicaCount; i++) queriesSinceRep[i] = TcdrmConstants.WARMUP_QUERIES;
+        for (int i = 0; i < replicaCount; i++) {
+            queriesSinceRep[i] = TcdrmConstants.WARMUP_QUERIES;
+            queriesSinceUsed[i] = 0;
+        }
     }
 
     /** Nombre total d'accès depuis la création de cet épisode. */

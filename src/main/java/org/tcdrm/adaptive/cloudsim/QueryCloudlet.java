@@ -40,6 +40,7 @@ public class QueryCloudlet {
         int nJoins = nRelations - 1;
 
         double maxTransferMs = 0;
+        double servedByReplica = 0;   // Σ warmup des relations lues depuis un réplica
         double totalBwCost = 0;
         bwInterProviderGb = 0;
         bwInterRegionGb = 0;
@@ -58,13 +59,16 @@ public class QueryCloudlet {
                 effectiveDataGb, srcProvider, srcRegion, execProvider, execRegion, rnd);
 
             if (usingReplica) {
-                // Gain PROGRESSIF avec le nombre de réplicas du fragment (partage de
-                // charge entre copies) — Paper Fig 3 : le temps de réponse continue de
-                // baisser jusqu'au nombre max de réplicas, pas seulement au premier.
+                // Gain PROGRESSIF avec le nombre de copies du fragment qui peuvent
+                // servir CE site (partage de charge) — Paper Fig 3. Seules les copies
+                // aussi proches que la source retenue comptent : un réplica placé dans
+                // une région où rien ne s'exécute n'accélère pas cette lecture.
                 double gain = TcdrmConstants.REPLICA_TRANSFER_GAIN_FIRST
                     + TcdrmConstants.REPLICA_TRANSFER_GAIN_EXTRA
-                        * Math.max(0, fragment.getReplicaCount() - 1);
+                        * Math.max(0, loc.usableReplicas() - 1);
                 transferMs = transferMs * (1.0 - gain * warmupEff);
+                fragment.markReplicaUsed(loc.replicaIndex());
+                servedByReplica += warmupEff;
             }
 
             if (TcdrmConstants.PARALLEL_FETCH) {
@@ -88,20 +92,13 @@ public class QueryCloudlet {
 
         double joinFactor = nJoins * (nJoins + 1) / 2.0;
 
-        // Couverture réplicas : fraction du facteur de réplication max atteinte pour
-        // les relations de CETTE requête. La jointure accélère PROGRESSIVEMENT avec la
-        // couverture (données servies par des copies chaudes) — Paper Fig 3 : le temps
-        // de réponse décroît graduellement jusqu'au nombre max de réplicas, ce qui rend
-        // les stratégies (2 réplicas vs 6) distinguables sur les courbes.
-        int totalReplicas = fragments.stream().mapToInt(DataFragment::getReplicaCount).sum();
-        double coverage = (double) totalReplicas
-            / Math.max(1, nRelations * DataFragment.MAX_REPLICAS);
-        double avgWarmup = fragments.stream()
-            .filter(DataFragment::hasReplica)
-            .mapToDouble(DataFragment::getWarmupEfficiency)
-            .average()
-            .orElse(0.0);
-        double joinSpeedup = 1.0 - TcdrmConstants.JOIN_COVERAGE_SPEEDUP * coverage * avgWarmup;
+        // Couverture réplicas : fraction des relations de CETTE requête effectivement
+        // servies par une copie chaude. La jointure accélère PROGRESSIVEMENT avec la
+        // couverture — Paper Fig 3 : le temps de réponse décroît à mesure que les
+        // relations sont répliquées. Un réplica qui ne sert pas la requête (autre
+        // région, donnée non lue) ne compte pas : on mesure le service, pas le stock.
+        double coverage = servedByReplica / Math.max(1, nRelations);
+        double joinSpeedup = 1.0 - TcdrmConstants.JOIN_COVERAGE_SPEEDUP * coverage;
 
         double cpuJitter = 1.0 + TcdrmConstants.CPU_JITTER_RATIO * (rnd.nextDouble() * 2 - 1);
 

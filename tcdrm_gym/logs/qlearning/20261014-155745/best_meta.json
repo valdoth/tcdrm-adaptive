@@ -1,0 +1,29 @@
+{
+  "episode": 1449,
+  "best_greedy_eval_reward": 2115.6662458717055,
+  "epsilon": 0.050000000000000044,
+  "states_explored": 1458,
+  "metrics_tail": {
+    "last_latency_ms": 172.1258258255893,
+    "query": 1000,
+    "cumulative_reward": 2746.4940676680485,
+    "sla_violations": 26,
+    "cumulative_cost": 15.774237109915477,
+    "replica_count": 11,
+    "budget_remaining": 0.4068845405512765,
+    "reward_wait_time": 10.0,
+    "reward_unutilization": -0.11,
+    "reward_queue_penalty": -0.0,
+    "reward_invalid_action": 0.0,
+    "invalid_action_taken": false,
+    "assignment_success": true,
+    "replica_changes": 35,
+    "action_mask": [
+      true,
+      true,
+      true
+    ],
+    "dynamic_tsla": 400.0,
+    "dynamic_min_popularity": 0.30000000000000004
+  }
+}

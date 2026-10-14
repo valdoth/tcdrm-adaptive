@@ -127,10 +127,6 @@ public class BenchmarkRunner {
         double costRatioEma = 0.0;
         int lastReplicaCount = 0;
 
-        // Ring buffer for thrash detection (mirrors TrainingEnvironment)
-        int[] actionRing = new int[10];
-        int ringPos = 0;
-        int ringCount = 0;
 
         int maxQ = RuntimeConfig.getMaxQueries() != null ? RuntimeConfig.getMaxQueries() : TcdrmConstants.MAX_QUERIES;
         for (int q = 0; q < maxQ; q++) {
@@ -144,8 +140,7 @@ public class BenchmarkRunner {
             // Au-dessus du seuil, l'agent décide librement QUAND/COMBIEN répliquer.
             int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
             boolean popularityEligible = sim.isReplicationAllowed();
-            boolean canReplicate = popularityEligible && lastReplicaCount < maxReplicas
-                && sim.getCurrentBudget() > 0;
+            boolean canReplicate = sim.canCreateReplica();  // réplication utile possible
             boolean canDelete = sim.canDeleteReplica();  // miroir de TrainingEnvironment
 
             // Get action from Python RL bridge — le masque de validité (éligibilité
@@ -189,13 +184,8 @@ public class BenchmarkRunner {
             sim.setDynamicDeletionWindow(deletionWindowLearner.observeAndAdjust(violEma, costRatioEma));
             double tSla = dynTSla;
 
-            // Record action for thrash detection then compute reward
-            actionRing[ringPos % 10] = action;
-            ringPos++;
-            if (ringCount < 10) ringCount++;
-
             double reward = calculateReward(result, tSla, cSlaRef, action,
-                lastAssignmentSuccess, complex, actionRing, ringCount, sim, rw);
+                lastAssignmentSuccess, complex, sim, rw);
             double[] nextState = sim.buildRLState(lastLatency, lastCost, cSlaRef);
             boolean done = (q == maxQ - 1);
 
@@ -231,7 +221,6 @@ public class BenchmarkRunner {
      */
     private static double calculateReward(TcdrmSimulation.QueryResult result, double tSla, double cSla,
                                            int action, boolean lastAssignmentSuccess, boolean complex,
-                                           int[] actionRing, int ringCount,
                                            TcdrmSimulation sim, TrainingSettings rw) {
         double latency = result.queryTimeMs();
         int replicas = result.replicaCount();
@@ -299,15 +288,16 @@ public class BenchmarkRunner {
             }
         }
 
-        // PREMATURE_DELETE: symmetric penalty — prevents thrashing by penalising DELETE when SLA OK
+        // RISKY_DELETE (miroir de TrainingEnvironment) : pénalité croissante à
+        // l'approche de T_SLA, nulle quand la latence en est confortablement loin.
         double prematureDeletePenalty = 0.0;
         if (action == 2 && lastAssignmentSuccess) {
-            double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
-            prematureDeletePenalty = -rw.getRewardPrematureDelete() * slaMargin;
+            prematureDeletePenalty = -rw.getRewardPrematureDelete()
+                * Math.max(0.0, Math.min(1.0, (tQ_norm - (1.0 - slaMarginNorm)) / slaMarginNorm));
         }
 
-        // THRASH: penalise rapid alternation of REPLICATE/DELETE
-        double thrashPenalty = isRingThrashing(actionRing, ringCount) ? -rw.getRewardThrash() : 0.0;
+        // THRASH : oscillation création/suppression sur la MÊME donnée (miroir).
+        double thrashPenalty = sim.isThrashingThisQuery() ? -rw.getRewardThrash() : 0.0;
 
         // Light maintenance cost per active replica (aligned with training config)
         double rewardUnutilization = -rw.getRewardMaintenance() * replicas;
@@ -324,16 +314,6 @@ public class BenchmarkRunner {
             + replCostPenalty + lowPopularityPenalty + prematureReplPenalty + prematureDeletePenalty
             + correctTriggerBonus + thrashPenalty + rewardUnutilization + unpopularHoldingPenalty
             + rewardInvalidAction;
-    }
-
-    private static boolean isRingThrashing(int[] ring, int count) {
-        if (count < 6) return false;
-        int replicates = 0, deletes = 0;
-        for (int a : ring) {
-            if (a == 1) replicates++;
-            else if (a == 2) deletes++;
-        }
-        return replicates >= 2 && deletes >= 2;
     }
 
 }

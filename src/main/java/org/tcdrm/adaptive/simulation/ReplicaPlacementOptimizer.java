@@ -123,6 +123,10 @@ public class ReplicaPlacementOptimizer {
 
         Candidate best      = null;
         double    bestScore = Double.NEGATIVE_INFINITY;
+        // COUVRIR AVANT DE DOUBLER : un premier réplica d'un fragment non couvert passe
+        // devant tout second réplica (une requête lit ses relations en parallèle — la
+        // relation NON répliquée fixe la latence, une seconde copie ailleurs n'y change rien).
+        boolean bestCovers = false;
 
         for (DataFragment f : fragments) {
             if (!f.canAddReplica() || f.hasRecreateCooldown()) continue;
@@ -137,10 +141,16 @@ public class ReplicaPlacementOptimizer {
                     if (tp.equals(f.getPrimaryProvider()) && tr.equals(f.getPrimaryRegion())) continue;
                     if (f.hasReplicaAt(tp, tr)) continue;
 
-                    double s = computeScore(f, tp, tr, infra,
+                    double[] sc = computeScore(f, tp, tr, infra,
                         replicasPerProvider[pi], avgLoad, popularityFactor);
-                    if (s > bestScore) {
+                    // Un emplacement qui ne rapproche la donnée d'AUCUN site d'exécution
+                    // observé (copie existante déjà aussi proche) n'est jamais créé.
+                    if (sc[1] <= 1e-9) continue;
+                    double s = sc[0];
+                    boolean covers = !f.hasReplica();
+                    if ((covers && !bestCovers) || (covers == bestCovers && s > bestScore)) {
                         bestScore = s;
+                        bestCovers = covers;
                         best = new Candidate(f, tp, tr, s);
                     }
                 }
@@ -149,7 +159,8 @@ public class ReplicaPlacementOptimizer {
         return best;
     }
 
-    private double computeScore(
+    /** @return {score, gain de latence pondéré} — le gain seul sert de filtre d'utilité. */
+    private double[] computeScore(
         DataFragment f,
         String targetProvider, String targetRegion,
         MultiCloudInfrastructure infra,
@@ -171,13 +182,25 @@ public class ReplicaPlacementOptimizer {
                     ? (double) regionFreq[pi][ri] / totalExecCount
                     : 1.0 / N;
 
+                if (weight <= 0.0) continue;
+                // Gain MARGINAL : par rapport à la meilleure copie DÉJÀ disponible
+                // (primaire ou réplica existant) pour ce site, pas au seul primaire.
+                // Un second réplica proche d'une copie existante ne rapporte rien :
+                // couvrir un fragment non répliqué passe avant doubler un fragment couvert.
                 double latPrimary = infra.getLatencyMs(f.getPrimaryProvider(), f.getPrimaryRegion(), ep, er);
-                double latReplica = infra.getLatencyMs(targetProvider, targetRegion, ep, er);
-                weightedLatSaving += weight * Math.max(0.0, latPrimary - latReplica) / Math.max(1.0, latPrimary);
-
                 double costPrimary = infra.getBandwidthCostPerGb(f.getPrimaryProvider(), f.getPrimaryRegion(), ep, er);
+                double latCurrent = latPrimary, costCurrent = costPrimary;
+                for (int i = 0; i < f.getReplicaCount(); i++) {
+                    latCurrent = Math.min(latCurrent, infra.getLatencyMs(
+                        f.getReplicaProviderAt(i), f.getReplicaRegionAt(i), ep, er));
+                    costCurrent = Math.min(costCurrent, infra.getBandwidthCostPerGb(
+                        f.getReplicaProviderAt(i), f.getReplicaRegionAt(i), ep, er));
+                }
+                double latReplica = infra.getLatencyMs(targetProvider, targetRegion, ep, er);
+                weightedLatSaving += weight * Math.max(0.0, latCurrent - latReplica) / Math.max(1.0, latPrimary);
+
                 double costReplica = infra.getBandwidthCostPerGb(targetProvider, targetRegion, ep, er);
-                weightedCostSaving += weight * Math.max(0.0, costPrimary - costReplica) / Math.max(1e-9, costPrimary);
+                weightedCostSaving += weight * Math.max(0.0, costCurrent - costReplica) / Math.max(1e-9, costPrimary);
             }
         }
 
@@ -198,10 +221,11 @@ public class ReplicaPlacementOptimizer {
         double writeRatio = 1.0 - org.tcdrm.adaptive.core.TcdrmConstants.READ_WRITE_RATIO;
         double syncPenalty = syncCostNorm * writeRatio * 10.0; // ×10 : ramène le taux d'écriture (0.1) à l'échelle [0,1] des autres termes
 
-        return wLat * weightedLatSaving + wCost * weightedCostSaving
+        double score = wLat * weightedLatSaving + wCost * weightedCostSaving
              + wPop * popularityFactor
              - wSync * syncPenalty
              - wSat * loadPenalty;
+        return new double[]{score, weightedLatSaving};
     }
 
     /**

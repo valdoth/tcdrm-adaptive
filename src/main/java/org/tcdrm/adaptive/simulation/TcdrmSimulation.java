@@ -64,6 +64,13 @@ public class TcdrmSimulation {
     // neutre en steady. Un profil d'agent peut l'augmenter via setCostAwareRouting.
     private double costRoutingToleranceMs = 1.0;
 
+    // Anti-oscillation PAR DONNÉE (Eq. 3.24 corrigée) : derniers événements
+    // création/suppression {fragmentId, +1 création | −1 suppression}. Une oscillation
+    // est une création ET une suppression sur le MÊME fragment parmi les 10 derniers
+    // événements — deux opérations légitimes sur des fragments distincts ne comptent pas.
+    private final java.util.ArrayDeque<int[]> replicaEvents = new java.util.ArrayDeque<>();
+    private boolean thrashedThisQuery = false;
+
     // Sujet 2 : optimiseur multi-objectifs du placement de réplicas
     private final ReplicaPlacementOptimizer placementOptimizer;
     // Compteurs de réplicas par provider pour le scoring de saturation (Sujet 2)
@@ -389,13 +396,14 @@ public class TcdrmSimulation {
         // Appliqué ici, dans l'environnement, pour qu'aucun chemin (éval, entraînement,
         // warm-up aléatoire) ne puisse répliquer à popularité insuffisante.
         if (action == 1 && !isReplicationAllowed()) action = 0;
+        thrashedThisQuery = false;
 
         if (action == 1 && currentReplicaCount < maxReplicas && currentBudget > 0) {
             creationCost = createReplica();
             currentBudget -= creationCost;
         } else if (action == 2 && currentReplicaCount > 0) {
-            int idx = findDeletableReplicaIndex();
-            if (idx >= 0) deleteReplicaAtIndex(idx);
+            int[] idx = findDeletableReplica();
+            if (idx != null) deleteReplicaAt(idx[0], idx[1]);
         }
 
         fragments.stream().filter(DataFragment::hasReplica).forEach(DataFragment::incrementQueryCount);
@@ -463,7 +471,7 @@ public class TcdrmSimulation {
                         // Même gain progressif que QueryCloudlet.execute (cohérence du choix de site)
                         double gain = TcdrmConstants.REPLICA_TRANSFER_GAIN_FIRST
                             + TcdrmConstants.REPLICA_TRANSFER_GAIN_EXTRA
-                                * Math.max(0, frag.getReplicaCount() - 1);
+                                * Math.max(0, loc.usableReplicas() - 1);
                         t *= (1.0 - gain * loc.warmupEff());
                     }
                     siteTime = TcdrmConstants.PARALLEL_FETCH
@@ -585,9 +593,38 @@ public class TcdrmSimulation {
         if (cost > 0.0) {
             currentReplicaCount++;
             replicasPerProvider[providerIndex(c.provider())]++;
+            recordReplicaEvent(c.fragment().getId(), +1);
         }
         return cost;
     }
+
+    /**
+     * Vrai si une réplication UTILE est possible : un fragment éligible (popularité ≥
+     * seuil adaptatif) a un emplacement qui réduit réellement la latence par rapport
+     * à ses copies existantes. Sinon REPLICATE ne créerait rien — le masque d'action
+     * le dit à l'agent (miroir de {@link #canDeleteReplica()}).
+     */
+    public boolean canCreateReplica() {
+        return currentReplicaCount < TcdrmConstants.maxReplicasForQueryType(complex)
+            && currentBudget > 0 && isReplicationAllowed()
+            && placementOptimizer.selectBest(fragments, execProvider, execRegion, infrastructure,
+                   replicasPerProvider, dynamicMinPopularity) != null;
+    }
+
+    /** Enregistre une création (+1) ou suppression (−1) et détecte l'oscillation. */
+    private void recordReplicaEvent(int fragmentId, int type) {
+        for (int[] e : replicaEvents) {
+            if (e[0] == fragmentId && e[1] == -type) { thrashedThisQuery = true; break; }
+        }
+        replicaEvents.addLast(new int[]{fragmentId, type});
+        while (replicaEvents.size() > 10) replicaEvents.removeFirst();
+    }
+
+    /**
+     * Vrai si l'action de la requête courante a créé ou supprimé un réplica sur un
+     * fragment qui a subi l'opération inverse parmi les 10 derniers événements.
+     */
+    public boolean isThrashingThisQuery() { return thrashedThisQuery; }
 
     /**
      * Création de réplica de la référence TCDRM (Paper Algorithm 1) : seules les données
@@ -604,60 +641,54 @@ public class TcdrmSimulation {
         if (cost > 0.0) {
             currentReplicaCount++;
             replicasPerProvider[providerIndex(c.provider())]++;
+            recordReplicaEvent(c.fragment().getId(), +1);
         }
         return cost;
     }
 
     /**
-     * Trouve le fragment le MOINS populaire éligible à la suppression de réplica.
+     * Trouve le réplica à supprimer (Paper Algorithm 3, fenêtre ΔT apprise).
      *
-     * Règles d'éligibilité (ordre de priorité) :
-     * 1. Le fragment a un réplica actif.
-     * 2. La durée de vie minimale est dépassée (anti-oscillation).
-     * 3. Les données ne sont PAS encore activement utilisées (fenêtre glissante).
+     * Un réplica est supprimable quand il a vécu au moins ΔT requêtes (anti-oscillation)
+     * ET qu'il n'a servi de source à AUCUNE requête pendant les ΔT dernières requêtes :
+     * sa donnée a refroidi, ou il est placé là où plus rien ne s'exécute (dérive du
+     * hot-set). Le critère porte sur l'USAGE du réplica et non sur l'accès à la donnée :
+     * sous une popularité Zipf, toute donnée reste lue de temps en temps, ce qui
+     * bloquait toute suppression et laissait les réplicas obsolètes en place.
      *
-     * Parmi les fragments éligibles, on choisit celui dont le dernier accès est le
-     * plus ancien (le moins récemment utilisé = le moins populaire).
-     * Si AUCUN fragment éligible n'est trouvé (toutes les données sont encore utilisées),
-     * retourne -1 : la suppression est bloquée.
+     * Parmi les candidats, on retire celui inutilisé depuis le plus longtemps.
+     *
+     * @return {indexFragment, slotRéplica}, ou null si aucun réplica n'est supprimable
      */
-    private int findDeletableReplicaIndex() {
-        int bestIdx       = -1;
-        int oldestAccess  = Integer.MAX_VALUE;
-
+    private int[] findDeletableReplica() {
+        int[] best = null;
+        int longestIdle = -1;
         for (int i = 0; i < fragments.size(); i++) {
             DataFragment f = fragments.get(i);
-            if (!f.hasReplica()) continue;
-            // ΔT appris (Algorithm 3) : durée de vie minimale ET fenêtre de popularité
-            if (f.getQueriesSinceReplication() < dynamicDeletionWindowQueries) continue;
-            if (f.isStillPopular(queryCount, dynamicDeletionWindowQueries)) continue;
-
-            // Score deletion candidates: prefer falling trend + oldest access
-            // trend: -1=falling (prefer delete), 0=stable, +1=rising (avoid delete)
-            int trend = f.getPopularityTrend();
-            if (trend > 0) continue;  // never delete rising-popularity replicas
-
-            int lastAccess = f.getLastAccessedQuery();
-            // Encode: falling trend = very old access score, stable = normal
-            int effectiveAge = trend < 0 ? (lastAccess - 10000) : lastAccess;
-            if (effectiveAge < oldestAccess) {
-                oldestAccess = effectiveAge;
-                bestIdx = i;
+            for (int r = 0; r < f.getReplicaCount(); r++) {
+                if (f.getReplicaAge(r) < dynamicDeletionWindowQueries) continue;
+                int idle = f.getQueriesSinceUsed(r);
+                if (idle <= dynamicDeletionWindowQueries) continue;
+                if (idle > longestIdle) {
+                    longestIdle = idle;
+                    best = new int[]{i, r};
+                }
             }
         }
-        return bestIdx;
+        return best;
     }
 
-    private void deleteReplicaAtIndex(int idx) {
-        DataFragment f = fragments.get(idx);
-        String replicaProvider = f.getReplicaProvider();
-        f.deleteReplica();
+    private void deleteReplicaAt(int fragIdx, int slot) {
+        DataFragment f = fragments.get(fragIdx);
+        String replicaProvider = f.getReplicaProviderAt(slot);
+        f.deleteReplicaAt(slot);
         f.startRecreateCooldown(dynamicDeletionWindowQueries);
         currentReplicaCount--;
         if (replicaProvider != null) {
             int pi = providerIndex(replicaProvider);
             replicasPerProvider[pi] = Math.max(0, replicasPerProvider[pi] - 1);
         }
+        recordReplicaEvent(f.getId(), -1);
     }
 
     /**
@@ -810,6 +841,8 @@ public class TcdrmSimulation {
         this.currentBudget = TcdrmConstants.INITIAL_BUDGET;
         this.queryCount = 0;
         java.util.Arrays.fill(replicasPerProvider, 0);
+        replicaEvents.clear();
+        thrashedThisQuery = false;
         fragments.forEach(f -> {
             while (f.hasReplica()) f.deleteReplica();
             f.resetAccessStats();
@@ -839,11 +872,11 @@ public class TcdrmSimulation {
      */
     /**
      * Vrai si une action DELETE supprimerait réellement un réplica : au moins un réplica
-     * a dépassé la fenêtre ΔT apprise et porte une donnée qui n'est plus accédée
+     * a dépassé la fenêtre ΔT apprise et n'a servi aucune requête pendant ΔT
      * (Algorithm 3). Sinon DELETE est sans effet — le masque d'action le dit à l'agent.
      */
     public boolean canDeleteReplica() {
-        return currentReplicaCount > 0 && findDeletableReplicaIndex() >= 0;
+        return currentReplicaCount > 0 && findDeletableReplica() != null;
     }
 
     public boolean isReplicationAllowed() {

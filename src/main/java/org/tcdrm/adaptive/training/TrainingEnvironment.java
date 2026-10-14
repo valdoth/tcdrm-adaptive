@@ -63,10 +63,6 @@ public class TrainingEnvironment {
     private double rewardQueuePenalty;
     private double rewardInvalidAction;
 
-    // Action history ring buffer for thrash detection (last 10 actions)
-    private final int[] actionRingBuffer = new int[10];
-    private int actionRingPos = 0;
-    private int actionRingCount = 0;
 
     // Signal de stress lissé (EMA) pour la méta-adaptation des seuils (Sujet 1) :
     // observé et exploitable À CHAQUE REQUÊTE — aucune cadence fixe de décision.
@@ -195,9 +191,6 @@ public class TrainingEnvironment {
         this.rewardUnutilization = 0.0;
         this.rewardQueuePenalty = 0.0;
         this.rewardInvalidAction = 0.0;
-        this.actionRingPos = 0;
-        this.actionRingCount = 0;
-        java.util.Arrays.fill(actionRingBuffer, 0);
         this.violEma = 0.0;
         this.costRatioEma = 0.0;
         // Optional dynamic warmup before RL actions to avoid static starts
@@ -262,8 +255,9 @@ public class TrainingEnvironment {
         // appliquée dans executeRLQuery). Au-dessus du seuil, l'agent décide librement.
         boolean popularityEligible = simulation.isReplicationAllowed();
         if (action == 1 && !popularityEligible) action = 0;
-        boolean canReplicate = popularityEligible && lastReplicaCount < maxReplicas
-            && simulation.getCurrentBudget() > 0;
+        // REPLICATE n'est valide que si une réplication UTILE existe (fragment éligible
+        // avec un emplacement qui rapproche réellement la donnée) — sinon rien n'est créé.
+        boolean canReplicate = simulation.canCreateReplica();
         // DELETE n'est possible que si un réplica est réellement supprimable (ΔT,
         // Algorithm 3) : en charge stable, toutes les données répliquées restent
         // accédées et DELETE était un NOOP silencieux annoncé comme valide.
@@ -429,18 +423,19 @@ public class TrainingEnvironment {
             }
         }
 
-        // PREMATURE_DELETE : pénalité symétrique si on supprime un réplica quand SLA est OK.
-        // Corrige la spirale de thrashing : sans cette pénalité, l'agent supprime tout pour
-        // économiser le coût de maintenance, puis accumule des violations en masse.
+        // RISKY_DELETE : supprimer un réplica est risqué quand la latence est PROCHE de
+        // T_SLA (la marge de performance est déjà consommée) et sans risque quand elle
+        // en est loin. La pénalité croît donc avec la proximité du seuil : nulle sous
+        // (1 − marge)·T_SLA, pleine à T_SLA et au-delà — symétrique de SLA_OK.
         double prematureDeletePenalty = 0.0;
         if (action == 2 && lastAssignmentSuccess) {
-            double slaMargin = Math.max(0.0, 1.0 - tQ_norm);
-            prematureDeletePenalty = -settings.getRewardPrematureDelete() * slaMargin;
+            prematureDeletePenalty = -settings.getRewardPrematureDelete()
+                * Math.max(0.0, Math.min(1.0, (tQ_norm - (1.0 - slaMarginNorm)) / slaMarginNorm));
         }
 
-        // THRASH : pénalise les allers-retours rapides REPLICATE/DELETE
-        recordAction(action);
-        double thrashPenalty = isThrashing() ? -settings.getRewardThrash() : 0.0;
+        // THRASH : création ET suppression sur la MÊME donnée parmi les 10 derniers
+        // événements (oscillation par fragment, et non coexistence globale d'actions).
+        double thrashPenalty = simulation.isThrashingThisQuery() ? -settings.getRewardThrash() : 0.0;
 
         // Maintenance : coût léger par réplica actif (encourage la parcimonie)
         rewardUnutilization = -settings.getRewardMaintenance() * replicas;
@@ -468,24 +463,6 @@ public class TrainingEnvironment {
         return TcdrmConstants.maxReplicasForQueryType(complex);
     }
 
-    /** Records action into ring buffer for thrash detection. */
-    private void recordAction(int action) {
-        actionRingBuffer[actionRingPos % 10] = action;
-        actionRingPos++;
-        if (actionRingCount < 10) actionRingCount++;
-    }
-
-    /** Returns true if last 10 actions contain ≥2 REPLICATEs and ≥2 DELETEs. */
-    private boolean isThrashing() {
-        if (actionRingCount < 6) return false;
-        int replicates = 0, deletes = 0;
-        for (int a : actionRingBuffer) {
-            if (a == 1) replicates++;
-            else if (a == 2) deletes++;
-        }
-        return replicates >= 2 && deletes >= 2;
-    }
-    
     /**
      * Retourne le nombre de requêtes exécutées.
      */
@@ -525,8 +502,7 @@ public class TrainingEnvironment {
     /** Masque d'actions valides: [noop, replicate, delete] */
     public boolean[] getActionMask() {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-        boolean canReplicate = simulation.isReplicationAllowed()
-            && lastReplicaCount < maxReplicas && simulation.getCurrentBudget() > 0;
+        boolean canReplicate = simulation.canCreateReplica();
         boolean canDelete = simulation.canDeleteReplica();
         return new boolean[] { true, canReplicate, canDelete };
     }
