@@ -1,0 +1,7 @@
+strategy,regime,seeds,cost_mean,cost_std,tsla_viol_mean,tsla_viol_std,csla_viol_mean,csla_viol_std,replicas_mean,replicas_std,first_replica_mean,creations_mean,creations_std,deletions_mean,deletions_std,thrash_mean,thrash_std,unused_cost_mean,unused_cost_std
+TCDRM,Simple,5,5.435938,0.072643,189.4,2.792848,1,0,2,0,199,2,0,0,0,0,0,0,0
+QLearning,Simple,5,5.435938,0.072643,189.4,2.792848,0.2,0.447214,2,0,200,2,0,0,0,0,0,0,0
+Rainbow,Simple,5,5.435938,0.072643,189.4,2.792848,0.2,0.447214,2,0,200,2,0,0,0,0,0,0,0
+TCDRM,Complex,5,17.409054,0.120079,204,0,0,0,5,0,199,5,0,0,0,0,0,0,0
+QLearning,Complex,5,29.202294,0.016208,988.8,2.48998,0,0,1,0,330,1,0,0,0,0,0,0,0
+Rainbow,Complex,5,17.409054,0.120079,204,0,0,0,5,0,200,5,0,0,0,0,0,0,0

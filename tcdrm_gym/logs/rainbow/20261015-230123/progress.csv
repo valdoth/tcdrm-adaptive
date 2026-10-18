@@ -1,0 +1,2 @@
+episode,reward,avg10,buffer,avg_noisy_sigma,grid_coverage_pct,sla_violations,cumulative_cost,replica_count,budget_remaining,reward_wait_time,reward_unutilization,reward_queue_penalty,reward_invalid_action,avg_loss,dynamic_tsla,dynamic_min_popularity
+0,-7856.616227925418,-7856.616227925418,15130,0.01955296751111746,2.5377229080932784,800,7.846195583017405,2,52.15380441698259,0.0,-0.02,-1.7479259474538589,0.0,0.5745372357964516,190.0,0.9038822042196115
