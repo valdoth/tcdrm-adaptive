@@ -3,7 +3,7 @@ Diagnostic de couverture de l'espace d'états (Q-Learning et Rainbow DQN).
 
 Fait jouer une politique (aléatoire, Q-Learning ou Rainbow) dans le simulateur Java et
 mesure :
-  - la couverture de la grille discrète de 1944 états (référence commune aux deux agents,
+  - la couverture de la grille discrète de 1458 états (référence commune aux deux agents,
     via CloudSimQLearningEnv._discretize_state) ;
   - la distribution de chaque dimension de l'état continu (11 dims) ;
   - pour un modèle Q-Learning, la couverture issue de ses compteurs de visites
@@ -38,7 +38,7 @@ DIM_NAMES = ["latence", "budget", "réplicas", "coût", "viol_T", "viol_C",
 
 
 def grid_report(counts: np.ndarray) -> dict:
-	"""Couverture de la grille de 1944 états à partir d'un vecteur de visites par état."""
+	"""Couverture de la grille de 1458 états à partir d'un vecteur de visites par état."""
 	visited = counts > 0
 	idx = np.arange(N_STATES) % COMPLEX_OFFSET
 	per_dim = {}
