@@ -34,6 +34,13 @@ public class DataFragment {
     // réplica que plus aucune requête ne lit (donnée refroidie, ou copie placée là où
     // rien ne s'exécute) est inutile même si sa donnée reste accédée ailleurs.
     private final int[]    queriesSinceUsed = new int[MAX_REPLICAS];
+    // Vrai dès que le réplica a servi au moins une lecture (mesure du coût inutile).
+    private final boolean[] everUsed = new boolean[MAX_REPLICAS];
+    // Fenêtre ΔT ENGAGÉE à la création du réplica (TTL fixé à l'insertion) : le
+    // méta-contrôleur peut changer ΔT à chaque requête, mais un réplica existant garde
+    // la fenêtre sous laquelle il a été créé — une baisse momentanée de ΔT ne rend pas
+    // supprimables d'un coup des réplicas qui viennent d'être payés.
+    private final int[]    committedWindow = new int[MAX_REPLICAS];
     private int replicaCount = 0;
 
     // Cooldown before re-creating a replica after deletion
@@ -76,11 +83,21 @@ public class DataFragment {
      * @return le coût de création du réplica, ou 0 si aucun slot libre.
      */
     public double createReplica(String provider, String region) {
+        return createReplica(provider, region, 0);
+    }
+
+    /**
+     * Crée un réplica en lui engageant la fenêtre ΔT de suppression en vigueur.
+     * @return le coût de création du réplica, ou 0 si aucun slot libre.
+     */
+    public double createReplica(String provider, String region, int deletionWindow) {
         if (replicaCount >= MAX_REPLICAS) return 0.0;
+        committedWindow[replicaCount]  = Math.max(0, deletionWindow);
         replicaProviders[replicaCount] = provider;
         replicaRegions[replicaCount]   = region;
         queriesSinceRep[replicaCount]  = 0;
         queriesSinceUsed[replicaCount] = 0;
+        everUsed[replicaCount] = false;
         replicaCount++;
         return TcdrmConstants.replicationCost(sizeGb);
     }
@@ -107,6 +124,8 @@ public class DataFragment {
             replicaRegions[i]   = replicaRegions[i + 1];
             queriesSinceRep[i]  = queriesSinceRep[i + 1];
             queriesSinceUsed[i] = queriesSinceUsed[i + 1];
+            everUsed[i]         = everUsed[i + 1];
+            committedWindow[i]  = committedWindow[i + 1];
         }
         deleteReplica();
     }
@@ -119,6 +138,15 @@ public class DataFragment {
             queriesSinceRep[i]++;
             queriesSinceUsed[i]++;
         }
+    }
+
+    /**
+     * Décompte le cooldown de re-création — à CHAQUE requête pour TOUS les fragments :
+     * appelé seulement sur les fragments ayant encore un réplica (ancien comportement),
+     * le cooldown d'un fragment dont on vient de supprimer le DERNIER réplica ne
+     * décroissait plus, et ce fragment ne pouvait plus jamais être répliqué.
+     */
+    public void tickRecreateCooldown() {
         if (recreateCooldown > 0) recreateCooldown--;
     }
 
@@ -208,13 +236,22 @@ public class DataFragment {
     /** Âge (en requêtes) du réplica du slot {@code i}. */
     public int getReplicaAge(int i) { return queriesSinceRep[i]; }
 
+    /** Fenêtre ΔT engagée à la création du réplica du slot {@code i}. */
+    public int getCommittedWindow(int i) { return committedWindow[i]; }
+
     /** Requêtes écoulées depuis que le réplica du slot {@code i} a servi de source. */
     public int getQueriesSinceUsed(int i) { return queriesSinceUsed[i]; }
 
     /** Le réplica du slot {@code i} vient de servir de source à une requête. */
     public void markReplicaUsed(int i) {
-        if (i >= 0 && i < replicaCount) queriesSinceUsed[i] = 0;
+        if (i >= 0 && i < replicaCount) {
+            queriesSinceUsed[i] = 0;
+            everUsed[i] = true;
+        }
     }
+
+    /** Vrai si le réplica du slot {@code i} a servi au moins une lecture. */
+    public boolean wasReplicaUsed(int i) { return i >= 0 && i < replicaCount && everUsed[i]; }
 
     public boolean hasReplica()    { return replicaCount > 0; }
     public boolean canAddReplica() { return replicaCount < MAX_REPLICAS; }

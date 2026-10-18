@@ -64,11 +64,12 @@ class CloudSimEnv(gym.Env):
         
 		# Espaces d'action et d'observation
 		self.action_space = spaces.Discrete(3)  # NOOP, REPLICATE, DELETE
-		# 11 dims : les 9 historiques + [9] fraction de fragments eligibles et
-		# [10] popularite moyenne du pool (structure de popularite par element).
+		# 13 dims : les 9 historiques + [9] fraction de fragments eligibles,
+		# [10] popularite moyenne du pool, [11] relations servies par un replica et
+		# [12] tendance (la donnee la plus populaire chauffe).
 		self.observation_space = spaces.Box(
-			low=np.zeros(11, dtype=np.float32),
-			high=np.array([5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+			low=np.zeros(13, dtype=np.float32),
+			high=np.array([5.0, 5.0, 5.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
 			dtype=np.float32,
 		)
         
@@ -300,8 +301,8 @@ class CloudSimQLearningEnv(CloudSimEnv):
 	"""
 	Environnement CloudSim avec états discrets pour Q-Learning.
 
-	L'état continu (9 dimensions) est discrétisé en 1458 états (3^6 × 2).
-	Dimensions : RT, COST, PROGRESS, BUD, NET, GAIN, COMPLEX.
+	L'état continu est discrétisé en 1944 états (3^5 × 4 × 2).
+	Dimensions : RT, COST, SLA, BUD, COV, GAIN, COMPLEX (voir envs/state_grid.py).
 
 	GAIN (popularityScore, dim 7) encode la popularité normalisée des données [0,1].
 	0.0 au query 0 (données inconnues), 1.0 quand P_SLA atteint (query 200+).
@@ -314,7 +315,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 	def __init__(self, port: int = 25335, complex: bool = False, seed: int = None, config: dict | None = None):
 		super().__init__(port=port, complex=complex, seed=seed, config=config)
 
-		# Espace d'observation discret pour Q-Learning : 3^6 × 2 = 1458 états
+		# Espace d'observation discret pour Q-Learning : 3^5 × 4 × 2 = 1944 états
 		self.observation_space = spaces.Discrete(N_STATES)
 
 	def _discretize_state(self, state: np.ndarray) -> int:
@@ -325,9 +326,11 @@ class CloudSimQLearningEnv(CloudSimEnv):
 	def reset(self, seed=None, options=None):
 		"""Reset et retourne l'état discret."""
 		obs, info = super().reset(seed=seed, options=options)
+		self.last_obs = obs   # état continu, lu par l'heuristique de démonstration
 		return self._discretize_state(obs), info
     
 	def step(self, action: int):
 		"""Step et retourne l'état discret."""
 		obs, reward, terminated, truncated, info = super().step(action)
+		self.last_obs = obs
 		return self._discretize_state(obs), reward, terminated, truncated, info

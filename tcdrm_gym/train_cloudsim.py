@@ -95,7 +95,7 @@ def to_builtin(obj):
 
 
 def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, seed_base: int = 42,
-                     env_complex: CloudSimQLearningEnv = None):
+                     env_complex: CloudSimQLearningEnv = None, demo_episodes: int = 20):
 	"""
 	Entraîne un agent Q-Learning unique sur un mélange de requêtes simples et complexes :
 	les épisodes pairs utilisent `env` (simple), les impairs `env_complex` (si fourni).
@@ -147,6 +147,14 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 	except Exception:
 		tb_writer = None
     
+	# Warm-start par démonstrations TCDRM (DQfD-lite), comme Rainbow. Sans elles, en
+	# complexe, Q-Learning ne voyait presque jamais la suite de ~5 réplications qui fait
+	# baisser la latence (ε = 5 % en fin d'entraînement) : un réplica isolé ne sert à
+	# rien, il apprenait REPLICATE < NOOP et attendait la popularité 1,0 (200 accès).
+	# Mesuré au benchmark (graine 42, politique figée) : répliquer dès que possible
+	# donne une récompense cumulée de +4658 contre −5166 pour la politique apprise.
+	_run_demonstrations(agent, env, env_complex, demo_episodes, seed_base, None)
+
 	coverage = CoverageTracker()
 	for episode in range(episodes):
 		use_complex = (env_complex is not None) and (episode % 2 == 1)
@@ -379,6 +387,8 @@ def _run_demonstrations(agent, env, env_complex, demo_episodes, seed_base, max_e
 			use_complex = (env_complex is not None) and (d % 2 == 1)
 			active_env = env_complex if use_complex else env
 			state, info = active_env.reset(seed=seed_base + 100000 + d)  # seeds disjointes du train
+			if hasattr(agent, "start_episode"):
+				agent.start_episode()
 			last_info = info
 			done = False
 			while not done:
@@ -388,7 +398,8 @@ def _run_demonstrations(agent, env, env_complex, demo_episodes, seed_base, max_e
 						mask = np.array(last_info['action_mask'], dtype=np.float32)
 					except Exception:
 						mask = None
-				action = _tcdrm_demo_action(state, mask)
+				# Q-Learning : l'heuristique lit l'état CONTINU, l'agent apprend sur l'état discret.
+				action = _tcdrm_demo_action(getattr(active_env, "last_obs", state), mask)
 				next_state, reward, done, truncated, info = active_env.step(action)
 				agent.update(state, action, reward, next_state, done)  # apprend de la démo
 				state = next_state

@@ -107,6 +107,23 @@ public class BenchmarkData {
     public List<Integer> getSlaViolations() { return slaViolations; }
     public List<Double> getAvgBwPrice() { return avgBwPrice; }
     public int getTotalSlaViolations() { return totalSlaViolations; }
+
+    // Stabilité des décisions et coût inutile des réplicas (résultats attendus du Sujet 1)
+    private int replicaCreations = 0;
+    private int replicaDeletions = 0;
+    private int thrashEvents = 0;
+    private double unusedReplicaCost = 0.0;
+
+    public void setReplicaStats(int creations, int deletions, int thrash, double unusedCost) {
+        this.replicaCreations = creations;
+        this.replicaDeletions = deletions;
+        this.thrashEvents = thrash;
+        this.unusedReplicaCost = unusedCost;
+    }
+    public int getReplicaCreations() { return replicaCreations; }
+    public int getReplicaDeletions() { return replicaDeletions; }
+    public int getThrashEvents() { return thrashEvents; }
+    public double getUnusedReplicaCost() { return unusedReplicaCost; }
     public List<Double> getCpuCostPerQuery() { return cpuCostPerQuery; }
     public List<Double> getReplicaCostPerQuery() { return replicaCostPerQuery; }
     public List<Double> getTotalCostPerQuery() { return totalCostPerQuery; }

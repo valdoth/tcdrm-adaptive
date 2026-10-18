@@ -33,6 +33,8 @@ public class BenchmarkRunner {
             );
         }
 
+        data.setReplicaStats(sim.getReplicaCreations(), sim.getReplicaDeletions(),
+            sim.getThrashEvents(), sim.getUnusedReplicaCost());
         return data;
     }
 
@@ -62,6 +64,8 @@ public class BenchmarkRunner {
             );
         }
 
+        data.setReplicaStats(sim.getReplicaCreations(), sim.getReplicaDeletions(),
+            sim.getThrashEvents(), sim.getUnusedReplicaCost());
         return data;
     }
 
@@ -94,19 +98,30 @@ public class BenchmarkRunner {
         double cumulCost = 0;
         double lastLatency = 0;
         double lastCost = 0;
-        // CSLA contractuel (budget du locataire, Paper Table 1) — STATIQUE, jamais ajusté.
+        // CSLA contractuel (budget du locataire, Paper Table 1) — jamais dépassé : signal de
+        // stress et comptage des violations. Le C_SLA INTERNE (état, récompense) est appris
+        // sous ce contrat par un méta-contrôleur (Sujet 1, axe 4).
         double cSlaRef = complex ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
+        // TCDRM_EVAL_ONLINE=0 : politique FIGÉE (audit 4.4) — ni l'agent (côté Python) ni
+        // les méta-contrôleurs ne mettent à jour leur politique pendant l'évaluation.
+        boolean online = !"0".equals(System.getenv("TCDRM_EVAL_ONLINE"));
+        // TCDRM_ABLATION_NO_META=1 : ablation (audit 5.6) — seuils fixés à leur valeur
+        // initiale (contrat ; plancher pour la popularité), méta-contrôleurs ignorés ;
+        // isole leur part dans le gain des agents.
+        boolean noMeta = "1".equals(System.getenv("TCDRM_ABLATION_NO_META"));
         // Seuils adaptatifs (Sujet 1) : méta-contrôleurs Q-learning ENTRAÎNÉS, PAR AGENT —
         // chaque modèle recharge SES Q-tables (apprises pendant son propre entraînement),
         // donc sa propre politique de seuil et son propre moment de déclenchement.
         // ε=0 : exploitation greedy + apprentissage online continu pendant le run.
-        // Les seuils repartent des valeurs CONTRACTUELLES (1.0).
+        // Les seuils repartent des valeurs CONTRACTUELLES (1.0), sauf la popularité qui
+        // repart du plancher P_SLA (voir ThresholdMetaLearner.withoutFidelity).
         double contractTSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
         org.tcdrm.adaptive.rl.ThresholdMetaLearner popLearner =
             org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
                 TcdrmConstants.metaQtableFile(modelType, "pop", complex),
-                1.0, 0.0, 1.0, TcdrmConstants.META_POPULARITY_RESOLUTION, 0.0,
-                seed ^ modelType.hashCode(), TcdrmConstants.META_POPULARITY_BUCKETS);
+                TcdrmConstants.META_POPULARITY_MIN, TcdrmConstants.META_POPULARITY_MIN, 1.0,
+                TcdrmConstants.META_POPULARITY_RESOLUTION, 0.0,
+                seed ^ modelType.hashCode(), TcdrmConstants.META_POPULARITY_BUCKETS).withoutFidelity();
         org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaMetaLearner =
             org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
                 TcdrmConstants.metaQtableFile(modelType, "tsla", complex),
@@ -119,20 +134,34 @@ public class BenchmarkRunner {
                 1.0, TcdrmConstants.META_DELETION_WINDOW_MIN, 1.0,
                 TcdrmConstants.META_DELETION_WINDOW_RESOLUTION, 0.0,
                 (seed ^ modelType.hashCode()) ^ 0x51ED270CL);
+        org.tcdrm.adaptive.rl.ThresholdMetaLearner cslaMetaLearner =
+            org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
+                TcdrmConstants.metaQtableFile(modelType, "csla", complex),
+                1.0, TcdrmConstants.META_CSLA_MIN_MULTIPLIER, 1.0,
+                TcdrmConstants.META_CSLA_RESOLUTION, 0.0,
+                (seed ^ modelType.hashCode()) ^ 0x3C6EF372L);
+        for (org.tcdrm.adaptive.rl.ThresholdMetaLearner m : java.util.List.of(
+                popLearner, tslaMetaLearner, deletionWindowLearner, cslaMetaLearner)) {
+            m.setLearning(online);
+        }
         double dynTSla = contractTSla;
+        double dynCSla = cSlaRef;
+        // Seuils initiaux (aussi ceux de l'ablation sans méta-contrôleurs).
+        sim.setDynamicThresholds(dynTSla, popLearner.getValue());
         // Signal de stress lissé (EMA) — observé à CHAQUE requête, aucune cadence fixe :
         // le moment d'un changement de seuil est déterminé par la politique apprise de
         // CET agent (mêmes dynamiques que TrainingEnvironment).
         double violEma = 0.0;
         double costRatioEma = 0.0;
+        double churnEma = 0.0;
         int lastReplicaCount = 0;
 
 
         int maxQ = RuntimeConfig.getMaxQueries() != null ? RuntimeConfig.getMaxQueries() : TcdrmConstants.MAX_QUERIES;
         for (int q = 0; q < maxQ; q++) {
-            // État normalisé par le CSLA contractuel statique (le budget restant est déjà
-            // une dimension d'état séparée : state[1]).
-            double[] state = sim.buildRLState(lastLatency, lastCost, cSlaRef);
+            // État normalisé par le C_SLA interne appris (comme à l'entraînement) ; le
+            // budget restant est une dimension d'état séparée : state[1].
+            double[] state = sim.buildRLState(lastLatency, lastCost, dynCSla);
 
             // Determine action validity (mirrors TrainingEnvironment.step() / getActionMask()).
             // Éligibilité popularité (Paper Algorithm 1) : la réplication n'est possible que
@@ -177,16 +206,22 @@ public class BenchmarkRunner {
             violEma = (1.0 - alpha) * violEma + alpha * (lastLatency > dynTSla ? 1.0 : 0.0);
             costRatioEma = (1.0 - alpha) * costRatioEma
                 + alpha * (lastCost / Math.max(1e-9, cSlaRef));
-            double minPop = popLearner.observeAndAdjust(violEma, costRatioEma,
-                sim.getPopularityScore(), Math.min(1.0, sim.getUnpopularReplicaLoad() / maxReplicas));
-            dynTSla = contractTSla * tslaMetaLearner.observeAndAdjust(violEma, costRatioEma);
-            sim.setDynamicThresholds(dynTSla, minPop);
-            sim.setDynamicDeletionWindow(deletionWindowLearner.observeAndAdjust(violEma, costRatioEma));
+            churnEma = (1.0 - alpha) * churnEma + alpha * (sim.isThrashingThisQuery() ? 1.0 : 0.0);
+            if (!noMeta) {
+                double minPop = popLearner.observeAndAdjust(violEma, costRatioEma,
+                    sim.getPopularityScore(), Math.min(1.0, sim.getUnpopularReplicaLoad() / maxReplicas));
+                dynTSla = contractTSla * tslaMetaLearner.observeAndAdjust(violEma, costRatioEma);
+                dynCSla = cSlaRef * cslaMetaLearner.observeAndAdjust(violEma, costRatioEma);
+                sim.setDynamicThresholds(dynTSla, minPop);
+                sim.setDynamicDeletionWindow(
+                    deletionWindowLearner.observeAndAdjust(violEma, costRatioEma, 0.0, churnEma));
+            }
             double tSla = dynTSla;
 
-            double reward = calculateReward(result, tSla, cSlaRef, action,
+            double reward = calculateReward(result, tSla, dynCSla, action,
                 lastAssignmentSuccess, complex, sim, rw);
-            double[] nextState = sim.buildRLState(lastLatency, lastCost, cSlaRef);
+
+            double[] nextState = sim.buildRLState(lastLatency, lastCost, dynCSla);
             boolean done = (q == maxQ - 1);
 
             if ("qlearning".equals(modelType)) {
@@ -207,6 +242,8 @@ public class BenchmarkRunner {
         }
 
         System.out.println("      " + modelType.toUpperCase() + " terminé (adaptive online)");
+        data.setReplicaStats(sim.getReplicaCreations(), sim.getReplicaDeletions(),
+            sim.getThrashEvents(), sim.getUnusedReplicaCost());
         return data;
     }
 
@@ -256,8 +293,10 @@ public class BenchmarkRunner {
         double prematureReplPenalty = 0.0;
         double correctTriggerBonus = 0.0;
         if (action == 1 && lastAssignmentSuccess) {
+            // REPLICATE crée plusieurs réplicas en une décision (miroir) : coût par réplica créé.
+            int created = Math.max(1, sim.getLastCreatedCount());
             double dataGb = TcdrmConstants.queryDataSizeGb(complex);
-            replCostPenalty = -rw.getRewardReplCost() * (dataGb * TcdrmConstants.COST_BW_INTER_PROVIDER)
+            replCostPenalty = -rw.getRewardReplCost() * created * (dataGb * TcdrmConstants.COST_BW_INTER_PROVIDER)
                 / Math.max(1.0, TcdrmConstants.INITIAL_BUDGET);
 
             lowPopularityPenalty = -rw.getRewardLowPopularity() * (1.0 - popularityScore);
@@ -281,7 +320,7 @@ public class BenchmarkRunner {
                 // Utilité marginale décroissante (miroir de TrainingEnvironment) :
                 // bonus plein pour les premières réplications, décroissant avec le
                 // remplissage — l'agent s'arrête près de l'optimum au lieu de saturer.
-                double fillBefore = Math.max(0, replicas - 1)
+                double fillBefore = Math.max(0, replicas - created)
                     / (double) TcdrmConstants.maxReplicasForQueryType(complex);
                 correctTriggerBonus = rw.getRewardCorrectTrigger() * popularityScore
                     * (1.0 - fillBefore);

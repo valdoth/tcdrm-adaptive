@@ -28,6 +28,7 @@ public class QueryCloudlet {
     private double ioCost;
     private double bwInterProviderGb;
     private double bwInterRegionGb;
+    private double servedFraction;
 
     public QueryCloudlet(int queryId, boolean complex, List<DataFragment> fragments) {
         this.queryId = queryId;
@@ -41,6 +42,7 @@ public class QueryCloudlet {
 
         double maxTransferMs = 0;
         double servedByReplica = 0;   // Σ warmup des relations lues depuis un réplica
+        int servedCount = 0;          // relations lues depuis un réplica
         double totalBwCost = 0;
         bwInterProviderGb = 0;
         bwInterRegionGb = 0;
@@ -69,6 +71,7 @@ public class QueryCloudlet {
                 transferMs = transferMs * (1.0 - gain * warmupEff);
                 fragment.markReplicaUsed(loc.replicaIndex());
                 servedByReplica += warmupEff;
+                servedCount++;
             }
 
             if (TcdrmConstants.PARALLEL_FETCH) {
@@ -98,6 +101,7 @@ public class QueryCloudlet {
         // relations sont répliquées. Un réplica qui ne sert pas la requête (autre
         // région, donnée non lue) ne compte pas : on mesure le service, pas le stock.
         double coverage = servedByReplica / Math.max(1, nRelations);
+        this.servedFraction = (double) servedCount / Math.max(1, nRelations);
         double joinSpeedup = 1.0 - TcdrmConstants.JOIN_COVERAGE_SPEEDUP * coverage;
 
         double cpuJitter = 1.0 + TcdrmConstants.CPU_JITTER_RATIO * (rnd.nextDouble() * 2 - 1);
@@ -130,6 +134,9 @@ public class QueryCloudlet {
         double totalDataGb = nRelations * TcdrmConstants.AVG_RELATION_SIZE_GB * TcdrmConstants.QUERY_SELECTIVITY;
         this.ioCost = totalDataGb * TcdrmConstants.IO_COST_PER_GB;
     }
+
+    /** Fraction des relations de la requête lues depuis un réplica. */
+    public double getServedFraction() { return servedFraction; }
 
     public int getQueryId() { return queryId; }
     public boolean isComplex() { return complex; }

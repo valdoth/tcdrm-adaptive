@@ -43,6 +43,7 @@ public class TcdrmSimulation {
     // Toute réplication RL sous ce seuil est convertie en NOOP : les données
     // non populaires ne sont JAMAIS répliquées.
     private double dynamicMinPopularity = 1.0;
+    private int lastCreatedCount = 0;
 
     // Fenêtre d'observation ΔT de suppression (Paper Algorithm 3), en NOMBRE DE
     // REQUÊTES — apprise par méta-contrôleur (fraction de P_SLA). Unifie durée de
@@ -64,12 +65,25 @@ public class TcdrmSimulation {
     // neutre en steady. Un profil d'agent peut l'augmenter via setCostAwareRouting.
     private double costRoutingToleranceMs = 1.0;
 
-    // Anti-oscillation PAR DONNÉE (Eq. 3.24 corrigée) : derniers événements
-    // création/suppression {fragmentId, +1 création | −1 suppression}. Une oscillation
-    // est une création ET une suppression sur le MÊME fragment parmi les 10 derniers
-    // événements — deux opérations légitimes sur des fragments distincts ne comptent pas.
+    // Anti-oscillation PAR RÉPLICA (Eq. 3.24 corrigée) : derniers événements
+    // création/suppression {fragmentId, emplacement, +1 création | −1 suppression}. Une
+    // oscillation est une création ET une suppression du MÊME réplica (même fragment, même
+    // emplacement) parmi les 10 derniers événements — des opérations sur des fragments
+    // distincts, ou le déplacement d'une copie vers un autre site, ne comptent pas.
     private final java.util.ArrayDeque<int[]> replicaEvents = new java.util.ArrayDeque<>();
     private boolean thrashedThisQuery = false;
+    // Stabilité et coût inutile (résultats attendus du Sujet 1) : créations, suppressions,
+    // oscillations (création/suppression inverse sur le même fragment) et coût des
+    // réplicas supprimés sans avoir jamais servi une lecture.
+    private int replicaCreations = 0;
+    private int replicaDeletions = 0;
+    private int thrashEvents = 0;
+    private double deletedUnusedReplicaCost = 0.0;
+
+    // Fraction des relations de la DERNIÈRE requête servies par un réplica (état RL [11]) :
+    // dit à l'agent si ses réplicas couvrent les données lues — un réplica de plus ne
+    // peut aider que si une partie de la requête est encore lue depuis un primaire distant.
+    private double lastServedFraction = 0.0;
 
     // Sujet 2 : optimiseur multi-objectifs du placement de réplicas
     private final ReplicaPlacementOptimizer placementOptimizer;
@@ -87,6 +101,10 @@ public class TcdrmSimulation {
      */
     public TcdrmSimulation(long seed, boolean complex, ReplicaPlacementOptimizer optimizer) {
         this.placementOptimizer = optimizer != null ? optimizer : new ReplicaPlacementOptimizer();
+        // Les poids multi-objectifs persistent entre épisodes, mais l'historique des sites
+        // d'exécution est propre à l'épisode : le benchmark part toujours d'un historique
+        // vide, l'entraînement doit placer les réplicas dans les mêmes conditions.
+        this.placementOptimizer.resetExecutionHistory();
         this.infrastructure = new MultiCloudInfrastructure();
         this.rnd = new Random(seed);
         this.complex = complex;
@@ -192,6 +210,17 @@ public class TcdrmSimulation {
             fragments.get(i).seedAccessHistory(queryCount, accesses, gap, lambda);
         }
 
+        // Une fois sur deux, les réplicas sont placés pour le site d'exécution de la
+        // requête courante, comme le ferait une politique ayant déjà répliqué au bon
+        // endroit : états à latence basse, coût bas et budget élevé que le benchmark
+        // atteint après réplication et que l'exploration seule visite rarement.
+        if (r.nextBoolean()) {
+            String[] site = findOptimalExecSite(selectFragmentsForQuery(queryCount));
+            this.execProvider = site[0];
+            this.execRegion = site[1];
+            placementOptimizer.recordExecution(site[0], site[1]);
+        }
+
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
         int half = (maxReplicas + 1) / 2;   // premier nombre de réplicas ≥ la moitié du maximum
         int level = r.nextInt(3);
@@ -200,12 +229,21 @@ public class TcdrmSimulation {
               : half + r.nextInt(maxReplicas - half + 1);
         for (int i = 0; i < k; i++) {
             ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
-                fragments, execProvider, execRegion, infrastructure, replicasPerProvider, 0.0);
-            if (c == null || c.fragment().createReplica(c.provider(), c.region()) <= 0.0) break;
+                fragments, execProvider, execRegion, infrastructure, replicasPerProvider, 0.0, 0);
+            if (c == null || c.fragment().createReplica(c.provider(), c.region(), dynamicDeletionWindowQueries) <= 0.0) break;
             currentReplicaCount++;
             replicasPerProvider[providerIndex(c.provider())]++;
         }
         fragments.forEach(DataFragment::markReplicasWarm);
+        lastServedFraction = estimateServedFraction(selectFragmentsForQuery(queryCount));
+    }
+
+    /** Fraction des relations {@code active} qu'un réplica servirait depuis le site optimal. */
+    private double estimateServedFraction(List<DataFragment> active) {
+        String[] site = findOptimalExecSite(active);
+        int served = 0;
+        for (DataFragment f : active) if (f.bestSourceLocation(site[0], site[1]).usingReplica()) served++;
+        return (double) served / Math.max(1, active.size());
     }
 
     /** Valeur uniforme dans l'un des trois intervalles [a,b), [b,c), [c,d], choisi avec probabilité 1/3. */
@@ -303,6 +341,7 @@ public class TcdrmSimulation {
         double[] sync = syncReplicasOnWrite(active); // toujours [0,0,0] : pas de réplicas
         QueryCloudlet query = new QueryCloudlet(queryCount, complex, active);
         query.execute(infrastructure, optSite[0], optSite[1], rnd);
+        lastServedFraction = query.getServedFraction();
 
         QueryResult result = new QueryResult(
             queryCount,
@@ -332,6 +371,7 @@ public class TcdrmSimulation {
         int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
 
         fragments.stream().filter(DataFragment::hasReplica).forEach(DataFragment::incrementQueryCount);
+        fragments.forEach(DataFragment::tickRecreateCooldown);
 
         List<DataFragment> active = selectFragmentsForQuery(queryCount);
         final int qIdxTcdrm = queryCount;
@@ -345,6 +385,7 @@ public class TcdrmSimulation {
         double[] sync = syncReplicasOnWrite(active);
         QueryCloudlet query = new QueryCloudlet(queryCount, complex, active);
         query.execute(infrastructure, optSite[0], optSite[1], rnd);
+        lastServedFraction = query.getServedFraction();
 
         double maintenanceCost = currentReplicaCount * TcdrmConstants.REPLICA_MAINTENANCE_COST_PER_QUERY;
         double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
@@ -386,6 +427,15 @@ public class TcdrmSimulation {
      * Au-dessus du seuil, l'agent décide librement : la reward et l'état [7]
      * (popularityScore) lui enseignent le bon moment et le bon nombre de réplicas.
      *
+     * REPLICATE est une décision COMPLÈTE : elle crée en une fois tous les réplicas utiles
+     * des données populaires (même optimiseur, même filtre d'utilité, dans la limite du
+     * maximum et du budget). L'agent décide QUAND répliquer, l'optimiseur OÙ et COMBIEN.
+     * Avec un réplica par décision, la couverture d'une requête complexe demandait ~5
+     * REPLICATE consécutifs dont les états intermédiaires se confondent dans la grille
+     * de Q-Learning (« une partie des relations servies ») : Q-Learning y apprenait
+     * REPLICATE < NOOP et attendait le déclenchement de TCDRM (requête 200), alors que
+     * répliquer dès que permis rapporte plus (+4658 contre −5166, graine 42).
+     *
      * @param action 0=NOOP, 1=REPLICATE, 2=DELETE
      */
     public QueryResult executeRLQuery(int action) {
@@ -398,15 +448,21 @@ public class TcdrmSimulation {
         if (action == 1 && !isReplicationAllowed()) action = 0;
         thrashedThisQuery = false;
 
+        lastCreatedCount = 0;
         if (action == 1 && currentReplicaCount < maxReplicas && currentBudget > 0) {
-            creationCost = createReplica();
-            currentBudget -= creationCost;
+            double c;
+            while (currentReplicaCount < maxReplicas && currentBudget > 0 && (c = createReplica()) > 0.0) {
+                creationCost += c;
+                currentBudget -= c;
+                lastCreatedCount++;
+            }
         } else if (action == 2 && currentReplicaCount > 0) {
             int[] idx = findDeletableReplica();
             if (idx != null) deleteReplicaAt(idx[0], idx[1]);
         }
 
         fragments.stream().filter(DataFragment::hasReplica).forEach(DataFragment::incrementQueryCount);
+        fragments.forEach(DataFragment::tickRecreateCooldown);
 
         List<DataFragment> active = selectFragmentsForQuery(queryCount);
         final int qIdxRL = queryCount;
@@ -421,6 +477,7 @@ public class TcdrmSimulation {
         double[] sync = syncReplicasOnWrite(active);
         QueryCloudlet query = new QueryCloudlet(queryCount, complex, active);
         query.execute(infrastructure, optSite[0], optSite[1], rnd);
+        lastServedFraction = query.getServedFraction();
 
         double maintenanceCost = currentReplicaCount * TcdrmConstants.REPLICA_MAINTENANCE_COST_PER_QUERY;
 
@@ -587,13 +644,14 @@ public class TcdrmSimulation {
     private double createReplica() {
         ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
             fragments, execProvider, execRegion, infrastructure, replicasPerProvider,
-            dynamicMinPopularity);
+            dynamicMinPopularity, dynamicDeletionWindowQueries);
         if (c == null) return 0.0;
-        double cost = c.fragment().createReplica(c.provider(), c.region());
+        double cost = c.fragment().createReplica(c.provider(), c.region(), dynamicDeletionWindowQueries);
         if (cost > 0.0) {
             currentReplicaCount++;
+            replicaCreations++;
             replicasPerProvider[providerIndex(c.provider())]++;
-            recordReplicaEvent(c.fragment().getId(), +1);
+            recordReplicaEvent(c.fragment().getId(), c.provider(), c.region(), +1);
         }
         return cost;
     }
@@ -608,21 +666,27 @@ public class TcdrmSimulation {
         return currentReplicaCount < TcdrmConstants.maxReplicasForQueryType(complex)
             && currentBudget > 0 && isReplicationAllowed()
             && placementOptimizer.selectBest(fragments, execProvider, execRegion, infrastructure,
-                   replicasPerProvider, dynamicMinPopularity) != null;
+                   replicasPerProvider, dynamicMinPopularity, dynamicDeletionWindowQueries) != null;
     }
 
+    /** Nombre de réplicas créés par la dernière action REPLICATE (0 si aucun). */
+    public int getLastCreatedCount() { return lastCreatedCount; }
+
     /** Enregistre une création (+1) ou suppression (−1) et détecte l'oscillation. */
-    private void recordReplicaEvent(int fragmentId, int type) {
+    private void recordReplicaEvent(int fragmentId, String provider, String region, int type) {
+        int location = (provider + "/" + region).hashCode();
         for (int[] e : replicaEvents) {
-            if (e[0] == fragmentId && e[1] == -type) { thrashedThisQuery = true; break; }
+            if (e[0] == fragmentId && e[1] == location && e[2] == -type) {
+                thrashedThisQuery = true; thrashEvents++; break;
+            }
         }
-        replicaEvents.addLast(new int[]{fragmentId, type});
+        replicaEvents.addLast(new int[]{fragmentId, location, type});
         while (replicaEvents.size() > 10) replicaEvents.removeFirst();
     }
 
     /**
-     * Vrai si l'action de la requête courante a créé ou supprimé un réplica sur un
-     * fragment qui a subi l'opération inverse parmi les 10 derniers événements.
+     * Vrai si l'action de la requête courante a créé ou supprimé un réplica dont le même
+     * emplacement (fragment, site) a subi l'opération inverse parmi les 10 derniers événements.
      */
     public boolean isThrashingThisQuery() { return thrashedThisQuery; }
 
@@ -637,17 +701,23 @@ public class TcdrmSimulation {
             f -> f.getAccessCount() >= TcdrmConstants.P_SLA,
             DataFragment::getAccessCount);
         if (c == null) return 0.0;
-        double cost = c.fragment().createReplica(c.provider(), c.region());
+        double cost = c.fragment().createReplica(c.provider(), c.region(), dynamicDeletionWindowQueries);
         if (cost > 0.0) {
             currentReplicaCount++;
+            replicaCreations++;
             replicasPerProvider[providerIndex(c.provider())]++;
-            recordReplicaEvent(c.fragment().getId(), +1);
+            recordReplicaEvent(c.fragment().getId(), c.provider(), c.region(), +1);
         }
         return cost;
     }
 
     /**
      * Trouve le réplica à supprimer (Paper Algorithm 3, fenêtre ΔT apprise).
+     *
+     * ΔT est celle ENGAGÉE à la création du réplica (TTL fixé à l'insertion), pas la
+     * valeur courante du méta-contrôleur : sans cet engagement, une baisse momentanée
+     * de ΔT (ex. 190 → 10) rendait supprimables des réplicas créés quelques requêtes
+     * plus tôt, aussitôt recréés — oscillations mesurées en charge variable.
      *
      * Un réplica est supprimable quand il a vécu au moins ΔT requêtes (anti-oscillation)
      * ET qu'il n'a servi de source à AUCUNE requête pendant les ΔT dernières requêtes :
@@ -666,9 +736,10 @@ public class TcdrmSimulation {
         for (int i = 0; i < fragments.size(); i++) {
             DataFragment f = fragments.get(i);
             for (int r = 0; r < f.getReplicaCount(); r++) {
-                if (f.getReplicaAge(r) < dynamicDeletionWindowQueries) continue;
+                int window = f.getCommittedWindow(r);
+                if (f.getReplicaAge(r) < window) continue;
                 int idle = f.getQueriesSinceUsed(r);
-                if (idle <= dynamicDeletionWindowQueries) continue;
+                if (idle <= window) continue;
                 if (idle > longestIdle) {
                     longestIdle = idle;
                     best = new int[]{i, r};
@@ -678,17 +749,46 @@ public class TcdrmSimulation {
         return best;
     }
 
+    /** Création + stockage déjà payés pour le réplica du slot {@code slot}. */
+    private static double unusedReplicaCost(DataFragment f, int slot) {
+        return TcdrmConstants.replicationCost(f.getSizeGb())
+            + f.getReplicaAge(slot) * TcdrmConstants.REPLICA_MAINTENANCE_COST_PER_QUERY;
+    }
+
+    public int getReplicaCreations() { return replicaCreations; }
+    public int getReplicaDeletions() { return replicaDeletions; }
+    /** Opérations inverses (création après suppression ou l'inverse) sur un même fragment. */
+    public int getThrashEvents() { return thrashEvents; }
+
+    /**
+     * Coût des réplicas qui n'ont jamais servi une lecture (création + stockage) : ceux
+     * supprimés sans usage et ceux encore en place sans usage à l'instant de l'appel.
+     */
+    public double getUnusedReplicaCost() {
+        double c = deletedUnusedReplicaCost;
+        for (DataFragment f : fragments) {
+            for (int r = 0; r < f.getReplicaCount(); r++) {
+                if (!f.wasReplicaUsed(r)) c += unusedReplicaCost(f, r);
+            }
+        }
+        return c;
+    }
+
     private void deleteReplicaAt(int fragIdx, int slot) {
         DataFragment f = fragments.get(fragIdx);
         String replicaProvider = f.getReplicaProviderAt(slot);
+        String replicaRegion = f.getReplicaRegionAt(slot);
+        int window = f.getCommittedWindow(slot);
+        if (!f.wasReplicaUsed(slot)) deletedUnusedReplicaCost += unusedReplicaCost(f, slot);
+        replicaDeletions++;
         f.deleteReplicaAt(slot);
-        f.startRecreateCooldown(dynamicDeletionWindowQueries);
+        f.startRecreateCooldown(window);
         currentReplicaCount--;
         if (replicaProvider != null) {
             int pi = providerIndex(replicaProvider);
             replicasPerProvider[pi] = Math.max(0, replicasPerProvider[pi] - 1);
         }
-        recordReplicaEvent(f.getId(), -1);
+        recordReplicaEvent(f.getId(), replicaProvider, replicaRegion, -1);
     }
 
     /**
@@ -722,6 +822,20 @@ public class TcdrmSimulation {
             if (f.getPopularityEma() > maxEma) maxEma = f.getPopularityEma();
         }
         return TcdrmConstants.normalizedPopularity(maxEma);
+    }
+
+    /**
+     * Tendance de la donnée la plus populaire : vrai si elle a été lue à la dernière
+     * requête exécutée (son EMA monte), faux si elle n'est plus lue (son EMA baisse).
+     * Entre le plancher et le contrat, c'est ce qui distingue une donnée qui chauffe,
+     * où répliquer tôt est rentable, d'une donnée qui refroidit.
+     */
+    public boolean isHottestHeating() {
+        DataFragment hottest = null;
+        for (DataFragment f : fragments) {
+            if (hottest == null || f.getPopularityEma() > hottest.getPopularityEma()) hottest = f;
+        }
+        return hottest != null && queryCount > 0 && hottest.getLastAccessedQuery() == queryCount - 1;
     }
 
     /**
@@ -767,7 +881,7 @@ public class TcdrmSimulation {
     }
 
     /**
-     * Construit l'état RL (9 dimensions).
+     * Construit l'état RL (12 dimensions).
      *
      * <pre>
      * [0] latency / dynamicTSla             — latence normalisée
@@ -782,6 +896,10 @@ public class TcdrmSimulation {
      * [8] complex ? 1 : 0                   — type de requête : permet à un modèle RL
      *                                         unique de conditionner sa politique sur
      *                                         le régime simple/complex (Axe 5)
+     * [9]  fraction de fragments éligibles  — pop_f ≥ seuil adaptatif courant
+     * [10] popularité moyenne du pool
+     * [11] relations servies par un réplica — fraction de la dernière requête lue
+     *                                         depuis une copie (couverture effective)
      * </pre>
      */
     public double[] buildRLState(double lastLatency, double lastCost) {
@@ -823,7 +941,12 @@ public class TcdrmSimulation {
             complex ? 1.0 : 0.0,                                   // 8: type de requête (0=simple, 1=complex)
             eligibleFraction,                                      // 9: fraction de fragments ÉLIGIBLES
                                                                    //    (pop_f ≥ seuil adaptatif courant)
-            meanPopularity                                         // 10: popularité MOYENNE du pool
+            meanPopularity,                                        // 10: popularité MOYENNE du pool
+            lastServedFraction,                                    // 11: relations de la dernière requête
+                                                                   //     servies par un réplica [0,1]
+            isHottestHeating() ? 1.0 : 0.0                         // 12: tendance — la donnée la plus
+                                                                   //     populaire chauffe (lue à la
+                                                                   //     dernière requête) ou refroidit
         };
     }
 
@@ -843,6 +966,7 @@ public class TcdrmSimulation {
         java.util.Arrays.fill(replicasPerProvider, 0);
         replicaEvents.clear();
         thrashedThisQuery = false;
+        lastServedFraction = 0.0;
         fragments.forEach(f -> {
             while (f.hasReplica()) f.deleteReplica();
             f.resetAccessStats();
@@ -863,7 +987,7 @@ public class TcdrmSimulation {
      */
     public void setDynamicThresholds(double tSla, double minPopularity) {
         setDynamicThresholds(tSla);
-        this.dynamicMinPopularity = Math.max(0.0, Math.min(1.0, minPopularity));
+        this.dynamicMinPopularity = Math.max(TcdrmConstants.META_POPULARITY_MIN, Math.min(1.0, minPopularity));
     }
 
     /**

@@ -105,22 +105,29 @@ class SimpleQLearningAgent:
 		if valid_actions is None:
 			valid_actions = list(range(self.n_actions))
         
+		if self.use_double_q:
+			q_values = (self.q_table_a[state, valid_actions] +
+					   self.q_table_b[state, valid_actions]) / 2.0
+		else:
+			q_values = self.q_table[state, valid_actions]
+		greedy = valid_actions[int(np.argmax(q_values))]
 		if training and self.rng.random() < self.epsilon:
+			action = int(self.rng.choice(valid_actions))
 			if self.training_steps > 100:
 				visit_counts_valid = self.visit_counts[state, valid_actions]
 				if visit_counts_valid.sum() > 0:
 					probs = 1.0 / (visit_counts_valid + 1.0)
 					probs = probs / probs.sum()
-					return int(self.rng.choice(valid_actions, p=probs))
-			return int(self.rng.choice(valid_actions))
-		else:
-			if self.use_double_q:
-				q_values = (self.q_table_a[state, valid_actions] + 
-						   self.q_table_b[state, valid_actions]) / 2.0
-			else:
-				q_values = self.q_table[state, valid_actions]
-			best_idx = np.argmax(q_values)
-			return valid_actions[best_idx]
+					action = int(self.rng.choice(valid_actions, p=probs))
+			# Q(λ) de Watkins (Sutton & Barto, §12.10) : une action d'exploration coupe la
+			# trace. Sans cette coupure, les conséquences d'actions ALÉATOIRES étaient
+			# créditées aux paires précédentes : en début d'entraînement (ε ≈ 1), un
+			# REPLICATE suivi d'un DELETE au hasard héritait de la pénalité d'oscillation,
+			# sa valeur tombait à −45 et il n'était presque plus essayé ensuite.
+			if action != greedy and self.traces is not None:
+				self.traces.fill(0.0)
+			return action
+		return greedy
     
 	def update(self, state: int, action: int, reward: float, next_state: int, done: bool):
 		"""Met à jour la Q-table: Double Q-learning ou Q(λ) + LR adaptatif."""
@@ -138,6 +145,11 @@ class SimpleQLearningAgent:
 		if self.lambda_trace > 0.0 and self.traces is not None:
 			# Accumulating traces
 			self.traces[state, action] += 1.0
+			# Pas propre à chaque entrée tracée : appliquer à toute la trace l'α du couple
+			# courant (élevé quand ce couple est rare) gonflait les états fréquents qui le
+			# précèdent d'environ α·e·γ·V à chaque passage, d'où une divergence exponentielle.
+			if self.adaptive_lr:
+				alpha = self.alpha_init / (1.0 + 0.01 * self.visit_counts)
 			if self.use_double_q:
 				upd, ev = (self.q_table_a, self.q_table_b) if self.rng.random() < 0.5 \
 					else (self.q_table_b, self.q_table_a)

@@ -3,7 +3,7 @@ Diagnostic de couverture de l'espace d'états (Q-Learning et Rainbow DQN).
 
 Fait jouer une politique (aléatoire, Q-Learning ou Rainbow) dans le simulateur Java et
 mesure :
-  - la couverture de la grille discrète de 1458 états (référence commune aux deux agents,
+  - la couverture de la grille discrète de 1944 états (référence commune aux deux agents,
     via CloudSimQLearningEnv._discretize_state) ;
   - la distribution de chaque dimension de l'état continu (11 dims) ;
   - pour un modèle Q-Learning, la couverture issue de ses compteurs de visites
@@ -31,27 +31,27 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from envs.cloudsim_env import CloudSimEnv  # noqa: E402
-from envs.state_grid import GRID_DIMS, N_STATES, decode, discretize  # noqa: E402
+from envs.state_grid import COMPLEX_OFFSET, GRID_DIMS, GRID_LEVELS, N_STATES, decode, discretize  # noqa: E402
 
 DIM_NAMES = ["latence", "budget", "réplicas", "coût", "viol_T", "viol_C",
              "progression", "popularité", "complexe", "frac_éligible", "pop_moyenne"]
 
 
 def grid_report(counts: np.ndarray) -> dict:
-	"""Couverture de la grille de 1458 états à partir d'un vecteur de visites par état."""
+	"""Couverture de la grille de 1944 états à partir d'un vecteur de visites par état."""
 	visited = counts > 0
-	idx = np.arange(N_STATES) % 729
+	idx = np.arange(N_STATES) % COMPLEX_OFFSET
 	per_dim = {}
 	for name, w in GRID_DIMS:
-		lv = (idx // w) % 3
-		per_dim[name] = [int(counts[lv == k].sum()) for k in range(3)]
+		lv = (idx // w) % GRID_LEVELS[name]
+		per_dim[name] = [int(counts[lv == k].sum()) for k in range(GRID_LEVELS[name])]
 	top = np.sort(counts)[::-1]
 	total = max(1.0, float(counts.sum()))
 	return {
 		"etats_visites": int(visited.sum()),
 		"couverture_pct": round(100.0 * visited.mean(), 2),
-		"simple_pct": round(100.0 * visited[:729].mean(), 2),
-		"complexe_pct": round(100.0 * visited[729:].mean(), 2),
+		"simple_pct": round(100.0 * visited[:COMPLEX_OFFSET].mean(), 2),
+		"complexe_pct": round(100.0 * visited[COMPLEX_OFFSET:].mean(), 2),
 		"visites_par_niveau": per_dim,
 		"part_10_etats_plus_visites_pct": round(100.0 * top[:10].sum() / total, 1),
 	}
@@ -140,7 +140,7 @@ def rollout(agent: str, model: str | None, episodes: int, port: int, seed_base: 
 	if save_states:
 		np.save(save_states, states)
 	return {"agent": agent, "episodes": episodes, "pas": int(len(states)),
-	        "grille_1458": grid_report(counts), "dimensions_continues": continuous_report(states)}
+	        "grille": grid_report(counts), "dimensions_continues": continuous_report(states)}
 
 
 def main():
@@ -169,7 +169,7 @@ def main():
 		report = {"modele": a.from_visits, "pas_entrainement": d.get("training_steps"),
 		          "epsilon_final": d.get("epsilon"),
 		          "couples_etat_action_visites_pct": round(100.0 * (v > 0).mean(), 2),
-		          "grille_1458": grid_report(v.sum(axis=1))}
+		          "grille": grid_report(v.sum(axis=1))}
 	elif a.agent:
 		report = rollout(a.agent, a.model, a.episodes, a.port, a.seed_base, training=not a.greedy,
 		                 save_states=a.save_states, exploring_start_prob=a.exploring_start_prob)

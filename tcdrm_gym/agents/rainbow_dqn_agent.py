@@ -784,9 +784,10 @@ def make_rainbow_agent(total_steps: int = 20000) -> RainbowDQNAgent:
     (épisodes × requêtes × updates_per_step) : durée du cosinus et de l'anneal β-PER.
     Au benchmark, l'état du scheduler et du PER est restauré par ``load()``."""
     return RainbowDQNAgent(
-        # 11 dims : structure de popularite par element ([9] fraction eligible,
-        # [10] popularite moyenne) — l'agent VOIT quels volumes sont populaires.
-        state_dim=11,
+        # 13 dims : structure de popularite par element ([9] fraction eligible,
+        # [10] popularite moyenne), [11] relations servies par un replica et
+        # [12] tendance de la donnee la plus populaire.
+        state_dim=13,
         action_dim=3,
         # Réseau [128,128] : sur un état 11-dim / 3 actions, [256,256] est sur-
         # paramétré et lent à converger (Data-Efficient Rainbow, van Hasselt et al. 2019).

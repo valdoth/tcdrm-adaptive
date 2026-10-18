@@ -121,6 +121,22 @@ public final class TcdrmConstants {
      */
     public static final double META_POPULARITY_RESOLUTION = 0.10;
     /**
+     * Plancher du seuil de popularité appris, DÉDUIT de l'estimateur et non choisi :
+     * popularité normalisée atteinte après une constante de temps τ = 1/λ d'accès
+     * soutenus (≈ 87 accès, ≈ 0.70), λ découlant lui-même du P_SLA du papier. Avant τ,
+     * l'EMA n'a pas encore couvert sa propre mémoire : la popularité n'est pas établie.
+     *
+     * Sans plancher, le méta-contrôleur ouvrait l'éligibilité dès la 2e requête
+     * (popularité ≈ 0.025) : une seule requête ne rend pas une donnée populaire.
+     * Alternatives écartées : un seuil relatif à la moyenne du système (D2RS, Sun et
+     * al. 2012) est franchi dès le premier accès au démarrage à froid ; la règle de
+     * rentabilité ski-rental (répliquer quand le surcoût distant cumulé couvre la
+     * création, Mansouri et al. 2016) réplique après 2 accès, car la création coûte un
+     * seul transfert (replicationCost). Au-dessus du plancher, le seuil reste appris.
+     */
+    public static final double META_POPULARITY_MIN = normalizedPopularity(
+        1.0 - Math.pow(1.0 - POPULARITY_EMA_LAMBDA, 1.0 / POPULARITY_EMA_LAMBDA));
+    /**
      * Nombre de buckets de popularité (popularité max normalisée, [0,1]) dans l'état du
      * méta-contrôleur du seuil de popularité : il décide d'ouvrir l'éligibilité en
      * connaissant la popularité réelle des données, pas seulement les violations.
@@ -130,6 +146,15 @@ public final class TcdrmConstants {
     public static final double META_TSLA_RESOLUTION = 0.05;
     /** Borne basse du multiplicateur T_SLA appris (fraction du contrat). */
     public static final double META_TSLA_MIN_MULTIPLIER = 0.60;
+    /**
+     * Multiplicateur du C_SLA INTERNE appris (Sujet 1, axe 4 : ajustement dynamique de
+     * T_SLA, C_SLA et P_SLA). Le C_SLA interne = contrat × multiplicateur ≤ 1 : il ne
+     * peut jamais dépasser le budget du locataire (respect strict), seulement le rendre
+     * plus exigeant. Même grille et même borne basse que T_SLA (traitement symétrique,
+     * aucun réglage propre).
+     */
+    public static final double META_CSLA_RESOLUTION = META_TSLA_RESOLUTION;
+    public static final double META_CSLA_MIN_MULTIPLIER = META_TSLA_MIN_MULTIPLIER;
     /** Répertoire des Q-tables du méta-contrôleur (persistées entre entraînement et éval). */
     public static final String META_QTABLE_DIR = "tcdrm_gym/models";
 
@@ -196,7 +221,21 @@ public final class TcdrmConstants {
      * (1000 littéral et non MAX_QUERIES : celui-ci est défini plus bas → forward-ref interdite.)
      */
     public static final double REPLICA_MAINTENANCE_COST_PER_QUERY =
-            STORAGE_COST_PER_GB_PER_MONTH * AVG_RELATION_SIZE_GB / 1000.0;
+            STORAGE_COST_PER_GB_PER_MONTH * AVG_RELATION_SIZE_GB / 1000.0 * storageScale();
+
+    /**
+     * Facteur d'échelle du coût de stockage (audit 5.7) : TCDRM_STORAGE_SCALE=k revient à
+     * facturer 1000 requêtes comme k mois de stockage (charge k fois plus lente). Défaut 1 ;
+     * sert uniquement à l'analyse de sensibilité de la convention « 1000 requêtes = 1 mois ».
+     */
+    private static double storageScale() {
+        try {
+            return Math.max(0.0, Double.parseDouble(
+                System.getenv().getOrDefault("TCDRM_STORAGE_SCALE", "1")));
+        } catch (NumberFormatException e) {
+            return 1.0;
+        }
+    }
 
     /**
      * Convexité du coût de détention des réplicas (Sujet 1) : le coût est

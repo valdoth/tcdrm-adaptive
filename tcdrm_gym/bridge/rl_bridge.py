@@ -9,7 +9,7 @@ import numpy as np
 
 from agents.simple_qlearning_agent import SimpleQLearningAgent
 from agents.rainbow_dqn_agent import make_rainbow_agent
-from envs.state_grid import N_STATES, CoverageTracker, discretize
+from envs.state_grid import N_STATES, CoverageTracker, decode, discretize, GRID_DIMS
 
 
 # Exploration au benchmark dans les états JAMAIS vus à l'entraînement : 5 % d'actions
@@ -20,16 +20,46 @@ from envs.state_grid import N_STATES, CoverageTracker, discretize
 NOVEL_STATE_EPSILON = 0.05
 
 
-def _trained_states(model_path):
-    """États de la grille vus à l'entraînement (<modèle>_coverage.npy, écrit par
-    train_cloudsim.py à côté du modèle), ou None si le fichier est absent."""
+def _training_counts(model_path):
+    """Visites de chaque état de la grille à l'entraînement (<modèle>_coverage.npy,
+    écrit par train_cloudsim.py à côté du modèle), ou None si le fichier est absent."""
     if not model_path:
         return None
     path = os.path.splitext(model_path)[0] + "_coverage.npy"
     if not os.path.exists(path):
         print(f"Couverture d'entraînement absente ({path}) : pas d'exploration des états nouveaux")
         return None
-    return np.load(path) > 0
+    return np.load(path)
+
+
+def _trained_states(model_path):
+    """États de la grille vus à l'entraînement, ou None si la couverture est absente."""
+    counts = _training_counts(model_path)
+    return None if counts is None else counts > 0
+
+
+def _nearest_trained_states(counts):
+    """Pour chaque état de la grille, l'état VU à l'entraînement le plus proche (même
+    type de requête, distance de Manhattan sur les niveaux de chaque dimension, puis
+    le plus visité) — l'état lui-même s'il a été vu. Une Q-table tabulaire ne
+    généralise pas : dans un état jamais visité, toutes les valeurs valent
+    l'initialisation et l'argmax retombe sur la première action valide. L'état
+    voisin appris est la meilleure estimation disponible (agrégation d'états)."""
+    names = [name for name, _ in GRID_DIMS]
+    levels = np.array([[decode(i)[n] for n in names] for i in range(N_STATES)])
+    complex_bit = np.array([decode(i)["COMPLEX"] for i in range(N_STATES)])
+    known = np.flatnonzero(counts > 0)
+    nearest = np.arange(N_STATES)
+    for i in range(N_STATES):
+        if counts[i] > 0:
+            continue
+        cand = known[complex_bit[known] == complex_bit[i]]
+        if cand.size == 0:
+            continue
+        dist = np.abs(levels[cand] - levels[i]).sum(axis=1)
+        best = cand[dist == dist.min()]
+        nearest[i] = best[np.argmax(counts[best])]
+    return nearest
 
 
 class PythonRLBridge:
@@ -49,12 +79,14 @@ class PythonRLBridge:
         self._rainbow_last_action = None
         self._ql_episode       = 0
         self._rainbow_episode  = 0
-        # États rencontrés AU BENCHMARK (grille de 1458 états, simple + complexe) : comparés
+        # États rencontrés AU BENCHMARK (grille de 1944 états, simple + complexe) : comparés
         # aux états vus à l'entraînement (*_coverage.npy) par utils.state_coverage
         # --benchmark-overlap — un état jamais vu à l'entraînement est joué sans apprentissage.
         self._bench_coverage = {"qlearning": CoverageTracker(), "rainbow": CoverageTracker()}
         self._trained = {"qlearning": _trained_states(qlearning_model_path),
                          "rainbow": _trained_states(rainbow_model_path)}
+        ql_counts = _training_counts(qlearning_model_path)
+        self._ql_nearest = None if ql_counts is None else _nearest_trained_states(ql_counts)
         self._explore_rng = np.random.default_rng(0)
         self._explorations = {"qlearning": 0, "rainbow": 0}
         print("Python bridge initialized")
@@ -125,7 +157,10 @@ class PythonRLBridge:
             valid_actions = self._valid_actions(can_replicate, can_delete)
             action = self._explore_if_novel("qlearning", discrete_state, valid_actions)
             if action is None:
-                action = self.qlearning_agent.select_action(discrete_state, valid_actions=valid_actions, training=True)
+                # État jamais vu à l'entraînement : décider avec les valeurs de l'état
+                # appris le plus proche (l'apprentissage online reste sur l'état réel).
+                lookup = discrete_state if self._ql_nearest is None else int(self._ql_nearest[discrete_state])
+                action = self.qlearning_agent.select_action(lookup, valid_actions=valid_actions, training=True)
             self._ql_last_state  = discrete_state
             self._ql_last_action = int(action)
             return int(action)
@@ -219,7 +254,7 @@ class PythonRLBridge:
         return discretize(self._build_rainbow_state(state))
 
     def _build_rainbow_state(self, state: dict) -> np.ndarray:
-        """Construit le vecteur d'état 9D pour Rainbow DQN (aligné buildRLState Java)."""
+        """Construit le vecteur d'état 13D pour Rainbow DQN (aligné buildRLState Java)."""
         return np.array([
             state['latency'],
             state['budget'],
@@ -232,6 +267,8 @@ class PythonRLBridge:
             state['is_complex'],
             state['eligible_fraction'],
             state['mean_popularity'],
+            state['served_fraction'],
+            state['heating'],
         ], dtype=np.float32)
 
     def _parse_state(self, state_array):
@@ -248,6 +285,8 @@ class PythonRLBridge:
             'is_complex':            float(state_list[8]) if len(state_list) > 8 else 0.0,
             'eligible_fraction':     float(state_list[9]) if len(state_list) > 9 else 0.0,
             'mean_popularity':       float(state_list[10]) if len(state_list) > 10 else 0.0,
+            'served_fraction':       float(state_list[11]) if len(state_list) > 11 else 0.0,
+            'heating':               float(state_list[12]) if len(state_list) > 12 else 0.0,
         }
 
     @staticmethod

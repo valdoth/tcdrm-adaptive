@@ -48,16 +48,36 @@ public class ReplicaPlacementOptimizer {
     // Fréquences d'exécution par (provider, région) — pour scoring pondéré fréquence
     private final int[][] regionFreq;
     private int totalExecCount = 0;
+    // Fréquence RÉCENTE des sites d'exécution (EMA, même constante λ que la popularité) :
+    // estime où s'exécuteront les prochaines requêtes, pour le filtre d'utilité attendue.
+    // La fréquence cumulée ci-dessus garde des sites abandonnés depuis longtemps.
+    private final double[][] recentExecShare;
 
     public ReplicaPlacementOptimizer() {
         this.regionFreq = new int[MultiCloudInfrastructure.PROVIDERS.length][MultiCloudInfrastructure.REGIONS.length];
+        this.recentExecShare = new double[MultiCloudInfrastructure.PROVIDERS.length][MultiCloudInfrastructure.REGIONS.length];
     }
 
     /** Enregistre un site d'exécution observé pour pondérer le scoring futur. */
     public void recordExecution(String provider, String region) {
         int pi = indexOf(MultiCloudInfrastructure.PROVIDERS, provider);
         int ri = indexOf(MultiCloudInfrastructure.REGIONS, region);
-        if (pi >= 0 && ri >= 0) { regionFreq[pi][ri]++; totalExecCount++; }
+        if (pi >= 0 && ri >= 0) {
+            regionFreq[pi][ri]++;
+            totalExecCount++;
+            double lambda = org.tcdrm.adaptive.core.TcdrmConstants.POPULARITY_EMA_LAMBDA;
+            for (double[] row : recentExecShare) {
+                for (int i = 0; i < row.length; i++) row[i] *= 1.0 - lambda;
+            }
+            recentExecShare[pi][ri] += lambda;
+        }
+    }
+
+    /** Efface l'historique des sites d'exécution (début d'épisode). */
+    public void resetExecutionHistory() {
+        for (int[] row : regionFreq) java.util.Arrays.fill(row, 0);
+        for (double[] row : recentExecShare) java.util.Arrays.fill(row, 0.0);
+        totalExecCount = 0;
     }
 
     private static int indexOf(String[] arr, String val) {
@@ -78,6 +98,10 @@ public class ReplicaPlacementOptimizer {
      *                            SA popularité normalisée (accessCount/P_SLA) atteint ce
      *                            seuil — on ne réplique pas une donnée qui n'est pas
      *                            utilisée.
+     * @param useHorizon          fenêtre ΔT (requêtes) que le réplica recevra : un
+     *                            emplacement dont le nombre de lectures attendu sur
+     *                            cette fenêtre est inférieur à 1 n'est pas créé
+     *                            (0 = pas de filtre)
      * @return meilleur candidat, ou {@code null} si aucun fragment éligible
      */
     public Candidate selectBest(
@@ -85,12 +109,13 @@ public class ReplicaPlacementOptimizer {
         String execProvider, String execRegion,
         MultiCloudInfrastructure infra,
         int[] replicasPerProvider,
-        double minPopularityNorm
+        double minPopularityNorm,
+        int useHorizon
     ) {
         return selectBest(fragments, execProvider, execRegion, infra, replicasPerProvider,
             f -> org.tcdrm.adaptive.core.TcdrmConstants.normalizedPopularity(f.getPopularityEma())
                     >= minPopularityNorm,
-            DataFragment::getPopularityEma);
+            DataFragment::getPopularityEma, useHorizon);
     }
 
     /**
@@ -106,6 +131,29 @@ public class ReplicaPlacementOptimizer {
         int[] replicasPerProvider,
         Predicate<DataFragment> eligible,
         ToDoubleFunction<DataFragment> popularity
+    ) {
+        return selectBest(fragments, execProvider, execRegion, infra, replicasPerProvider,
+            eligible, popularity, 0);
+    }
+
+    /**
+     * Variante complète. Avec {@code useHorizon} &gt; 0, filtre d'UTILITÉ ATTENDUE (agents
+     * RL) : un réplica est supprimé s'il ne sert aucune lecture pendant sa fenêtre ΔT
+     * (Algorithm 3) ; symétriquement, on ne le crée pas si le nombre de lectures qu'il
+     * servirait pendant cette fenêtre est attendu inférieur à 1 :
+     * ΔT × taux d'accès de la donnée (EMA) × part récente des sites d'exécution pour
+     * lesquels il deviendrait la copie la plus proche. Sans ce filtre, des seconds
+     * réplicas étaient placés pour des sites rarement utilisés, puis supprimés sans
+     * avoir servi (créations et coûts inutiles en charge variable).
+     */
+    public Candidate selectBest(
+        List<DataFragment> fragments,
+        String execProvider, String execRegion,
+        MultiCloudInfrastructure infra,
+        int[] replicasPerProvider,
+        Predicate<DataFragment> eligible,
+        ToDoubleFunction<DataFragment> popularity,
+        int useHorizon
     ) {
         String[] providers = MultiCloudInfrastructure.PROVIDERS;
         String[] regions   = MultiCloudInfrastructure.REGIONS;
@@ -146,6 +194,10 @@ public class ReplicaPlacementOptimizer {
                     // Un emplacement qui ne rapproche la donnée d'AUCUN site d'exécution
                     // observé (copie existante déjà aussi proche) n'est jamais créé.
                     if (sc[1] <= 1e-9) continue;
+                    if (useHorizon > 0
+                            && useHorizon * f.getPopularityEma() * recentBenefitShare(f, tp, tr, infra) < 1.0) {
+                        continue;
+                    }
                     double s = sc[0];
                     boolean covers = !f.hasReplica();
                     if ((covers && !bestCovers) || (covers == bestCovers && s > bestScore)) {
@@ -157,6 +209,32 @@ public class ReplicaPlacementOptimizer {
             }
         }
         return best;
+    }
+
+    /**
+     * Part récente (EMA) des sites d'exécution pour lesquels un réplica en
+     * (targetProvider, targetRegion) serait strictement plus proche que toute copie
+     * existante — c'est-à-dire la part des requêtes qu'il servirait.
+     */
+    private double recentBenefitShare(DataFragment f, String targetProvider, String targetRegion,
+                                      MultiCloudInfrastructure infra) {
+        String[] providers = MultiCloudInfrastructure.PROVIDERS;
+        String[] regions   = MultiCloudInfrastructure.REGIONS;
+        double share = 0.0;
+        for (int pi = 0; pi < providers.length; pi++) {
+            for (int ri = 0; ri < regions.length; ri++) {
+                double w = recentExecShare[pi][ri];
+                if (w <= 0.0) continue;
+                String ep = providers[pi], er = regions[ri];
+                double latCurrent = infra.getLatencyMs(f.getPrimaryProvider(), f.getPrimaryRegion(), ep, er);
+                for (int i = 0; i < f.getReplicaCount(); i++) {
+                    latCurrent = Math.min(latCurrent, infra.getLatencyMs(
+                        f.getReplicaProviderAt(i), f.getReplicaRegionAt(i), ep, er));
+                }
+                if (infra.getLatencyMs(targetProvider, targetRegion, ep, er) < latCurrent) share += w;
+            }
+        }
+        return share;
     }
 
     /** @return {score, gain de latence pondéré} — le gain seul sert de filtre d'utilité. */

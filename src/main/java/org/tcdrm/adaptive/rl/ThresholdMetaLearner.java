@@ -16,12 +16,14 @@ import java.util.Random;
  * sans aucune cadence fixe : le MOMENT d'un changement de seuil est entièrement
  * déterminé par la politique apprise.
  *
- * L'action est la SÉLECTION DIRECTE du niveau de seuil parmi tous les niveaux de
- * l'intervalle — il n'existe AUCUNE limite de vitesse d'ajustement ni règle
- * « si stress alors ±X% » : la trajectoire du seuil est
- * entièrement déterminée par la politique apprise. La granularité de l'intervalle
- * ({@code resolution}) est une discrétisation de l'espace d'action, au même titre que
- * les buckets d'état — pas une règle de comportement.
+ * L'action est INCRÉMENTALE : baisser le seuil d'un cran, le garder, ou le monter
+ * d'un cran ({@code resolution}), comme les actions d'ajustement de seuil de
+ * l'approche Q-Threshold. Aucune règle « si stress alors ±X% » : QUAND et DANS QUEL
+ * SENS bouger restent appris. La sélection directe de n'importe quel niveau, utilisée
+ * auparavant, laissait une Q-table bruitée faire sauter le seuil d'un extrême à
+ * l'autre d'une requête à la suivante (T_SLA 240 → 400 ms, C_SLA 0,024 → 0,040 $,
+ * P_SLA 0,70 → 1,0) : la récompense et l'état des agents changeaient alors au hasard,
+ * et Q-Learning apprenait que répliquer déclenche des dépassements de coût.
  *
  * Littérature : approche « Q-Threshold » — Horovitz &amp; Arian, "Efficient Cloud
  * Auto-Scaling with SLA Objective Using Q-Learning", IEEE FiCloud 2018 ; reprise dans
@@ -36,11 +38,12 @@ import java.util.Random;
  *       ({@code popBuckets} &gt; 1) : sans lui, le méta-contrôleur ne voit pas si les
  *       données sont populaires et apprend à ouvrir l'éligibilité dès les premières
  *       violations, c'est-à-dire sur des données lues une seule fois.</li>
- *   <li>Actions : choisir le niveau du seuil (un niveau par cran de résolution).</li>
+ *   <li>Actions : baisser d'un cran, garder, monter d'un cran.</li>
  *   <li>Récompense : r = −violationRate − max(0, costRatio − 1)
  *       − w_fid·(écart au contrat normalisé). Le terme de fidélité enseigne que
- *       s'écarter du contrat (P_SLA) n'est justifié que s'il supprime des violations —
- *       l'équilibre seuil/SLA est APPRIS, pas codé.</li>
+ *       s'écarter du contrat n'est justifié que s'il supprime des violations —
+ *       l'équilibre seuil/SLA est APPRIS, pas codé. Le seuil de popularité n'a pas ce
+ *       terme ({@link #withoutFidelity()}) : il part du plancher P_SLA.</li>
  *   <li>Q-table persistée (.qtable) PAR AGENT : entraînée pendant l'entraînement de
  *       l'agent, rechargée par le benchmark (greedy + apprentissage online).</li>
  * </ul>
@@ -49,6 +52,9 @@ public final class ThresholdMetaLearner {
 
     private static final int VIOL_BUCKETS = 5;
     private static final int COST_BUCKETS = 3;
+    /** Actions : 0 = baisser d'un cran, 1 = garder, 2 = monter d'un cran. */
+    private static final int N_ACTIONS = 3;
+    private static final int KEEP = 1;
 
     // Hyperparamètres d'apprentissage (standard Q-learning), calibrés pour la cadence
     // de décision PAR REQUÊTE (1000 pas/épisode).
@@ -79,11 +85,13 @@ public final class ThresholdMetaLearner {
      */
     private static final double FIDELITY_WEIGHT = 0.3;
     /**
-     * Coût d'ÉVÉNEMENT : chaque BAISSE du seuil coûte proportionnellement à son
-     * ampleur, en plus du coût de fidélité par requête. Sans lui, la cadence par
-     * requête permettrait une « ouverture-éclair » gratuite : baisser le seuil une
-     * seule requête (le temps que l'agent réplique) puis le remonter — le coût de
-     * fidélité, facturé par requête passée sous le contrat, serait négligeable.
+     * Coût de CHANGEMENT (switching cost) : chaque changement du seuil, à la baisse
+     * comme à la hausse, coûte proportionnellement à son ampleur, en plus du coût de
+     * fidélité par requête. Sans lui, la cadence par requête permettrait une
+     * « ouverture-éclair » gratuite : baisser le seuil une seule requête (le temps que
+     * l'agent réplique) puis le remonter. Ne facturer que les baisses laissait la
+     * remontée gratuite : en validation, les seuils sautaient d'un extrême à l'autre
+     * d'une requête à la suivante (ΔT 190 → 10 → 160, P_SLA 0,70 → 1,0 → 0,90).
      */
     private static final double CHANGE_WEIGHT = 1.0;
     /**
@@ -101,6 +109,7 @@ public final class ThresholdMetaLearner {
      * violations. Ouvrir l'éligibilité sur des données qui ne sont pas encore populaires
      * crée des réplicas froids : ce terme rend ce coût visible au méta-contrôleur, qui
      * apprend lui-même à partir de quelle popularité l'ouverture est rentable.
+     * Le même poids s'applique à la charge d'oscillations du méta-contrôleur ΔT.
      * Réglable par TCDRM_META_COLD_WEIGHT (analyse de sensibilité) : la même valeur doit
      * être utilisée à l'entraînement et au benchmark (variable héritée par les deux JVM).
      */
@@ -122,13 +131,17 @@ public final class ThresholdMetaLearner {
     private final int popBuckets;
     private final Random rnd;
     private final double[][] q;
+    /** Poids du terme de fidélité au contrat (0 pour le seuil de popularité, voir {@link #withoutFidelity()}). */
+    private double fidelityWeight = FIDELITY_WEIGHT;
 
     private double epsilon;
     private double value;
     private int lastState = -1;
     private int lastAction = -1;
-    /** Ampleur normalisée de la baisse introduite par la dernière action (coût d'événement). */
-    private double lastDrop = 0.0;
+    /** Ampleur normalisée du changement introduit par la dernière action (coût de changement). */
+    private double lastChange = 0.0;
+    /** Faux = politique FIGÉE : le seuil suit la Q-table apprise sans la mettre à jour. */
+    private boolean learning = true;
 
     public ThresholdMetaLearner(double initialValue, double minValue, double maxValue,
                                 double resolution, double epsilon, long seed) {
@@ -148,26 +161,22 @@ public final class ThresholdMetaLearner {
         this.popBuckets = Math.max(1, popBuckets);
         this.epsilon = epsilon;
         this.rnd = new Random(seed);
-        this.q = new double[VIOL_BUCKETS * COST_BUCKETS * this.popBuckets * nLevels][nLevels];
-        // Prior informé : la récompense méta contient un terme de fidélité au contrat
-        // connu a priori (−FIDELITY_WEIGHT × assouplissement). L'encoder dans la
-        // Q-table initiale (au lieu de 0 partout) évite qu'une table VIERGE en greedy
-        // pur dérive vers les niveaux inexplorés par simple optimisme d'initialisation :
-        // sans apprentissage, la politique reste au contrat ; dès que des violations
-        // sont observées, le TD-learning surpasse ce prior et apprend à assouplir.
+        this.q = new double[VIOL_BUCKETS * COST_BUCKETS * this.popBuckets * nLevels][N_ACTIONS];
+        // Prior informé : bouger coûte le coût de changement d'un cran, connu a priori.
+        // Une table VIERGE en greedy pur garde donc le seuil en place ; dès que des
+        // violations ou des coûts sont observés, le TD-learning surpasse ce prior.
+        double stepCost = CHANGE_WEIGHT * resolution / (maxValue - minValue);
         for (double[] row : q) {
-            for (int a = 0; a < nLevels; a++) {
-                double relax = (maxValue - (minValue + a * resolution)) / (maxValue - minValue);
-                row[a] = -FIDELITY_WEIGHT * relax;
-            }
+            row[0] = -stepCost;
+            row[KEEP] = 0.0;
+            row[2] = -stepCost;
         }
         this.value = clamp(initialValue);
     }
 
     /**
      * Observe le stress courant (signal lissé EMA), met à jour la Q-table (TD-learning)
-     * puis choisit (ε-greedy) le niveau courant du seuil — n'importe quel niveau de
-     * l'intervalle, sans restriction de déplacement. Appelé à CHAQUE requête : le
+     * puis choisit (ε-greedy) de baisser, garder ou monter le seuil d'un cran. Appelé à CHAQUE requête : le
      * moment d'un changement de seuil est une décision apprise, pas une cadence.
      *
      * @param violationRate taux de violations T_SLA lissé (EMA) [0,1]
@@ -179,32 +188,40 @@ public final class ThresholdMetaLearner {
     }
 
     /**
-     * Variante du seuil de popularité : observe aussi la popularité des données
-     * (normalisée [0,1]) et la charge de réplicas froids (normalisée [0,1]), pénalisée
-     * dans la récompense.
+     * Variante avec signal propre au seuil : la popularité des données (normalisée
+     * [0,1], état — seuil de popularité seulement) et une charge pénalisée dans la
+     * récompense ([0,1], même échelle que le taux de violations) : réplicas froids pour
+     * le seuil de popularité, oscillations création/suppression (EMA) pour ΔT.
      */
     public double observeAndAdjust(double violationRate, double costRatio,
                                    double popularity, double coldReplicaLoad) {
         int s = stateOf(violationRate, costRatio, popularity);
-        // Fidélité au contrat : s'éloigner du seuil contractuel (maxValue) coûte —
-        // l'assouplissement doit se payer en violations évitées. Le coût d'événement
-        // (CHANGE_WEIGHT × baisse introduite par la dernière action) rend les
-        // ouvertures-éclair non gratuites.
-        double relaxation = (maxValue - value) / (maxValue - minValue);
+        // Fidélité au contrat : pour TOUS les méta-contrôleurs, le contrat est la borne
+        // haute (maxValue = 1.0) et le terme pénalise l'ÉCART à ce contrat, pas un
+        // « relâchement » au sens opérationnel — le sens d'une baisse diffère selon le
+        // seuil : popularité → réplication plus précoce ; T_SLA et C_SLA internes →
+        // exigence plus stricte que le contrat (réplication plus précoce, agent plus
+        // économe) ; ΔT → suppression plus rapide. Dans les quatre cas la baisse engage
+        // des actions (et des coûts) que le contrat seul ne déclencherait pas : elle
+        // doit se payer en violations ou en coût évités. Le coût d'événement
+        // (CHANGE_WEIGHT × changement introduit par la dernière action) rend les
+        // changements-éclair non gratuits.
+        double deviation = (maxValue - value) / (maxValue - minValue);
         double reward = -violationRate - Math.max(0.0, costRatio - 1.0)
             - COST_LINEAR_WEIGHT * costRatio
-            - FIDELITY_WEIGHT * relaxation
-            - CHANGE_WEIGHT * lastDrop
+            - fidelityWeight * deviation
+            - CHANGE_WEIGHT * lastChange
             - COLD_REPLICA_WEIGHT * coldReplicaLoad;
 
-        if (lastState >= 0 && lastAction >= 0) {
-            double best = maxQ(s);
+        int level = levelOf(value);
+        if (learning && lastState >= 0 && lastAction >= 0) {
+            double best = maxQ(s, level);
             q[lastState][lastAction] += ALPHA * (reward + GAMMA * best - q[lastState][lastAction]);
         }
 
-        int a = (rnd.nextDouble() < epsilon) ? rnd.nextInt(nLevels) : argmaxQ(s, levelOf(value));
-        double newValue = clamp(minValue + a * resolution);
-        lastDrop = Math.max(0.0, (value - newValue) / (maxValue - minValue));
+        int a = (rnd.nextDouble() < epsilon) ? randomValidAction(level) : argmaxQ(s, level);
+        double newValue = clamp(minValue + (level + a - KEEP) * resolution);
+        lastChange = Math.abs(value - newValue) / (maxValue - minValue);
         lastState = s;
         lastAction = a;
         value = newValue;
@@ -212,17 +229,33 @@ public final class ThresholdMetaLearner {
     }
 
     /**
+     * Retire le terme de fidélité au contrat (seuil de popularité). Ce seuil part du
+     * plancher P_SLA (popularité atteinte après τ = 1/λ accès consécutifs) et non du
+     * contrat : en dessous, aucune réplication n'est permise ; au-dessus, c'est à
+     * l'agent de décider. Le méta-contrôleur ne le remonte que si les réplicas froids
+     * (terme coldReplicaLoad) ou les violations le justifient. Avec un terme de
+     * fidélité, il restait au contrat (200 accès), soit le déclenchement de TCDRM.
+     */
+    public ThresholdMetaLearner withoutFidelity() {
+        this.fidelityWeight = 0.0;
+        return this;
+    }
+
+    /**
      * Réinitialise la trajectoire pour un nouvel épisode/run : le seuil repart de sa
-     * valeur contractuelle, la CONNAISSANCE (Q-table) est conservée.
+     * valeur initiale, la CONNAISSANCE (Q-table) est conservée.
      */
     public void startEpisode(double initialValue) {
         this.value = clamp(initialValue);
         this.lastState = -1;
         this.lastAction = -1;
-        this.lastDrop = 0.0;
+        this.lastChange = 0.0;
     }
 
     public double getValue() { return value; }
+
+    /** Active ou fige l'apprentissage TD (évaluation en ligne ou politique figée). */
+    public void setLearning(boolean on) { this.learning = on; }
 
     public void setEpsilon(double e) { this.epsilon = Math.max(0.0, Math.min(1.0, e)); }
 
@@ -249,10 +282,27 @@ public final class ThresholdMetaLearner {
 
     private double clamp(double v) { return Math.max(minValue, Math.min(maxValue, v)); }
 
-    private double maxQ(int s) {
-        double m = q[s][0];
-        for (int i = 1; i < nLevels; i++) m = Math.max(m, q[s][i]);
+    /** Vrai si l'action {@code a} reste dans l'intervalle depuis le niveau {@code level}. */
+    private boolean isValid(int a, int level) {
+        int target = level + a - KEEP;
+        return target >= 0 && target < nLevels;
+    }
+
+    /**
+     * Valeur de l'état : maximum sur les seules actions VALIDES — une action hors de
+     * l'intervalle n'est jamais jouée, sa valeur reste au prior et ne doit pas servir
+     * de cible TD.
+     */
+    private double maxQ(int s, int level) {
+        double m = q[s][KEEP];
+        for (int a = 0; a < N_ACTIONS; a++) if (isValid(a, level)) m = Math.max(m, q[s][a]);
         return m;
+    }
+
+    private int randomValidAction(int level) {
+        int a;
+        do { a = rnd.nextInt(N_ACTIONS); } while (!isValid(a, level));
+        return a;
     }
 
     /** Index de niveau correspondant à une valeur de seuil. */
@@ -261,15 +311,10 @@ public final class ThresholdMetaLearner {
         return Math.max(0, Math.min(nLevels - 1, lvl));
     }
 
-    /**
-     * Argmax avec tie-break au niveau COURANT : sur un état jamais visité (ligne
-     * uniforme, ex. Q-table vierge), la politique greedy conserve le seuil en place
-     * (le contrat en début de run) au lieu de sauter arbitrairement à l'index 0 —
-     * qui, pour le seuil de popularité, autoriserait la réplication dès la requête 1.
-     */
-    private int argmaxQ(int s, int preferredLevel) {
-        int best = preferredLevel;
-        for (int i = 0; i < nLevels; i++) if (q[s][i] > q[s][best]) best = i;
+    /** Argmax sur les actions valides, avec tie-break sur « garder ». */
+    private int argmaxQ(int s, int level) {
+        int best = KEEP;
+        for (int a = 0; a < N_ACTIONS; a++) if (isValid(a, level) && q[s][a] > q[s][best]) best = a;
         return best;
     }
 
@@ -279,11 +324,11 @@ public final class ThresholdMetaLearner {
         File parent = file.getParentFile();
         if (parent != null) parent.mkdirs();
         try (BufferedWriter w = new BufferedWriter(new FileWriter(file))) {
-            w.write(String.format(Locale.ROOT, "# qtable states=%d actions=%d min=%s max=%s resolution=%s%n",
-                q.length, nLevels, minValue, maxValue, resolution));
+            w.write(String.format(Locale.ROOT, "# qtable-inc states=%d actions=%d min=%s max=%s resolution=%s%n",
+                q.length, N_ACTIONS, minValue, maxValue, resolution));
             for (double[] row : q) {
                 StringBuilder sb = new StringBuilder();
-                for (int a = 0; a < nLevels; a++) {
+                for (int a = 0; a < N_ACTIONS; a++) {
                     if (a > 0) sb.append(' ');
                     sb.append(row[a]);
                 }
@@ -310,7 +355,7 @@ public final class ThresholdMetaLearner {
         if (file == null || !file.isFile()) return learner;
         try (BufferedReader r = new BufferedReader(new FileReader(file))) {
             String header = r.readLine();
-            String expected = "# qtable states=" + learner.q.length + " actions=" + learner.nLevels + " ";
+            String expected = "# qtable-inc states=" + learner.q.length + " actions=" + N_ACTIONS + " ";
             if (header == null || !header.startsWith(expected)) {
                 return learner; // structure incompatible → repartir vierge
             }
@@ -318,7 +363,7 @@ public final class ThresholdMetaLearner {
                 String line = r.readLine();
                 if (line == null) return new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed, popBuckets);
                 String[] parts = line.trim().split("\\s+");
-                for (int a = 0; a < learner.nLevels && a < parts.length; a++) {
+                for (int a = 0; a < N_ACTIONS && a < parts.length; a++) {
                     learner.q[s][a] = Double.parseDouble(parts[a]);
                 }
             }
