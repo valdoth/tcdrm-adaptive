@@ -129,6 +129,26 @@ class SimpleQLearningAgent:
 			return action
 		return greedy
     
+	def _tried(self, state: int) -> np.ndarray:
+		"""Actions déjà essayées dans `state` (toutes si aucune).
+
+		La cible TD ne doit maximiser que sur des actions possibles : une action masquée
+		(DELETE sans réplica, REPLICATE sur données non populaires) n'est jamais jouée et
+		garde sa valeur d'initialisation optimiste (+1). Maximiser dessus faisait valoir
+		+1 à presque tous les états suivants : Q ≈ récompense immédiate, sans horizon
+		(problème jouet r = −10, γ = 0,99 : Q = −9 au lieu de −1000). Q-Learning refusait
+		alors REPLICATE en complexe, qui coûte tout de suite et rapporte ensuite.
+		"""
+		tried = np.flatnonzero(self.visit_counts[state] > 0)
+		return tried if tried.size else np.arange(self.n_actions)
+
+	def _bootstrap(self, next_state: int, select: np.ndarray, evaluate: np.ndarray) -> float:
+		"""Valeur de `next_state` : argmax de `select`, évalué par `evaluate` (Double Q),
+		sur les seules actions déjà essayées."""
+		tried = self._tried(next_state)
+		best = tried[int(np.argmax(select[next_state, tried]))]
+		return float(evaluate[next_state, best])
+
 	def update(self, state: int, action: int, reward: float, next_state: int, done: bool):
 		"""Met à jour la Q-table: Double Q-learning ou Q(λ) + LR adaptatif."""
 		self.visit_counts[state, action] += 1
@@ -156,12 +176,13 @@ class SimpleQLearningAgent:
 				if done:
 					target_q = reward
 				else:
-					target_q = reward + self.gamma * ev[next_state, int(np.argmax(upd[next_state]))]
+					target_q = reward + self.gamma * self._bootstrap(next_state, upd, ev)
 				delta = target_q - upd[state, action]
 				upd += alpha * delta * self.traces
 				self.q_table = (self.q_table_a + self.q_table_b) / 2.0
 			else:
-				target_q = reward if done else reward + self.gamma * np.max(self.q_table[next_state])
+				target_q = reward if done else \
+					reward + self.gamma * self._bootstrap(next_state, self.q_table, self.q_table)
 				delta = target_q - self.q_table[state, action]
 				self.q_table += alpha * delta * self.traces
 			# Decay traces
@@ -174,18 +195,14 @@ class SimpleQLearningAgent:
 					if done:
 						target_q = reward
 					else:
-						best_next_action = np.argmax(self.q_table_a[next_state])
-						next_q = self.q_table_b[next_state, best_next_action]
-						target_q = reward + self.gamma * next_q
+						target_q = reward + self.gamma * self._bootstrap(next_state, self.q_table_a, self.q_table_b)
 					self.q_table_a[state, action] = current_q + alpha * (target_q - current_q)
 				else:
 					current_q = self.q_table_b[state, action]
 					if done:
 						target_q = reward
 					else:
-						best_next_action = np.argmax(self.q_table_b[next_state])
-						next_q = self.q_table_a[next_state, best_next_action]
-						target_q = reward + self.gamma * next_q
+						target_q = reward + self.gamma * self._bootstrap(next_state, self.q_table_b, self.q_table_a)
 					self.q_table_b[state, action] = current_q + alpha * (target_q - current_q)
 				self.q_table[state, action] = (self.q_table_a[state, action] + self.q_table_b[state, action]) / 2.0
 			else:
@@ -193,8 +210,7 @@ class SimpleQLearningAgent:
 				if done:
 					target_q = reward
 				else:
-					max_next_q = np.max(self.q_table[next_state])
-					target_q = reward + self.gamma * max_next_q
+					target_q = reward + self.gamma * self._bootstrap(next_state, self.q_table, self.q_table)
 				self.q_table[state, action] = current_q + alpha * (target_q - current_q)
         
 		self.recent_rewards.append(reward)

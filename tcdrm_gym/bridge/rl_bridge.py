@@ -79,7 +79,7 @@ class PythonRLBridge:
         self._rainbow_last_action = None
         self._ql_episode       = 0
         self._rainbow_episode  = 0
-        # États rencontrés AU BENCHMARK (grille de 1458 états, simple + complexe) : comparés
+        # États rencontrés AU BENCHMARK (grille de 1944 états, simple + complexe) : comparés
         # aux états vus à l'entraînement (*_coverage.npy) par utils.state_coverage
         # --benchmark-overlap — un état jamais vu à l'entraînement est joué sans apprentissage.
         self._bench_coverage = {"qlearning": CoverageTracker(), "rainbow": CoverageTracker()}

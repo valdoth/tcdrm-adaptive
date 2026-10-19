@@ -301,7 +301,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 	"""
 	Environnement CloudSim avec états discrets pour Q-Learning.
 
-	L'état continu est discrétisé en 1458 états (3^6 × 2).
+	L'état continu est discrétisé en 1944 états (3^5 × 4 × 2).
 	Dimensions : RT, COST, SLA, BUD, COV, GAIN, COMPLEX (voir envs/state_grid.py).
 
 	GAIN (popularityScore, dim 7) encode la popularité normalisée des données [0,1].
@@ -315,7 +315,7 @@ class CloudSimQLearningEnv(CloudSimEnv):
 	def __init__(self, port: int = 25335, complex: bool = False, seed: int = None, config: dict | None = None):
 		super().__init__(port=port, complex=complex, seed=seed, config=config)
 
-		# Espace d'observation discret pour Q-Learning : 3^6 × 2 = 1458 états
+		# Espace d'observation discret pour Q-Learning : 3^5 × 4 × 2 = 1944 états
 		self.observation_space = spaces.Discrete(N_STATES)
 
 	def _discretize_state(self, state: np.ndarray) -> int:

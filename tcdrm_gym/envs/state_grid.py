@@ -1,5 +1,5 @@
 """
-Grille discrète de l'agent Q-Learning : 3^6 × 2 = 1458 états.
+Grille discrète de l'agent Q-Learning : 3^5 × 4 × 2 = 1944 états.
 
 Source unique de la discrétisation, partagée par l'entraînement (CloudSimQLearningEnv),
 l'évaluation (bridge/rl_bridge.py) et le diagnostic de couverture (utils/state_coverage.py) :
@@ -18,14 +18,12 @@ Dimensions de l'état continu utilisées (indices de TcdrmSimulation.buildRLStat
            (remplace « réplicas / max » : le nombre de réplicas ne dit pas s'ils
            couvrent les données lues — 6 réplicas peuvent laisser 3 relations
            distantes en charge variable, 5 suffire en charge stable)
-  GAIN     [7],[12] popularité normalisée max : < plancher | ≥ plancher et refroidit |
-           ≥ plancher et chauffe
+  GAIN     [7],[12] popularité normalisée max : < plancher | < contrat et refroidit |
+           < contrat et chauffe | contrat atteint
            (la tendance [12] dit si la donnée la plus populaire a été lue à la dernière
-           requête. Plus de frontière au contrat 1,0 : ce niveau « contrat atteint » (200
-           accès, le déclenchement de TCDRM) était le seul où Q-Learning répliquait en
-           complexe — en charge stable il attendait donc la requête 200 ; la popularité
-           saturée y servait d'indice de charge stable, la tendance le donne dès le
-           plancher.)
+           requête. Sans elle, « entre plancher et contrat » mélangeait une donnée qui
+           chauffe, où répliquer tôt est rentable, et une donnée qui refroidit (charges
+           variable et en rafales), où c'est du gaspillage.)
            (plancher P_SLA ≈ 0.704 = TcdrmConstants.META_POPULARITY_MIN, sous lequel
            aucune réplication n'est permise ; contrat = 1.0, P_SLA du papier. Les anciens
            seuils 0.2/0.6 mélangeaient données tout juste éligibles et pleinement
@@ -38,7 +36,7 @@ Les dimensions 2, 6, 9 et 10 sont réservées à Rainbow DQN.
 
 import numpy as np
 
-N_STATES = 1458
+N_STATES = 1944
 
 # Mêmes formules que TcdrmConstants (POPULARITY_EMA_FULL, META_POPULARITY_MIN) :
 # λ = POPULARITY_EMA_LAMBDA, P_SLA = 200 ; plancher = popularité normalisée atteinte
@@ -49,9 +47,9 @@ _EMA_FULL = 1.0 - (1.0 - _LAMBDA) ** _P_SLA
 POPULARITY_FLOOR = min(1.0, (1.0 - (1.0 - _LAMBDA) ** (1.0 / _LAMBDA)) / _EMA_FULL)
 
 # (nom, poids dans l'index) — ordre de l'encodage ; GRID_LEVELS : niveaux par dimension
-GRID_DIMS = [("RT", 243), ("COST", 81), ("SLA", 27), ("BUD", 9), ("COV", 3), ("GAIN", 1)]
-GRID_LEVELS = {"RT": 3, "COST": 3, "SLA": 3, "BUD": 3, "COV": 3, "GAIN": 3}
-COMPLEX_OFFSET = 729
+GRID_DIMS = [("RT", 324), ("COST", 108), ("SLA", 36), ("BUD", 12), ("COV", 4), ("GAIN", 1)]
+GRID_LEVELS = {"RT": 3, "COST": 3, "SLA": 3, "BUD": 3, "COV": 3, "GAIN": 4}
+COMPLEX_OFFSET = 972
 
 
 def _three_levels(x: float, low: float, high: float) -> int:
@@ -63,7 +61,7 @@ def _three_levels(x: float, low: float, high: float) -> int:
 
 
 def discretize(state) -> int:
-	"""Index (0-1457) de l'état continu `state` (séquence d'au moins 9 valeurs)."""
+	"""Index (0-1943) de l'état continu `state` (séquence d'au moins 9 valeurs)."""
 	s = np.asarray(state, dtype=np.float64)
 	rt = _three_levels(s[0], 0.4, 0.7)
 	cost_bin = _three_levels(s[3], 0.4, 0.7)
@@ -72,11 +70,11 @@ def discretize(state) -> int:
 	bud = 0 if budget >= 0.6 else (1 if budget >= 0.3 else 2)
 	served = s[11] if len(s) > 11 else 0.0
 	net = 0 if served >= 0.999 else (1 if served > 0 else 2)
-	popular = len(s) > 7 and s[7] >= POPULARITY_FLOOR
+	gain_bin = _three_levels(s[7], POPULARITY_FLOOR, 1.0 - 1e-9) if len(s) > 7 else 0
 	heating = len(s) > 12 and s[12] >= 0.5
-	gain_bin = 0 if not popular else (2 if heating else 1)
+	gain_bin = 3 if gain_bin == 2 else (2 if gain_bin == 1 and heating else gain_bin)
 	complex_bit = 1 if len(s) > 8 and s[8] >= 0.5 else 0
-	return (rt * 243 + cost_bin * 81 + sla_bin * 27 + bud * 9 + net * 3 + gain_bin) \
+	return (rt * 324 + cost_bin * 108 + sla_bin * 36 + bud * 12 + net * 4 + gain_bin) \
 		+ complex_bit * COMPLEX_OFFSET
 
 
