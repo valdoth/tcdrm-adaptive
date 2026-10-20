@@ -1,5 +1,5 @@
-name,queries,final_cumul_bw_cost,total_bw_cost,total_cpu_cost,total_replica_cost,total_cost,total_bw_inter_provider_gb,total_bw_inter_region_gb,total_sla_violations,final_replica_count,tsla_contract_violations,csla_contract_violations,first_replica_query
-NoRepLc_Simple,1000,11.416019,9.45,1.804019,0,11.254019,900,450,971,0,971,0,-1
-TCDRM_Simple,1000,5.67446,3.68505,1.804019,0.023391,5.51246,251.55,1169.55,192,2,192,1,199
-NoRepLc_Complex,1000,31.384711,22.05,9.010711,0,31.060711,1800,900,1000,0,1000,0,-1
-TCDRM_Complex,1000,17.809021,8.4159,9.010711,0.05841,17.485021,514.8,2373.3,204,5,204,0,199
+name,queries,final_cumul_bw_cost,total_bw_cost,total_cpu_cost,total_replica_cost,total_cost,total_bw_inter_provider_gb,total_bw_inter_region_gb,total_sla_violations,final_replica_count,tsla_contract_violations,csla_contract_violations,first_replica_query,replica_creations,replica_deletions,thrash_events,unused_replica_cost
+NoRepLc_Simple,1000,11.416019,9.45,1.804019,0,11.254019,900,450,971,0,971,0,-1,0,0,0,0
+TCDRM_Simple,1000,5.732024,3.68505,1.804019,0.080955,5.570024,251.55,1169.55,192,2,192,1,199,2,0,0,0
+NoRepLc_Complex,1000,31.384711,22.05,9.010711,0,31.060711,1800,900,1000,0,1000,0,-1,0,0,0,0
+TCDRM_Complex,1000,17.952661,8.4159,9.010711,0.20205,17.628661,514.8,2373.3,204,5,204,0,199,5,0,0,0

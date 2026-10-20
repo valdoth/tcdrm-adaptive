@@ -1,7 +1,7 @@
-strategy,regime,seeds,cost_mean,cost_std,tsla_viol_mean,tsla_viol_std,csla_viol_mean,csla_viol_std,replicas_mean,replicas_std,first_replica_mean
-TCDRM,Simple,5,5.435938,0.072643,189.4,2.792848,1,0,2,0,199
-QLearning,Simple,5,4.243928,0.091407,26.4,4.393177,0.6,0.547723,2,0,22.2
-Rainbow,Simple,5,4.135591,0.101024,14,3.741657,0.6,0.547723,2,0,13
-TCDRM,Complex,5,17.409054,0.120079,204,0,0,0,5,0,199
-QLearning,Complex,5,15.34184,0.194753,77.2,1.643168,0,0,5,0,70
-Rainbow,Complex,5,14.450601,0.086522,24.8,2.387467,0,0,5,0,3
+strategy,regime,seeds,cost_mean,cost_std,tsla_viol_mean,tsla_viol_std,csla_viol_mean,csla_viol_std,replicas_mean,replicas_std,first_replica_mean,creations_mean,creations_std,deletions_mean,deletions_std,thrash_mean,thrash_std,unused_cost_mean,unused_cost_std
+TCDRM,Simple,5,5.493502,0.072643,189.4,2.792848,1,0,2,0,199,2,0,0,0,0,0,0,0
+QLearning,Simple,5,5.096557,0.087476,134.6,3.04959,0,0,2,0,146,2,0,0,0,0,0,0,0
+Rainbow,Simple,5,4.699387,0.087474,77.6,3.04959,0,0,2,0,89,2,0,0,0,0,0,0,0
+TCDRM,Complex,5,17.552694,0.120079,204,0,0,0,5,0,199,5,0,0,0,0,0,0,0
+QLearning,Complex,5,15.714579,0.103161,92.6,0.547723,0.4,0.547723,5,0,92.6,5,0,0,0,0,0,0,0
+Rainbow,Complex,5,15.611799,0.094342,87,0,0,0,5,0,87,5,0,0,0,0,0,0,0
