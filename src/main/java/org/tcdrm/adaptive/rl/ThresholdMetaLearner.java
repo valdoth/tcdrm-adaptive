@@ -131,6 +131,14 @@ public final class ThresholdMetaLearner {
     private final int popBuckets;
     private final Random rnd;
     private final double[][] q;
+    /**
+     * Nombre de fois où chaque (état, action) a été joué. Le choix greedy et la cible
+     * TD ne portent que sur les actions déjà essayées : une action jamais jouée garde
+     * sa valeur initiale (≈ 0), bien au-dessus des valeurs apprises (très négatives),
+     * et la prendre en compte faisait osciller le seuil d'un cran à chaque requête
+     * dans les états peu visités (0,904 ↔ 1,0 en validation, graine 777).
+     */
+    private final int[][] visits;
     /** Poids du terme de fidélité au contrat (0 pour le seuil de popularité, voir {@link #withoutFidelity()}). */
     private double fidelityWeight = FIDELITY_WEIGHT;
 
@@ -162,6 +170,7 @@ public final class ThresholdMetaLearner {
         this.epsilon = epsilon;
         this.rnd = new Random(seed);
         this.q = new double[VIOL_BUCKETS * COST_BUCKETS * this.popBuckets * nLevels][N_ACTIONS];
+        this.visits = new int[q.length][N_ACTIONS];
         // Prior informé : bouger coûte le coût de changement d'un cran, connu a priori.
         // Une table VIERGE en greedy pur garde donc le seuil en place ; dès que des
         // violations ou des coûts sont observés, le TD-learning surpasse ce prior.
@@ -217,6 +226,7 @@ public final class ThresholdMetaLearner {
         if (learning && lastState >= 0 && lastAction >= 0) {
             double best = maxQ(s, level);
             q[lastState][lastAction] += ALPHA * (reward + GAMMA * best - q[lastState][lastAction]);
+            visits[lastState][lastAction]++;
         }
 
         int a = (rnd.nextDouble() < epsilon) ? randomValidAction(level) : argmaxQ(s, level);
@@ -288,15 +298,19 @@ public final class ThresholdMetaLearner {
         return target >= 0 && target < nLevels;
     }
 
+    /** Vrai si l'action {@code a} est valide et a déjà été jouée dans l'état {@code s}. */
+    private boolean isKnown(int s, int a, int level) {
+        return isValid(a, level) && visits[s][a] > 0;
+    }
+
     /**
-     * Valeur de l'état : maximum sur les seules actions VALIDES — une action hors de
-     * l'intervalle n'est jamais jouée, sa valeur reste au prior et ne doit pas servir
-     * de cible TD.
+     * Valeur de l'état : maximum sur les actions VALIDES déjà JOUÉES (voir
+     * {@link #visits}) ; « garder » sert de valeur par défaut d'un état jamais visité.
      */
     private double maxQ(int s, int level) {
-        double m = q[s][KEEP];
-        for (int a = 0; a < N_ACTIONS; a++) if (isValid(a, level)) m = Math.max(m, q[s][a]);
-        return m;
+        double m = Double.NEGATIVE_INFINITY;
+        for (int a = 0; a < N_ACTIONS; a++) if (isKnown(s, a, level)) m = Math.max(m, q[s][a]);
+        return m == Double.NEGATIVE_INFINITY ? q[s][KEEP] : m;
     }
 
     private int randomValidAction(int level) {
@@ -311,11 +325,17 @@ public final class ThresholdMetaLearner {
         return Math.max(0, Math.min(nLevels - 1, lvl));
     }
 
-    /** Argmax sur les actions valides, avec tie-break sur « garder ». */
+    /**
+     * Argmax sur les actions valides déjà jouées, avec tie-break sur « garder » ;
+     * « garder » si aucune ne l'a été (les autres ne sont essayées que par ε).
+     */
     private int argmaxQ(int s, int level) {
-        int best = KEEP;
-        for (int a = 0; a < N_ACTIONS; a++) if (isValid(a, level) && q[s][a] > q[s][best]) best = a;
-        return best;
+        int best = -1;
+        for (int a = 0; a < N_ACTIONS; a++) {
+            if (!isKnown(s, a, level)) continue;
+            if (best < 0 || q[s][a] > q[s][best] || (q[s][a] == q[s][best] && a == KEEP)) best = a;
+        }
+        return best < 0 ? KEEP : best;
     }
 
     // === Persistance (texte simple : 1 ligne d'en-tête + 1 ligne par état) ===
@@ -324,14 +344,15 @@ public final class ThresholdMetaLearner {
         File parent = file.getParentFile();
         if (parent != null) parent.mkdirs();
         try (BufferedWriter w = new BufferedWriter(new FileWriter(file))) {
-            w.write(String.format(Locale.ROOT, "# qtable-inc states=%d actions=%d min=%s max=%s resolution=%s%n",
+            w.write(String.format(Locale.ROOT, "# qtable-visits states=%d actions=%d min=%s max=%s resolution=%s%n",
                 q.length, N_ACTIONS, minValue, maxValue, resolution));
-            for (double[] row : q) {
+            for (int s = 0; s < q.length; s++) {
                 StringBuilder sb = new StringBuilder();
                 for (int a = 0; a < N_ACTIONS; a++) {
                     if (a > 0) sb.append(' ');
-                    sb.append(row[a]);
+                    sb.append(q[s][a]);
                 }
+                for (int a = 0; a < N_ACTIONS; a++) sb.append(' ').append(visits[s][a]);
                 sb.append(System.lineSeparator());
                 w.write(sb.toString());
             }
@@ -351,11 +372,12 @@ public final class ThresholdMetaLearner {
     public static ThresholdMetaLearner loadOrCreate(File file, double initialValue, double minValue,
                                                     double maxValue, double resolution, double epsilon, long seed,
                                                     int popBuckets) {
+        // Ancien format (# qtable-inc, sans compteurs de visites) : incompatible, table vierge.
         ThresholdMetaLearner learner = new ThresholdMetaLearner(initialValue, minValue, maxValue, resolution, epsilon, seed, popBuckets);
         if (file == null || !file.isFile()) return learner;
         try (BufferedReader r = new BufferedReader(new FileReader(file))) {
             String header = r.readLine();
-            String expected = "# qtable-inc states=" + learner.q.length + " actions=" + N_ACTIONS + " ";
+            String expected = "# qtable-visits states=" + learner.q.length + " actions=" + N_ACTIONS + " ";
             if (header == null || !header.startsWith(expected)) {
                 return learner; // structure incompatible → repartir vierge
             }
@@ -365,6 +387,9 @@ public final class ThresholdMetaLearner {
                 String[] parts = line.trim().split("\\s+");
                 for (int a = 0; a < N_ACTIONS && a < parts.length; a++) {
                     learner.q[s][a] = Double.parseDouble(parts[a]);
+                }
+                for (int a = 0; a < N_ACTIONS && N_ACTIONS + a < parts.length; a++) {
+                    learner.visits[s][a] = Integer.parseInt(parts[N_ACTIONS + a]);
                 }
             }
         } catch (IOException | NumberFormatException e) {

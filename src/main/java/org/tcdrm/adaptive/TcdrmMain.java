@@ -247,6 +247,8 @@ public class TcdrmMain {
                 String regime = complex ? "Complex" : "Simple";
                 runs.add(new BenchmarkExporter.SeedRun(seed, "TCDRM", regime,
                     BenchmarkRunner.runTcdrm(seed, complex, "TCDRM_" + regime)));
+                runs.add(new BenchmarkExporter.SeedRun(seed, "Glouton", regime,
+                    BenchmarkRunner.runGreedy(seed, complex, "Glouton_" + regime)));
                 bridge.resetCounters();
                 runs.add(new BenchmarkExporter.SeedRun(seed, "QLearning", regime,
                     BenchmarkRunner.runRL(bridge, "qlearning", "QLearning_" + regime, complex, seed)));

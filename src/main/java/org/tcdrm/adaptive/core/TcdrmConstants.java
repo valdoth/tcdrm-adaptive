@@ -132,16 +132,26 @@ public final class TcdrmConstants {
      * al. 2012) est franchi dès le premier accès au démarrage à froid ; la règle de
      * rentabilité ski-rental (répliquer quand le surcoût distant cumulé couvre la
      * création, Mansouri et al. 2016) réplique après 2 accès, car la création coûte un
-     * seul transfert (replicationCost). Au-dessus du plancher, le seuil reste appris.
+     * seul transfert (replicationCost).
+     *
+     * Le plancher s'applique à la donnée la PLUS populaire : il dit si la popularité
+     * est établie. Les autres données sont ensuite éligibles par rapport à elle (voir
+     * {@link #META_POPULARITY_RATIO_MIN}) — le seuil relatif n'est donc jamais franchi
+     * au démarrage à froid, le défaut qui avait fait écarter D2RS.
      */
     public static final double META_POPULARITY_MIN = normalizedPopularity(
         1.0 - Math.pow(1.0 - POPULARITY_EMA_LAMBDA, 1.0 / POPULARITY_EMA_LAMBDA));
     /**
-     * Nombre de buckets de popularité (popularité max normalisée, [0,1]) dans l'état du
-     * méta-contrôleur du seuil de popularité : il décide d'ouvrir l'éligibilité en
-     * connaissant la popularité réelle des données, pas seulement les violations.
+     * Borne basse du seuil RELATIF de popularité ρ appris : une donnée est éligible si
+     * sa popularité atteint ρ × celle de la donnée la plus populaire (seuil relatif au
+     * taux d'accès du système, D2RS — Sun et al. 2012), une fois la popularité établie
+     * ({@link #META_POPULARITY_MIN}). En charge variable, un plancher absolu exigeait
+     * qu'une donnée soit lue dans ~63 % des requêtes : des données lues dans 26 à 38 %
+     * des requêtes (270 à 380 accès sur 1000, graine 777) n'étaient jamais réplicables,
+     * alors que TCDRM les réplique. Borne = un cran de la grille : une donnée lue dix
+     * fois moins que la plus populaire n'est jamais éligible.
      */
-    public static final int META_POPULARITY_BUCKETS = 5;
+    public static final double META_POPULARITY_RATIO_MIN = META_POPULARITY_RESOLUTION;
     /** Résolution de discrétisation du multiplicateur T_SLA (grille, pas une limite). */
     public static final double META_TSLA_RESOLUTION = 0.05;
     /** Borne basse du multiplicateur T_SLA appris (fraction du contrat). */
@@ -167,6 +177,12 @@ public final class TcdrmConstants {
     public static java.io.File metaQtableFile(String agentTag, String kind, boolean complex) {
         return new java.io.File(META_QTABLE_DIR,
             "meta_threshold_" + agentTag + "_" + kind + "_" + (complex ? "complex" : "simple") + ".qtable");
+    }
+
+    /** Fichier du bandit du seuil relatif de popularité ρ (appris par épisode) d'un agent. */
+    public static java.io.File popularityBanditFile(String agentTag, boolean complex) {
+        return new java.io.File(META_QTABLE_DIR,
+            "popularity_bandit_" + agentTag + "_" + (complex ? "complex" : "simple") + ".bandit");
     }
 
     /**

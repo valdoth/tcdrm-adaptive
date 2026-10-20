@@ -36,11 +36,11 @@ public class TrainingEnvironment {
     private double cumulativeReward;
     // Seuils adaptatifs — APPRIS par méta-contrôleurs Q-learning (Sujet 1, approche
     // "Q-Threshold"). Le C_SLA interne est appris sous le contrat (jamais au-dessus).
-    // dynamicMinPopularity =
-    // éligibilité popularité du papier (Algorithm 1 : pd_i ≥ P_SLA), repart du contrat
-    // (1.0) à chaque épisode ; la POLITIQUE d'ajustement est dans les Q-tables
-    // persistées, aucune règle codée en dur. Le méta-contrôleur observe la popularité
-    // des données et paie les réplicas froids : il apprend à quelle popularité ouvrir.
+    // dynamicMinPopularity = seuil RELATIF ρ de l'éligibilité popularité (Algorithm 1) :
+    // une donnée est éligible si sa popularité atteint ρ × celle de la plus populaire,
+    // une fois la popularité établie (plancher P_SLA). ρ est appris PAR ÉPISODE par un
+    // bandit sur le coût d'épisode (EpisodeThresholdBandit) : fixé pour l'épisode,
+    // exploré à l'entraînement, meilleur niveau en évaluation.
     // Au-dessus du seuil, l'agent principal décide librement quand/combien répliquer.
     private double dynamicTSla;
     private double dynamicMinPopularity = 1.0;
@@ -51,7 +51,7 @@ public class TrainingEnvironment {
     // Mode ÉVALUATION (sélection du meilleur modèle) : départ habituel, sans départ
     // exploratoire — l'épisode mesure la politique sur la trajectoire du benchmark.
     private boolean evalMode = false;
-    private final org.tcdrm.adaptive.rl.ThresholdMetaLearner popularityLearner;
+    private final org.tcdrm.adaptive.rl.EpisodeThresholdBandit popularityBandit;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner cslaLearner;
     private final org.tcdrm.adaptive.rl.ThresholdMetaLearner tslaLearner;
     // Fenêtre ΔT de suppression (Paper Algorithm 3), apprise — fraction de P_SLA.
@@ -59,6 +59,8 @@ public class TrainingEnvironment {
     // Metrics for external-style logging
     private int slaViolations;
     private double cumulativeCost;
+    /** Requêtes exécutées dans l'épisode (warmup compris) : coût moyen pour le bandit ρ. */
+    private int episodeQueries;
     private int replicaChanges;
     private int lastReplicaCount;
     private boolean lastInvalidAction;
@@ -106,11 +108,10 @@ public class TrainingEnvironment {
         // inter-sessions), ε>0 pendant l'entraînement. ε calibré pour la cadence
         // PAR REQUÊTE (1000 décisions/épisode) : 0.05 ≈ 50 explorations par épisode.
         final double metaEps = 0.05;
-        this.popularityLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
-            TcdrmConstants.metaQtableFile(this.agentTag, "pop", complex),
-            TcdrmConstants.META_POPULARITY_MIN, TcdrmConstants.META_POPULARITY_MIN, 1.0,
-            TcdrmConstants.META_POPULARITY_RESOLUTION, metaEps,
-            seed ^ this.agentTag.hashCode(), TcdrmConstants.META_POPULARITY_BUCKETS).withoutFidelity();
+        this.popularityBandit = org.tcdrm.adaptive.rl.EpisodeThresholdBandit.loadOrCreate(
+            TcdrmConstants.popularityBanditFile(this.agentTag, complex),
+            1.0, TcdrmConstants.META_POPULARITY_RATIO_MIN, 1.0,
+            TcdrmConstants.META_POPULARITY_RESOLUTION, seed ^ this.agentTag.hashCode());
         this.tslaLearner = org.tcdrm.adaptive.rl.ThresholdMetaLearner.loadOrCreate(
             TcdrmConstants.metaQtableFile(this.agentTag, "tsla", complex),
             1.0, TcdrmConstants.META_TSLA_MIN_MULTIPLIER, 1.0,
@@ -139,18 +140,18 @@ public class TrainingEnvironment {
         if (currentQuery > 0) {
             endEpisodeAndAdapt();
         }
-        // Nouvel épisode : les seuils repartent des valeurs CONTRACTUELLES, sauf la popularité
-        // qui repart du plancher P_SLA ; la connaissance accumulée (Q-tables des
-        // méta-contrôleurs) est conservée entre épisodes.
+        // Nouvel épisode : les seuils repartent des valeurs CONTRACTUELLES ; le seuil
+        // relatif de popularité est tiré par le bandit (exploration à l'entraînement,
+        // meilleur niveau en évaluation) et reste fixe pendant l'épisode ;
+        // la connaissance accumulée (Q-tables, bandit) est conservée.
         double contractTSla = complex
             ? (settings.getTSlaComplexMs() > 0 ? settings.getTSlaComplexMs() : TcdrmConstants.TSLA_COMPLEX_MS)
             : (settings.getTSlaSimpleMs()  > 0 ? settings.getTSlaSimpleMs()  : TcdrmConstants.TSLA_SIMPLE_MS);
-        popularityLearner.startEpisode(TcdrmConstants.META_POPULARITY_MIN);
         tslaLearner.startEpisode(1.0);
         deletionWindowLearner.startEpisode(1.0);
         cslaLearner.startEpisode(1.0);
         this.cSla = contractCSla * cslaLearner.getValue();
-        this.dynamicMinPopularity = popularityLearner.getValue();
+        this.dynamicMinPopularity = evalMode ? popularityBandit.best() : popularityBandit.select();
         this.dynamicTSla = contractTSla * tslaLearner.getValue();
         // Régime de workload d'ENTRAÎNEMENT : rotation steady/variable/burst tirée de
         // la seed de l'épisode (~1/3 chacun, reproductible) — décorrélée de l'alternance
@@ -200,6 +201,7 @@ public class TrainingEnvironment {
         this.cumulativeReward = 0.0;
         this.slaViolations = 0;
         this.cumulativeCost = 0.0;
+        this.episodeQueries = 0;
         this.replicaChanges = 0;
         this.lastReplicaCount = simulation.getCurrentReplicaCount();
         this.lastInvalidAction = false;
@@ -242,6 +244,7 @@ public class TrainingEnvironment {
                 lastLatency = res.queryTimeMs();
                 lastCost = res.totalCost();
                 cumulativeCost += lastCost;
+                episodeQueries++;
                 if (lastLatency > tSla) slaViolations++;
                 int rcNow = res.replicaCount();
                 if (rcNow != lastReplicaCount) {
@@ -290,6 +293,7 @@ public class TrainingEnvironment {
         lastLatency = result.queryTimeMs();
         lastCost = result.totalCost();
         cumulativeCost += lastCost;
+        episodeQueries++;
         boolean violated = lastLatency > tSla;
         if (violated) slaViolations++;
         // Signal de stress lissé, mis à jour et exploité À CHAQUE REQUÊTE : les
@@ -316,6 +320,10 @@ public class TrainingEnvironment {
         boolean done = (currentQuery >= maxEp);
         // Persister les Q-tables des méta-contrôleurs à chaque fin d'épisode (le reset
         // suivant peut ne jamais arriver pour le dernier épisode de la session).
+        // Le bandit ρ apprend du coût moyen de l'épisode (pas des épisodes d'évaluation).
+        if (done && !evalMode) {
+            popularityBandit.update(dynamicMinPopularity, cumulativeCost / Math.max(1, episodeQueries));
+        }
         if (done) saveMetaLearners();
         
         // Construire l'info
@@ -404,7 +412,7 @@ public class TrainingEnvironment {
         double prematureReplPenalty = 0.0;
         double correctTriggerBonus = 0.0;
         if (action == 1 && lastAssignmentSuccess) {
-            // REPLICATE crée plusieurs réplicas en une décision : coût par réplica créé.
+            // Coût par réplica créé (REPLICATE en crée un).
             int created = Math.max(1, simulation.getLastCreatedCount());
             double dataGb = TcdrmConstants.queryDataSizeGb(complex);
             replCostPenalty = -settings.getRewardReplCost() * created
@@ -535,18 +543,12 @@ public class TrainingEnvironment {
     // politique d'ajustement est apprise et persistée dans les Q-tables.
 
     /**
-     * À chaque requête : chaque méta-contrôleur observe le stress lissé (violations,
+     * À chaque requête : chaque méta-contrôleur (T_SLA, C_SLA interne, ΔT ; ρ est
+     * appris par épisode, voir popularityBandit) observe le stress lissé (violations,
      * coût), apprend (TD-update) et choisit le niveau courant de son seuil — le moment
      * d'un changement est donc entièrement déterminé par sa politique apprise.
      */
     private void adaptThresholds(double violationRate, double avgCostRatio) {
-        if (simulation != null) {
-            int maxReplicas = TcdrmConstants.maxReplicasForQueryType(complex);
-            dynamicMinPopularity = popularityLearner.observeAndAdjust(violationRate, avgCostRatio,
-                simulation.getPopularityScore(),
-                Math.min(1.0, simulation.getUnpopularReplicaLoad() / maxReplicas));
-        }
-
         double contractTSla = complex
             ? (settings.getTSlaComplexMs() > 0 ? settings.getTSlaComplexMs() : TcdrmConstants.TSLA_COMPLEX_MS)
             : (settings.getTSlaSimpleMs()  > 0 ? settings.getTSlaSimpleMs()  : TcdrmConstants.TSLA_SIMPLE_MS);
@@ -584,7 +586,7 @@ public class TrainingEnvironment {
     /** Sauvegarde les Q-tables des méta-contrôleurs de seuils de CET agent (Sujet 1). */
     private void saveMetaLearners() {
         try {
-            popularityLearner.save(TcdrmConstants.metaQtableFile(agentTag, "pop", complex));
+            popularityBandit.save(TcdrmConstants.popularityBanditFile(agentTag, complex));
             tslaLearner.save(TcdrmConstants.metaQtableFile(agentTag, "tsla", complex));
             deletionWindowLearner.save(TcdrmConstants.metaQtableFile(agentTag, "delw", complex));
             cslaLearner.save(TcdrmConstants.metaQtableFile(agentTag, "csla", complex));

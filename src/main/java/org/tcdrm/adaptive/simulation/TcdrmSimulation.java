@@ -42,7 +42,8 @@ public class TcdrmSimulation {
     // Q-learning (ThresholdMetaLearner) — aucune règle d'ajustement codée en dur.
     // Toute réplication RL sous ce seuil est convertie en NOOP : les données
     // non populaires ne sont JAMAIS répliquées.
-    private double dynamicMinPopularity = 1.0;
+    /** Seuil RELATIF de popularité ρ appris (fraction de la popularité de la donnée la plus populaire). */
+    private double dynamicPopularityRatio = 1.0;
     private int lastCreatedCount = 0;
 
     // Fenêtre d'observation ΔT de suppression (Paper Algorithm 3), en NOMBRE DE
@@ -427,14 +428,11 @@ public class TcdrmSimulation {
      * Au-dessus du seuil, l'agent décide librement : la reward et l'état [7]
      * (popularityScore) lui enseignent le bon moment et le bon nombre de réplicas.
      *
-     * REPLICATE est une décision COMPLÈTE : elle crée en une fois tous les réplicas utiles
-     * des données populaires (même optimiseur, même filtre d'utilité, dans la limite du
-     * maximum et du budget). L'agent décide QUAND répliquer, l'optimiseur OÙ et COMBIEN.
-     * Avec un réplica par décision, la couverture d'une requête complexe demandait ~5
-     * REPLICATE consécutifs dont les états intermédiaires se confondent dans la grille
-     * de Q-Learning (« une partie des relations servies ») : Q-Learning y apprenait
-     * REPLICATE < NOOP et attendait le déclenchement de TCDRM (requête 200), alors que
-     * répliquer dès que permis rapporte plus (+4658 contre −5166, graine 42).
+     * REPLICATE crée UN réplica (le meilleur candidat de l'optimiseur) : le nombre de
+     * réplicas et leur rythme sont des décisions de l'agent, payées par la récompense.
+     * La version « complète » (tous les candidats en une action) donnait toujours le
+     * même nombre que TCDRM au premier instant permis par le plancher : rien n'était
+     * appris, ni le moment ni le nombre.
      *
      * @param action 0=NOOP, 1=REPLICATE, 2=DELETE
      */
@@ -450,12 +448,9 @@ public class TcdrmSimulation {
 
         lastCreatedCount = 0;
         if (action == 1 && currentReplicaCount < maxReplicas && currentBudget > 0) {
-            double c;
-            while (currentReplicaCount < maxReplicas && currentBudget > 0 && (c = createReplica()) > 0.0) {
-                creationCost += c;
-                currentBudget -= c;
-                lastCreatedCount++;
-            }
+            creationCost = createReplica();
+            currentBudget -= creationCost;
+            if (creationCost > 0.0) lastCreatedCount = 1;
         } else if (action == 2 && currentReplicaCount > 0) {
             int[] idx = findDeletableReplica();
             if (idx != null) deleteReplicaAt(idx[0], idx[1]);
@@ -644,7 +639,7 @@ public class TcdrmSimulation {
     private double createReplica() {
         ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
             fragments, execProvider, execRegion, infrastructure, replicasPerProvider,
-            dynamicMinPopularity, dynamicDeletionWindowQueries);
+            fragmentPopularityThreshold(), dynamicDeletionWindowQueries);
         if (c == null) return 0.0;
         double cost = c.fragment().createReplica(c.provider(), c.region(), dynamicDeletionWindowQueries);
         if (cost > 0.0) {
@@ -666,7 +661,7 @@ public class TcdrmSimulation {
         return currentReplicaCount < TcdrmConstants.maxReplicasForQueryType(complex)
             && currentBudget > 0 && isReplicationAllowed()
             && placementOptimizer.selectBest(fragments, execProvider, execRegion, infrastructure,
-                   replicasPerProvider, dynamicMinPopularity, dynamicDeletionWindowQueries) != null;
+                   replicasPerProvider, fragmentPopularityThreshold(), dynamicDeletionWindowQueries) != null;
     }
 
     /** Nombre de réplicas créés par la dernière action REPLICATE (0 si aucun). */
@@ -919,10 +914,12 @@ public class TcdrmSimulation {
         // par élément : fraction éligible au seuil courant, et popularité moyenne.
         int eligible = 0;
         double popSum = 0.0;
+        boolean established = isReplicationAllowed();
+        double threshold = fragmentPopularityThreshold();
         for (DataFragment f : fragments) {
             double pop = TcdrmConstants.normalizedPopularity(f.getPopularityEma());
             popSum += pop;
-            if (pop >= dynamicMinPopularity) eligible++;
+            if (established && pop >= threshold) eligible++;
         }
         double eligibleFraction = (double) eligible / Math.max(1, fragments.size());
         double meanPopularity   = popSum / Math.max(1, fragments.size());
@@ -981,13 +978,21 @@ public class TcdrmSimulation {
     }
 
     /**
-     * Injecte les seuils adaptatifs T_SLA et popularité (P_SLA normalisé).
-     * Le seuil popularité est borné à [0,1] — bornes de définition de la popularité
-     * normalisée (fraction du P_SLA contractuel), pas un réglage comportemental.
+     * Injecte les seuils adaptatifs T_SLA et popularité RELATIVE ρ, bornée à
+     * [META_POPULARITY_RATIO_MIN, 1].
      */
-    public void setDynamicThresholds(double tSla, double minPopularity) {
+    public void setDynamicThresholds(double tSla, double popularityRatio) {
         setDynamicThresholds(tSla);
-        this.dynamicMinPopularity = Math.max(TcdrmConstants.META_POPULARITY_MIN, Math.min(1.0, minPopularity));
+        this.dynamicPopularityRatio = Math.max(TcdrmConstants.META_POPULARITY_RATIO_MIN,
+            Math.min(1.0, popularityRatio));
+    }
+
+    /**
+     * Popularité normalisée minimale d'une donnée pour être éligible : ρ × popularité
+     * de la donnée la plus populaire (seuil relatif au taux d'accès du système).
+     */
+    private double fragmentPopularityThreshold() {
+        return dynamicPopularityRatio * getPopularityScore();
     }
 
     /**
@@ -1003,8 +1008,13 @@ public class TcdrmSimulation {
         return currentReplicaCount > 0 && findDeletableReplica() != null;
     }
 
+    /**
+     * Popularité établie (Paper Algorithm 1, plancher P_SLA) : la donnée la plus
+     * populaire a franchi le plancher — une seule requête ne rend pas une donnée
+     * populaire. L'éligibilité de chaque donnée est ensuite relative (ρ).
+     */
     public boolean isReplicationAllowed() {
-        return getPopularityScore() >= dynamicMinPopularity;
+        return getPopularityScore() >= TcdrmConstants.META_POPULARITY_MIN;
     }
 
     /**
@@ -1021,8 +1031,8 @@ public class TcdrmSimulation {
 
     public double getDynamicTSla() { return dynamicTSla; }
 
-    /** Seuil de popularité adaptatif courant (P_SLA normalisé, Sujet 1). */
-    public double getDynamicMinPopularity() { return dynamicMinPopularity; }
+    /** Seuil relatif de popularité ρ courant (Sujet 1). */
+    public double getDynamicPopularityRatio() { return dynamicPopularityRatio; }
 
     /** Poids courants de l'optimiseur de placement (Sujet 2) pour monitoring. */
     public double[] getPlacementWeights() {

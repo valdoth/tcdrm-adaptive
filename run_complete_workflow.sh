@@ -45,6 +45,8 @@ cleanup_initial() {
             rm -f "$PYTHON_DIR/models/rainbow_cloudsim.pt" 2>/dev/null || true
             # Q-tables des méta-contrôleurs de seuils (réapprises avec les agents)
             rm -f "$PYTHON_DIR/models/"meta_threshold_*.qtable 2>/dev/null || true
+            # Bandits du seuil relatif de popularité ρ (appris par épisode avec les agents)
+            rm -f "$PYTHON_DIR/models/"popularity_bandit_*.bandit 2>/dev/null || true
     else
         echo "   Keeping existing models..."
     fi
@@ -143,13 +145,13 @@ nohup uv run tensorboard --logdir logs --port "$TENSORBOARD_PORT" --reload_inter
 TENSORBOARD_PID=$!
 cd "$PROJECT_ROOT"
 
-for i in {1..15}; do
+for i in {1..30}; do
     if lsof -i:"$TENSORBOARD_PORT" > /dev/null 2>&1; then
         echo -e "${GREEN}✅ TensorBoard ready: http://localhost:${TENSORBOARD_PORT}${NC}"
         break
     fi
-    if [ $i -eq 15 ]; then
-        echo -e "${YELLOW}⚠️  TensorBoard did not start after 15s (see /tmp/tensorboard.log)${NC}"
+    if [ $i -eq 30 ]; then
+        echo -e "${YELLOW}⚠️  TensorBoard did not start after 30s (see /tmp/tensorboard.log)${NC}"
         TENSORBOARD_PID=""
     fi
     sleep 1

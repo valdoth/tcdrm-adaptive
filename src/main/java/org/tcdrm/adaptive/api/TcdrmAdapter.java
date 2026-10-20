@@ -385,6 +385,9 @@ public final class TcdrmAdapter {
         BenchmarkData tcdrmSimple  = BenchmarkRunner.runTcdrm(benchSeed(), false, "TCDRM_Simple");
         BenchmarkData norepComplex = BenchmarkRunner.runNoRep(benchSeed(), true,  "NoRepLc_Complex");
         BenchmarkData tcdrmComplex = BenchmarkRunner.runTcdrm(benchSeed(), true,  "TCDRM_Complex");
+        // Référence gloutonne (règles des agents, sans apprentissage) : résumé seulement.
+        BenchmarkData greedySimple  = BenchmarkRunner.runGreedy(benchSeed(), false, "Glouton_Simple");
+        BenchmarkData greedyComplex = BenchmarkRunner.runGreedy(benchSeed(), true,  "Glouton_Complex");
 
         try {
             BenchmarkExporter.exportPerQueryCsv(norepSimple,  "metrics/baseline_norep_simple.csv");
@@ -430,10 +433,10 @@ public final class TcdrmAdapter {
                 BenchmarkExporter.exportOvertimeAverages(qlComplex,  "metrics/log_overtime.csv", 100);
                 BenchmarkExporter.exportOvertimeAverages(rainbowComplex, "metrics/log_overtime.csv", 100);
 
-                // Summary CSV (all 8 runs)
+                // Summary CSV (all 10 runs)
                 java.util.List<BenchmarkData> allModels = java.util.Arrays.asList(
-                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
-                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex
+                    norepSimple, tcdrmSimple, greedySimple, qlSimple, rainbowSimple,
+                    norepComplex, tcdrmComplex, greedyComplex, qlComplex, rainbowComplex
                 );
                 BenchmarkExporter.exportSummaryCsv(allModels, "metrics/summary_phase2_rl.csv");
 
