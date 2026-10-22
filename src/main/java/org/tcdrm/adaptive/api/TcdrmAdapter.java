@@ -101,7 +101,7 @@ public final class TcdrmAdapter {
     /** Run Q-Learning on simple then complex workloads within a single Python session. */
     public static void runQlearningBoth(int gatewayTimeoutSec) {
         System.setProperty("java.awt.headless", "true");
-        new File("images").mkdirs();
+        new File(RuntimeConfig.imagesDir()).mkdirs();
         new File("metrics").mkdirs();
 
         Py4JGateway gateway = new Py4JGateway();
@@ -120,8 +120,8 @@ public final class TcdrmAdapter {
             try {
                 BenchmarkExporter.exportPerQueryCsv(qlSimple, "metrics/rl_qlearning_simple.csv");
                 BenchmarkExporter.exportOvertimeAverages(qlSimple, "metrics/log_overtime.csv", 100);
-                ChartGenerator.generateModelMetrics(qlSimple, "images/metrics_qlearning_simple.png", false);
-                ChartGenerator.generatePopularityAnalysis(qlSimple, "images/popularity_qlearning_simple.png", false);
+                ChartGenerator.generateModelMetrics(qlSimple, RuntimeConfig.imagePath("metrics_qlearning_simple.png"), false);
+                ChartGenerator.generatePopularityAnalysis(qlSimple, RuntimeConfig.imagePath("popularity_qlearning_simple.png"), false);
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export Q-Learning simple outputs", ioe);
             }
@@ -131,8 +131,8 @@ public final class TcdrmAdapter {
             try {
                 BenchmarkExporter.exportPerQueryCsv(qlComplex, "metrics/rl_qlearning_complex.csv");
                 BenchmarkExporter.exportOvertimeAverages(qlComplex, "metrics/log_overtime.csv", 100);
-                ChartGenerator.generateModelMetrics(qlComplex, "images/metrics_qlearning_complex.png", true);
-                ChartGenerator.generatePopularityAnalysis(qlComplex, "images/popularity_qlearning_complex.png", true);
+                ChartGenerator.generateModelMetrics(qlComplex, RuntimeConfig.imagePath("metrics_qlearning_complex.png"), true);
+                ChartGenerator.generatePopularityAnalysis(qlComplex, RuntimeConfig.imagePath("popularity_qlearning_complex.png"), true);
                 BenchmarkExporter.exportSummaryCsv(
                     java.util.Arrays.asList(qlSimple, qlComplex),
                     "metrics/summary_qlearning.csv");
@@ -149,7 +149,7 @@ public final class TcdrmAdapter {
     /** Run DQN on simple then complex workloads within a single Python session. */
     public static void runRainbowBoth(int gatewayTimeoutSec) {
         System.setProperty("java.awt.headless", "true");
-        new File("images").mkdirs();
+        new File(RuntimeConfig.imagesDir()).mkdirs();
         new File("metrics").mkdirs();
 
         Py4JGateway gateway = new Py4JGateway();
@@ -168,8 +168,8 @@ public final class TcdrmAdapter {
             try {
                 BenchmarkExporter.exportPerQueryCsv(rainbowSimple, "metrics/rl_rainbow_simple.csv");
                 BenchmarkExporter.exportOvertimeAverages(rainbowSimple, "metrics/log_overtime.csv", 100);
-                ChartGenerator.generateModelMetrics(rainbowSimple, "images/metrics_rainbow_simple.png", false);
-                ChartGenerator.generatePopularityAnalysis(rainbowSimple, "images/popularity_rainbow_simple.png", false);
+                ChartGenerator.generateModelMetrics(rainbowSimple, RuntimeConfig.imagePath("metrics_rainbow_simple.png"), false);
+                ChartGenerator.generatePopularityAnalysis(rainbowSimple, RuntimeConfig.imagePath("popularity_rainbow_simple.png"), false);
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export Rainbow DQN simple outputs", ioe);
             }
@@ -179,8 +179,8 @@ public final class TcdrmAdapter {
             try {
                 BenchmarkExporter.exportPerQueryCsv(rainbowComplex, "metrics/rl_rainbow_complex.csv");
                 BenchmarkExporter.exportOvertimeAverages(rainbowComplex, "metrics/log_overtime.csv", 100);
-                ChartGenerator.generateModelMetrics(rainbowComplex, "images/metrics_rainbow_complex.png", true);
-                ChartGenerator.generatePopularityAnalysis(rainbowComplex, "images/popularity_rainbow_complex.png", true);
+                ChartGenerator.generateModelMetrics(rainbowComplex, RuntimeConfig.imagePath("metrics_rainbow_complex.png"), true);
+                ChartGenerator.generatePopularityAnalysis(rainbowComplex, RuntimeConfig.imagePath("popularity_rainbow_complex.png"), true);
                 BenchmarkExporter.exportSummaryCsv(
                     java.util.Arrays.asList(rainbowSimple, rainbowComplex),
                     "metrics/summary_rainbow.csv");
@@ -196,7 +196,7 @@ public final class TcdrmAdapter {
 
     private static void runSingleRL(String model, boolean complex, long seed, int timeoutSec) {
         System.setProperty("java.awt.headless", "true");
-        new File("images").mkdirs();
+        new File(RuntimeConfig.imagesDir()).mkdirs();
         new File("metrics").mkdirs();
 
         Py4JGateway gateway = new Py4JGateway();
@@ -232,8 +232,8 @@ public final class TcdrmAdapter {
             }
 
             // Export per-model figures only (no combined charts)
-            String metricsPng = "images/metrics_" + ("qlearning".equals(model) ? "qlearning" : "rainbow") + (complex ? "_complex.png" : "_simple.png");
-            String popPng = "images/popularity_" + ("qlearning".equals(model) ? "qlearning" : "rainbow") + (complex ? "_complex.png" : "_simple.png");
+            String metricsPng = RuntimeConfig.imagePath("metrics_") + ("qlearning".equals(model) ? "qlearning" : "rainbow") + (complex ? "_complex.png" : "_simple.png");
+            String popPng = RuntimeConfig.imagePath("popularity_") + ("qlearning".equals(model) ? "qlearning" : "rainbow") + (complex ? "_complex.png" : "_simple.png");
             try {
                 ChartGenerator.generateModelMetrics(data, metricsPng, complex);
                 ChartGenerator.generatePopularityAnalysis(data, popPng, complex);
@@ -254,7 +254,7 @@ public final class TcdrmAdapter {
     /** Run Q-Learning vs DQN for simple then complex workloads within a single Python session. */
     public static void runQlearningVsRainbowBoth(int gatewayTimeoutSec) {
         System.setProperty("java.awt.headless", "true");
-        new File("images").mkdirs();
+        new File(RuntimeConfig.imagesDir()).mkdirs();
         new File("metrics").mkdirs();
 
         Py4JGateway gateway = new Py4JGateway();
@@ -280,11 +280,11 @@ public final class TcdrmAdapter {
                 BenchmarkExporter.exportOvertimeAverages(qlSimple, "metrics/log_overtime.csv", 100);
                 BenchmarkExporter.exportOvertimeAverages(rainbowSimple, "metrics/log_overtime.csv", 100);
                 double tSlaS = org.tcdrm.adaptive.core.TcdrmConstants.TSLA_SIMPLE_MS;
-                ChartGenerator.generateReplicaFactor2Models(qlSimple, rainbowSimple, "images/rl2_replica_factor_simple.png");
-                ChartGenerator.generateResponseTime2Models(qlSimple, rainbowSimple, tSlaS, "images/rl2_response_time_simple.png");
-                ChartGenerator.generateAvgBwPrice2Models(qlSimple, rainbowSimple, "images/rl2_avg_bw_price_simple.png");
-                ChartGenerator.generateCumulativeBwPrice2Models(qlSimple, rainbowSimple, "images/rl2_cumulative_bw_price_simple.png");
-                ChartGenerator.generateBwConsumption2Models(qlSimple, rainbowSimple, "images/rl2_bw_consumption_simple.png");
+                ChartGenerator.generateReplicaFactor2Models(qlSimple, rainbowSimple, RuntimeConfig.imagePath("rl2_replica_factor_simple.png"));
+                ChartGenerator.generateResponseTime2Models(qlSimple, rainbowSimple, tSlaS, RuntimeConfig.imagePath("rl2_response_time_simple.png"));
+                ChartGenerator.generateAvgBwPrice2Models(qlSimple, rainbowSimple, RuntimeConfig.imagePath("rl2_avg_bw_price_simple.png"));
+                ChartGenerator.generateCumulativeBwPrice2Models(qlSimple, rainbowSimple, RuntimeConfig.imagePath("rl2_cumulative_bw_price_simple.png"));
+                ChartGenerator.generateBwConsumption2Models(qlSimple, rainbowSimple, RuntimeConfig.imagePath("rl2_bw_consumption_simple.png"));
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export simple comparison outputs", ioe);
             }
@@ -300,11 +300,11 @@ public final class TcdrmAdapter {
                 BenchmarkExporter.exportOvertimeAverages(qlComplex, "metrics/log_overtime.csv", 100);
                 BenchmarkExporter.exportOvertimeAverages(rainbowComplex, "metrics/log_overtime.csv", 100);
                 double tSlaC = org.tcdrm.adaptive.core.TcdrmConstants.TSLA_COMPLEX_MS;
-                ChartGenerator.generateReplicaFactor2Models(qlComplex, rainbowComplex, "images/rl2_replica_factor_complex.png");
-                ChartGenerator.generateResponseTime2Models(qlComplex, rainbowComplex, tSlaC, "images/rl2_response_time_complex.png");
-                ChartGenerator.generateAvgBwPrice2Models(qlComplex, rainbowComplex, "images/rl2_avg_bw_price_complex.png");
-                ChartGenerator.generateCumulativeBwPrice2Models(qlComplex, rainbowComplex, "images/rl2_cumulative_bw_price_complex.png");
-                ChartGenerator.generateBwConsumption2Models(qlComplex, rainbowComplex, "images/rl2_bw_consumption_complex.png");
+                ChartGenerator.generateReplicaFactor2Models(qlComplex, rainbowComplex, RuntimeConfig.imagePath("rl2_replica_factor_complex.png"));
+                ChartGenerator.generateResponseTime2Models(qlComplex, rainbowComplex, tSlaC, RuntimeConfig.imagePath("rl2_response_time_complex.png"));
+                ChartGenerator.generateAvgBwPrice2Models(qlComplex, rainbowComplex, RuntimeConfig.imagePath("rl2_avg_bw_price_complex.png"));
+                ChartGenerator.generateCumulativeBwPrice2Models(qlComplex, rainbowComplex, RuntimeConfig.imagePath("rl2_cumulative_bw_price_complex.png"));
+                ChartGenerator.generateBwConsumption2Models(qlComplex, rainbowComplex, RuntimeConfig.imagePath("rl2_bw_consumption_complex.png"));
             } catch (IOException ioe) {
                 throw new RuntimeException("Failed to export complex comparison outputs", ioe);
             }
@@ -317,7 +317,7 @@ public final class TcdrmAdapter {
 
     private static void runTwoModels(boolean complex, int timeoutSec) {
         System.setProperty("java.awt.headless", "true");
-        new File("images").mkdirs();
+        new File(RuntimeConfig.imagesDir()).mkdirs();
         new File("metrics").mkdirs();
 
         Py4JGateway gateway = new Py4JGateway();
@@ -354,11 +354,11 @@ public final class TcdrmAdapter {
 
             double tSla = complex ? org.tcdrm.adaptive.core.TcdrmConstants.TSLA_COMPLEX_MS : org.tcdrm.adaptive.core.TcdrmConstants.TSLA_SIMPLE_MS;
             // Two-model comparisons (methods handle IO internally)
-            ChartGenerator.generateReplicaFactor2Models(ql, rainbow, "images/rl2_replica_factor_" + (complex?"complex":"simple") + ".png");
-            ChartGenerator.generateResponseTime2Models(ql, rainbow, tSla, "images/rl2_response_time_" + (complex?"complex":"simple") + ".png");
-            ChartGenerator.generateAvgBwPrice2Models(ql, rainbow, "images/rl2_avg_bw_price_" + (complex?"complex":"simple") + ".png");
-            ChartGenerator.generateCumulativeBwPrice2Models(ql, rainbow, "images/rl2_cumulative_bw_price_" + (complex?"complex":"simple") + ".png");
-            ChartGenerator.generateBwConsumption2Models(ql, rainbow, "images/rl2_bw_consumption_" + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateReplicaFactor2Models(ql, rainbow, RuntimeConfig.imagePath("rl2_replica_factor_") + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateResponseTime2Models(ql, rainbow, tSla, RuntimeConfig.imagePath("rl2_response_time_") + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateAvgBwPrice2Models(ql, rainbow, RuntimeConfig.imagePath("rl2_avg_bw_price_") + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateCumulativeBwPrice2Models(ql, rainbow, RuntimeConfig.imagePath("rl2_cumulative_bw_price_") + (complex?"complex":"simple") + ".png");
+            ChartGenerator.generateBwConsumption2Models(ql, rainbow, RuntimeConfig.imagePath("rl2_bw_consumption_") + (complex?"complex":"simple") + ".png");
 
             System.out.println("\n[RL] Two-model comparison complete → see images/ and metrics/\n");
         } finally {
@@ -377,7 +377,7 @@ public final class TcdrmAdapter {
      */
     public static void runAllFourModels(int gatewayTimeoutSec) {
         System.setProperty("java.awt.headless", "true");
-        new File("images").mkdirs();
+        new File(RuntimeConfig.imagesDir()).mkdirs();
         new File("metrics").mkdirs();
 
         System.out.println("\n[4-model] Running NoRepLc and TCDRM baselines...");
@@ -394,6 +394,8 @@ public final class TcdrmAdapter {
             BenchmarkExporter.exportPerQueryCsv(tcdrmSimple,  "metrics/baseline_tcdrm_simple.csv");
             BenchmarkExporter.exportPerQueryCsv(norepComplex, "metrics/baseline_norep_complex.csv");
             BenchmarkExporter.exportPerQueryCsv(tcdrmComplex, "metrics/baseline_tcdrm_complex.csv");
+            BenchmarkExporter.exportPerQueryCsv(greedySimple,  "metrics/baseline_glouton_simple.csv");
+            BenchmarkExporter.exportPerQueryCsv(greedyComplex, "metrics/baseline_glouton_complex.csv");
         } catch (java.io.IOException ioe) {
             throw new RuntimeException("Failed to export baseline CSVs", ioe);
         }
@@ -439,38 +441,48 @@ public final class TcdrmAdapter {
                     norepComplex, tcdrmComplex, greedyComplex, qlComplex, rainbowComplex
                 );
                 BenchmarkExporter.exportSummaryCsv(allModels, "metrics/summary_phase2_rl.csv");
+                // Métriques détaillées de chaque stratégie (violations T_SLA du contrat, budget…)
+                for (BenchmarkData d : allModels) {
+                    ChartGenerator.generateModelMetrics(d,
+                        RuntimeConfig.imagePath("metrics_" + d.getName().toLowerCase() + ".png"),
+                        BenchmarkExporter.isComplex(d));
+                }
+                ChartGenerator.generateBudgetAndCsla(
+                    java.util.Arrays.asList(norepSimple, tcdrmSimple, greedySimple, qlSimple, rainbowSimple),
+                    java.util.Arrays.asList(norepComplex, tcdrmComplex, greedyComplex, qlComplex, rainbowComplex),
+                    RuntimeConfig.imagePath("fig8_budget_csla.png"));
 
                 // 4-model paper figures
                 ChartGenerator.generateReplicaFactor4Models(
                     norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                     norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                    "images/fig1_replica_factor_4models.png");
+                    RuntimeConfig.imagePath("fig1_replica_factor_4models.png"));
                 ChartGenerator.generateResponseTime4Models(
                     norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                     norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                    "images/fig2_response_time_4models.png");
+                    RuntimeConfig.imagePath("fig2_response_time_4models.png"));
                 ChartGenerator.generateBwConsumption4Models(
                     norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                     norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                    "images/fig3_bw_consumption_4models.png");
+                    RuntimeConfig.imagePath("fig3_bw_consumption_4models.png"));
                 ChartGenerator.generateAvgBwPrice4Models(
                     norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                     norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                    "images/fig4_avg_bw_price_4models.png");
+                    RuntimeConfig.imagePath("fig4_avg_bw_price_4models.png"));
                 ChartGenerator.generateCumulativeBwPrice4Models(
                     norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                     norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                    "images/fig5_cumulative_bw_price_4models.png");
+                    RuntimeConfig.imagePath("fig5_cumulative_bw_price_4models.png"));
                 ChartGenerator.generateTotalCost4Models(
                     norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                     norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                    "images/fig6_total_cost_4models.png");
+                    RuntimeConfig.imagePath("fig6_total_cost_4models.png"));
 
                 // Per-workload RL comparison figures (response_time, replicas, cost)
                 ChartGenerator.generateRLComparison(
-                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple, "images/rl4_simple", false);
+                    norepSimple, tcdrmSimple, qlSimple, rainbowSimple, RuntimeConfig.imagePath("rl4_simple"), false);
                 ChartGenerator.generateRLComparison(
-                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex, "images/rl4_complex", true);
+                    norepComplex, tcdrmComplex, qlComplex, rainbowComplex, RuntimeConfig.imagePath("rl4_complex"), true);
 
             } catch (java.io.IOException ioe) {
                 throw new RuntimeException("Failed to export 4-model outputs", ioe);

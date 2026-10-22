@@ -44,7 +44,7 @@ public class TcdrmMain {
         applyCloudSimLogLevel(opts.quietCloudSim);
 
         printHeader(opts);
-        new File("images").mkdirs();
+        new File(RuntimeConfig.imagesDir()).mkdirs();
 
         // Aligner le benchmark avec la validation: RANDOM par requête + 1000 requêtes
         RuntimeConfig.setExecRegion("RANDOM");
@@ -85,27 +85,27 @@ public class TcdrmMain {
 
             // Générer les graphiques du paper (Figs 2-7)
             System.out.println("\n  Generating paper figures...");
-            ChartGenerator.generateReplicaFactor(tcdrmSimple, tcdrmComplex, "images/fig2_replica_factor.png");
+            ChartGenerator.generateReplicaFactor(tcdrmSimple, tcdrmComplex, RuntimeConfig.imagePath("fig2_replica_factor.png"));
             ChartGenerator.generateResponseTime(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex, 
-                "images/fig3_response_time.png");
+                RuntimeConfig.imagePath("fig3_response_time.png"));
             ChartGenerator.generateBwConsumption(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex,
-                "images/fig4_bw_consumption.png");
+                RuntimeConfig.imagePath("fig4_bw_consumption.png"));
             ChartGenerator.generateAvgBwPrice(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex,
-                "images/fig5_avg_bw_price.png");
+                RuntimeConfig.imagePath("fig5_avg_bw_price.png"));
             ChartGenerator.generateCumulativeBwPrice(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex,
-                "images/fig6_cumulative_cost.png");
+                RuntimeConfig.imagePath("fig6_cumulative_cost.png"));
             ChartGenerator.generateTotalCost(norepSimple, tcdrmSimple, norepComplex, tcdrmComplex,
-                "images/fig7_total_cost.png");
+                RuntimeConfig.imagePath("fig7_total_cost.png"));
             
             // Métriques détaillées par modèle (NoRep, TCDRM)
             System.out.println("\n  Generating model metrics...");
-            ChartGenerator.generateModelMetrics(norepSimple, "images/metrics_norep_simple.png", false);
-            ChartGenerator.generateModelMetrics(tcdrmSimple, "images/metrics_tcdrm_simple.png", false);
+            ChartGenerator.generateModelMetrics(norepSimple, RuntimeConfig.imagePath("metrics_norep_simple.png"), false);
+            ChartGenerator.generateModelMetrics(tcdrmSimple, RuntimeConfig.imagePath("metrics_tcdrm_simple.png"), false);
             
             // Analyse de la popularité (NoRep, TCDRM)
             System.out.println("\n  Generating popularity analysis...");
-            ChartGenerator.generatePopularityAnalysis(norepSimple, "images/popularity_norep_simple.png", false);
-            ChartGenerator.generatePopularityAnalysis(tcdrmSimple, "images/popularity_tcdrm_simple.png", false);
+            ChartGenerator.generatePopularityAnalysis(norepSimple, RuntimeConfig.imagePath("popularity_norep_simple.png"), false);
+            ChartGenerator.generatePopularityAnalysis(tcdrmSimple, RuntimeConfig.imagePath("popularity_tcdrm_simple.png"), false);
             
             System.out.println("\n✅ Phase 1 complete: Paper figures generated (Figs 2-7 + Metrics + Popularity)");
         } else {
@@ -167,6 +167,10 @@ public class TcdrmMain {
                 qlSimple, rainbowSimple, qlComplex, rainbowComplex
             );
             BenchmarkExporter.exportSummaryCsv(phase2Models, "metrics/summary_phase2_rl.csv");
+            ChartGenerator.generateBudgetAndCsla(
+                java.util.Arrays.asList(norepSimple, tcdrmSimple, qlSimple, rainbowSimple),
+                java.util.Arrays.asList(norepComplex, tcdrmComplex, qlComplex, rainbowComplex),
+                RuntimeConfig.imagePath("fig8_budget_csla.png"));
             
             // Générer les graphiques avec 4 modèles (format PDF: Simple + Complex côte à côte)
             System.out.println("\n  Generating 4-model comparison figures (PDF format)...");
@@ -175,47 +179,47 @@ public class TcdrmMain {
             ChartGenerator.generateReplicaFactor4Models(
                 norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                 norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                "images/fig1_replica_factor_4models.png");
+                RuntimeConfig.imagePath("fig1_replica_factor_4models.png"));
             
             // Fig 2: Response Time (4 models)
             ChartGenerator.generateResponseTime4Models(
                 norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                 norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                "images/fig2_response_time_4models.png");
+                RuntimeConfig.imagePath("fig2_response_time_4models.png"));
             
             // Fig 3: BW Consumption (4 models)
             ChartGenerator.generateBwConsumption4Models(
                 norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                 norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                "images/fig3_bw_consumption_4models.png");
+                RuntimeConfig.imagePath("fig3_bw_consumption_4models.png"));
             
             // Fig 4: Avg BW Price (4 models)
             ChartGenerator.generateAvgBwPrice4Models(
                 norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                 norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                "images/fig4_avg_bw_price_4models.png");
+                RuntimeConfig.imagePath("fig4_avg_bw_price_4models.png"));
             
             // Fig 5: Cumulative BW Price (4 models)
             ChartGenerator.generateCumulativeBwPrice4Models(
                 norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                 norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                "images/fig5_cumulative_bw_price_4models.png");
+                RuntimeConfig.imagePath("fig5_cumulative_bw_price_4models.png"));
             
             // Fig 6: Total Cost (4 models)
             ChartGenerator.generateTotalCost4Models(
                 norepSimple, tcdrmSimple, qlSimple, rainbowSimple,
                 norepComplex, tcdrmComplex, qlComplex, rainbowComplex,
-                "images/fig6_total_cost_4models.png");
+                RuntimeConfig.imagePath("fig6_total_cost_4models.png"));
             
             // Métriques détaillées RL (Q-Learning, Rainbow DQN)
             System.out.println("\n  Generating RL model metrics...");
-            ChartGenerator.generateModelMetrics(qlSimple, "images/metrics_qlearning_simple.png", false);
-            ChartGenerator.generateModelMetrics(rainbowSimple, "images/metrics_rainbow_simple.png", false);
+            ChartGenerator.generateModelMetrics(qlSimple, RuntimeConfig.imagePath("metrics_qlearning_simple.png"), false);
+            ChartGenerator.generateModelMetrics(rainbowSimple, RuntimeConfig.imagePath("metrics_rainbow_simple.png"), false);
             
             // Analyse de la popularité RL
             System.out.println("\n  Generating RL popularity analysis...");
-            ChartGenerator.generatePopularityAnalysis(qlSimple, "images/popularity_qlearning_simple.png", false);
-            ChartGenerator.generatePopularityAnalysis(rainbowSimple, "images/popularity_rainbow_simple.png", false);
+            ChartGenerator.generatePopularityAnalysis(qlSimple, RuntimeConfig.imagePath("popularity_qlearning_simple.png"), false);
+            ChartGenerator.generatePopularityAnalysis(rainbowSimple, RuntimeConfig.imagePath("popularity_rainbow_simple.png"), false);
             
             System.out.println("\n✅ Phase 2 complete: RL extension graphs generated (RL-2 to RL-7 + Metrics + Popularity)");
 

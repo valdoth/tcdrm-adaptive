@@ -15,10 +15,18 @@ def connect_and_register(port: int, q_path: str, rainbow_path: str, timeout_sec:
                 gateway_parameters=GatewayParameters(port=port),
                 callback_server_parameters=CallbackServerParameters()
             )
-            # Touch entry point to validate connection
-            _ = gw.entry_point
+            # Vrai aller-retour avec la JVM : `gw.entry_point` seul n'ouvre aucune
+            # connexion, et l'échec ne survenait qu'à registerPythonBridge, hors de
+            # cette boucle (graine 778 : client lancé avant l'écoute du port).
+            gw.jvm.System.currentTimeMillis()
             break
         except Exception as e:
+            if gw is not None:
+                try:
+                    gw.shutdown()
+                except Exception:
+                    pass
+                gw = None
             if time.time() - start >= timeout_sec:
                 print(f"❌ Could not connect to Java gateway within {timeout_sec}s: {e}")
                 raise

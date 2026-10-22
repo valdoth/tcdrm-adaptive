@@ -53,6 +53,13 @@ public class ReplicaPlacementOptimizer {
     // La fréquence cumulée ci-dessus garde des sites abandonnés depuis longtemps.
     private final double[][] recentExecShare;
 
+    // Requêtes récentes (identifiants des fragments lus), mémoire 1/λ : même constante
+    // de temps que la popularité. Sert au placement CONJOINT (selectBestJoint).
+    private static final int RECENT_QUERY_MEMORY =
+        (int) Math.round(1.0 / org.tcdrm.adaptive.core.TcdrmConstants.POPULARITY_EMA_LAMBDA);
+    private final java.util.ArrayDeque<int[]> recentQueries = new java.util.ArrayDeque<>();
+    private int currentReplicas;   // réplicas existants pendant une évaluation conjointe
+
     public ReplicaPlacementOptimizer() {
         this.regionFreq = new int[MultiCloudInfrastructure.PROVIDERS.length][MultiCloudInfrastructure.REGIONS.length];
         this.recentExecShare = new double[MultiCloudInfrastructure.PROVIDERS.length][MultiCloudInfrastructure.REGIONS.length];
@@ -78,6 +85,15 @@ public class ReplicaPlacementOptimizer {
         for (int[] row : regionFreq) java.util.Arrays.fill(row, 0);
         for (double[] row : recentExecShare) java.util.Arrays.fill(row, 0.0);
         totalExecCount = 0;
+        recentQueries.clear();
+    }
+
+    /** Enregistre les fragments lus par une requête (mémoire glissante de 1/λ requêtes). */
+    public void recordQuery(List<DataFragment> active) {
+        int[] ids = new int[active.size()];
+        for (int i = 0; i < ids.length; i++) ids[i] = active.get(i).getId();
+        recentQueries.addLast(ids);
+        while (recentQueries.size() > RECENT_QUERY_MEMORY) recentQueries.removeFirst();
     }
 
     private static int indexOf(String[] arr, String val) {
@@ -209,6 +225,221 @@ public class ReplicaPlacementOptimizer {
             }
         }
         return best;
+    }
+
+    /**
+     * Placement CONJOINT (agents RL et référence gloutonne). Une requête lit ses relations
+     * en parallèle : son temps est fixé par la relation la plus lointaine et son coût est
+     * la somme des transferts. Un réplica évalué seul (selectBest) ne voit pas cette
+     * interaction : les réplicas se dispersaient sur deux ou trois fournisseurs et les
+     * requêtes payaient encore la bande passante inter-provider (≈ 1300 GB contre
+     * ≈ 300 GB quand les réplicas sont regroupés, validation en charge variable).
+     *
+     * <p>Chaque site candidat est évalué par un PLAN : y placer toutes les données
+     * éligibles (au plus {@code capacity}, non couvertes d'abord puis par popularité),
+     * puis rejouer les requêtes récentes, chacune sur le site d'exécution que choisirait
+     * le routage (temps, puis coût). Le coût rejoué est celui que facture la simulation :
+     * lectures, synchronisation des écritures du primaire vers chaque réplica,
+     * maintenance des réplicas et création des réplicas du plan. Les plans sont classés comme le contrat : d'abord le
+     * nombre de requêtes au-delà de T_SLA, puis le coût, puis le temps — répliquer pour
+     * aller plus vite qu'exigé n'est pas un gain. Le plan doit améliorer la situation
+     * actuelle ; on crée alors son premier réplica qui passe le filtre d'utilité
+     * attendue, la part des lectures étant celle que le plan lui confierait. Les plans
+     * sont essayés du meilleur au moins bon.</p>
+     *
+     * @return meilleur candidat, ou {@code null} si aucun plan n'améliore les requêtes récentes
+     */
+    public Candidate selectBestJoint(
+        List<DataFragment> fragments,
+        MultiCloudInfrastructure infra,
+        double minPopularityNorm,
+        int useHorizon,
+        int capacity,
+        double tSla
+    ) {
+        if (capacity <= 0 || recentQueries.isEmpty()) return null;
+        String[] providers = MultiCloudInfrastructure.PROVIDERS;
+        String[] regions   = MultiCloudInfrastructure.REGIONS;
+        int nSites = providers.length * regions.length;
+
+        java.util.Map<Integer, DataFragment> byId = new java.util.HashMap<>();
+        for (DataFragment f : fragments) byId.put(f.getId(), f);
+        List<DataFragment[]> queries = new java.util.ArrayList<>();
+        for (int[] ids : recentQueries) {
+            DataFragment[] q = new DataFragment[ids.length];
+            boolean ok = true;
+            for (int i = 0; i < ids.length && ok; i++) { q[i] = byId.get(ids[i]); ok = q[i] != null; }
+            if (ok) queries.add(q);
+        }
+        if (queries.isEmpty()) return null;
+        currentReplicas = 0;
+        for (DataFragment f : fragments) currentReplicas += f.getReplicaCount();
+
+        double[] current = replay(queries, infra, null, -1, null, tSla);
+
+        record Plan(int site, List<DataFragment> order, double[] outcome) {}
+        List<Plan> plans = new java.util.ArrayList<>();
+        for (int s = 0; s < nSites; s++) {
+            String tp = providers[s / regions.length], tr = regions[s % regions.length];
+            List<DataFragment> order = new java.util.ArrayList<>();
+            for (DataFragment f : fragments) {
+                if (!f.canAddReplica() || f.hasRecreateCooldown()) continue;
+                if (org.tcdrm.adaptive.core.TcdrmConstants.normalizedPopularity(f.getPopularityEma()) < minPopularityNorm) continue;
+                if (tp.equals(f.getPrimaryProvider()) && tr.equals(f.getPrimaryRegion())) continue;
+                if (f.hasReplicaAt(tp, tr)) continue;
+                order.add(f);
+            }
+            if (order.isEmpty()) continue;
+            // Couvrir avant de doubler, puis la donnée la plus populaire d'abord.
+            order.sort(java.util.Comparator.<DataFragment>comparingInt(f -> f.hasReplica() ? 1 : 0)
+                .thenComparing(java.util.Comparator.comparingDouble(DataFragment::getPopularityEma).reversed()));
+            if (order.size() > capacity) order = new java.util.ArrayList<>(order.subList(0, capacity));
+            java.util.Set<DataFragment> planned = new java.util.HashSet<>(order);
+            double[] after = replay(queries, infra, planned, s, null, tSla);
+            if (better(after, current)) plans.add(new Plan(s, order, after));
+        }
+        plans.sort((a, b) -> better(a.outcome(), b.outcome()) ? -1 : better(b.outcome(), a.outcome()) ? 1 : 0);
+
+        for (Plan plan : plans) {
+            String tp = providers[plan.site() / regions.length], tr = regions[plan.site() % regions.length];
+            java.util.Set<DataFragment> planned = new java.util.HashSet<>(plan.order());
+            java.util.Map<DataFragment, double[]> share = new java.util.HashMap<>();
+            for (DataFragment f : plan.order()) share.put(f, new double[2]);   // {lectures servies par le site, lectures}
+            replay(queries, infra, planned, plan.site(), share, tSla);
+            for (DataFragment f : plan.order()) {
+                double[] sh = share.get(f);
+                double servedShare = sh[1] > 0 ? sh[0] / sh[1] : 0.0;
+                if (useHorizon > 0 && useHorizon * f.getPopularityEma() * servedShare < 1.0) continue;
+                return new Candidate(f, tp, tr, -plan.outcome()[1]);
+            }
+        }
+        return null;
+    }
+
+    /** (violations T_SLA, coût, temps) lexicographique : a strictement meilleur que b. */
+    private static boolean better(double[] a, double[] b) {
+        for (int i = 0; i < a.length; i++) {
+            double eps = 1e-9 * Math.max(1.0, Math.abs(b[i]));
+            if (a[i] < b[i] - eps) return true;
+            if (a[i] > b[i] + eps) return false;
+        }
+        return false;
+    }
+
+    /**
+     * Rejoue les requêtes récentes, chacune sur son meilleur site d'exécution (temps puis
+     * coût), avec les copies existantes plus, si {@code planned} n'est pas nul, une copie
+     * de chaque fragment planifié au site {@code plannedSite}. Source de chaque relation :
+     * la copie de meilleur rang (intra-DC, inter-région, inter-provider), comme
+     * {@link DataFragment#bestSourceLocation}. Si {@code share} est fourni, compte pour
+     * chaque fragment planifié ses lectures et celles servies par le site planifié.
+     *
+     * @return {requêtes au-delà de tSla, somme des coûts, somme des temps}
+     */
+    private double[] replay(List<DataFragment[]> queries, MultiCloudInfrastructure infra,
+                            java.util.Set<DataFragment> planned, int plannedSite,
+                            java.util.Map<DataFragment, double[]> share, double tSla) {
+        String[] providers = MultiCloudInfrastructure.PROVIDERS;
+        String[] regions   = MultiCloudInfrastructure.REGIONS;
+        String pp = plannedSite >= 0 ? providers[plannedSite / regions.length] : null;
+        String pr = plannedSite >= 0 ? regions[plannedSite % regions.length] : null;
+        double totalTime = 0.0, totalCost = 0.0, violations = 0.0;
+        for (DataFragment[] q : queries) {
+            double bestTime = Double.MAX_VALUE, bestCost = Double.MAX_VALUE;
+            String bestP = null, bestR = null;
+            for (String ep : providers) {
+                for (String er : regions) {
+                    double time = 0.0, cost = 0.0;
+                    for (DataFragment f : q) {
+                        double[] src = bestSource(f, ep, er, infra,
+                            planned != null && planned.contains(f) ? pp : null, pr);
+                        time = org.tcdrm.adaptive.core.TcdrmConstants.PARALLEL_FETCH
+                            ? Math.max(time, src[0]) : time + src[0];
+                        cost += src[1];
+                    }
+                    if (time < bestTime - 1e-9 || (Math.abs(time - bestTime) <= 1e-9 && cost < bestCost)) {
+                        bestTime = time; bestCost = cost; bestP = ep; bestR = er;
+                    }
+                }
+            }
+            totalTime += bestTime;
+            totalCost += bestCost + possessionCost(q, infra, planned, pp, pr);
+            if (bestTime > tSla) violations += 1.0;
+            if (share != null) {
+                for (DataFragment f : q) {
+                    double[] sh = share.get(f);
+                    if (sh == null) continue;
+                    sh[1] += 1.0;
+                    if (bestSource(f, bestP, bestR, infra, pp, pr)[2] > 0.5) sh[0] += 1.0;
+                }
+            }
+        }
+        if (planned != null) {
+            for (DataFragment f : planned) totalCost += org.tcdrm.adaptive.core.TcdrmConstants.replicationCost(f.getSizeGb());
+        }
+        return new double[]{violations, totalCost, totalTime};
+    }
+
+    /**
+     * Coût de possession attendu des réplicas pour une requête (mêmes règles que
+     * TcdrmSimulation) : une écriture (probabilité 1 − READ_WRITE_RATIO) propage chaque
+     * relation lue du primaire vers tous ses réplicas, et chaque réplica coûte sa
+     * maintenance par requête.
+     */
+    private double possessionCost(DataFragment[] q, MultiCloudInfrastructure infra,
+                                  java.util.Set<DataFragment> planned, String pp, String pr) {
+        double writeRatio = 1.0 - org.tcdrm.adaptive.core.TcdrmConstants.READ_WRITE_RATIO;
+        double sync = 0.0;
+        for (DataFragment f : q) {
+            for (int i = 0; i < f.getReplicaCount(); i++) {
+                sync += f.getSizeGb() * infra.getBandwidthCostPerGb(f.getPrimaryProvider(), f.getPrimaryRegion(),
+                    f.getReplicaProviderAt(i), f.getReplicaRegionAt(i));
+            }
+            if (planned != null && planned.contains(f)) {
+                sync += f.getSizeGb() * infra.getBandwidthCostPerGb(f.getPrimaryProvider(), f.getPrimaryRegion(), pp, pr);
+            }
+        }
+        int replicas = (planned != null ? planned.size() : 0) + currentReplicas;
+        return writeRatio * sync + replicas * org.tcdrm.adaptive.core.TcdrmConstants.REPLICA_MAINTENANCE_COST_PER_QUERY;
+    }
+
+    /**
+     * Meilleure source de {@code f} pour le site (ep, er) : copie de meilleur rang (à rang
+     * égal, la plus rapide), parmi le primaire, les réplicas et la copie planifiée
+     * éventuelle (pp, pr). Temps analytique moyen (latence + transfert de la part lue,
+     * gain de transfert d'un réplica chaud), coût sur la taille pleine (mêmes règles que
+     * QueryCloudlet.execute).
+     *
+     * @return {temps ms, coût $, 1 si la copie planifiée est retenue sinon 0}
+     */
+    private static double[] bestSource(DataFragment f, String ep, String er, MultiCloudInfrastructure infra,
+                                       String pp, String pr) {
+        double dataGb = f.getSizeGb() * org.tcdrm.adaptive.core.TcdrmConstants.QUERY_SELECTIVITY;
+        int bestRank = DataFragment.locationRank(f.getPrimaryProvider(), f.getPrimaryRegion(), ep, er);
+        double bestTime = transferMs(infra, dataGb, f.getPrimaryProvider(), f.getPrimaryRegion(), ep, er, false);
+        double bestCost = f.getSizeGb() * infra.getBandwidthCostPerGb(f.getPrimaryProvider(), f.getPrimaryRegion(), ep, er);
+        double planned = 0.0;
+        int n = f.getReplicaCount() + (pp != null ? 1 : 0);
+        for (int i = 0; i < n; i++) {
+            boolean isPlanned = i == f.getReplicaCount();
+            String sp = isPlanned ? pp : f.getReplicaProviderAt(i);
+            String sr = isPlanned ? pr : f.getReplicaRegionAt(i);
+            int rank = DataFragment.locationRank(sp, sr, ep, er);
+            double t = transferMs(infra, dataGb, sp, sr, ep, er, true);
+            if (rank < bestRank || (rank == bestRank && t < bestTime)) {
+                bestRank = rank;
+                bestTime = t;
+                bestCost = f.getSizeGb() * infra.getBandwidthCostPerGb(sp, sr, ep, er);
+                planned = isPlanned ? 1.0 : 0.0;
+            }
+        }
+        return new double[]{bestTime, bestCost, planned};
+    }
+
+    private static double transferMs(MultiCloudInfrastructure infra, double dataGb,
+                                     String sp, String sr, String ep, String er, boolean replica) {
+        double t = infra.getLatencyMs(sp, sr, ep, er) + dataGb * 8000.0 / infra.getBandwidthGbps(sp, sr, ep, er);
+        return replica ? t * (1.0 - org.tcdrm.adaptive.core.TcdrmConstants.REPLICA_TRANSFER_GAIN_FIRST) : t;
     }
 
     /**

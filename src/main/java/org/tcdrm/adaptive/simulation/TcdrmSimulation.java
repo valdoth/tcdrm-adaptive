@@ -52,6 +52,8 @@ public class TcdrmSimulation {
     // Défaut : P_SLA entier (posture la plus conservatrice = ne supprimer qu'après
     // un cycle complet d'inactivité), assouplie uniquement par apprentissage.
     private int dynamicDeletionWindowQueries = TcdrmConstants.P_SLA;
+    // Verrou de garde de l'évaluation (requêtes sans réplication en début de run).
+    private int openingWindowQueries = 0;
 
     // Routage sensible au coût (profil d'agent, ex. Rainbow « priorité coût ») :
     // TOLÉRANCE en ms — parmi les sites dont le temps estimé est à moins de
@@ -307,6 +309,7 @@ public class TcdrmSimulation {
             if (accessed) f.recordAccess(qIdx);
             f.updatePopularity(accessed, lambda);
         }
+        placementOptimizer.recordQuery(active);
     }
 
     /** Résultat d'une requête.
@@ -637,9 +640,7 @@ public class TcdrmSimulation {
      * fragments éligibles reste guidé par latence, coût, popularité, saturation.
      */
     private double createReplica() {
-        ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
-            fragments, execProvider, execRegion, infrastructure, replicasPerProvider,
-            fragmentPopularityThreshold(), dynamicDeletionWindowQueries);
+        ReplicaPlacementOptimizer.Candidate c = jointCandidate();
         if (c == null) return 0.0;
         double cost = c.fragment().createReplica(c.provider(), c.region(), dynamicDeletionWindowQueries);
         if (cost > 0.0) {
@@ -660,8 +661,30 @@ public class TcdrmSimulation {
     public boolean canCreateReplica() {
         return currentReplicaCount < TcdrmConstants.maxReplicasForQueryType(complex)
             && currentBudget > 0 && isReplicationAllowed()
-            && placementOptimizer.selectBest(fragments, execProvider, execRegion, infrastructure,
-                   replicasPerProvider, fragmentPopularityThreshold(), dynamicDeletionWindowQueries) != null;
+            && jointCandidate() != null;
+    }
+
+    // Candidat du placement conjoint, mis en cache pour l'état courant : le masque
+    // (canCreateReplica) puis l'action REPLICATE de la même requête le demandent tous deux.
+    private ReplicaPlacementOptimizer.Candidate jointCache;
+    private String jointCacheKey;
+
+    /**
+     * Placement CONJOINT des réplicas des agents RL et de la référence gloutonne
+     * ({@link ReplicaPlacementOptimizer#selectBestJoint}) : le site est choisi pour que
+     * les relations lues ensemble soient proches ensemble. La référence TCDRM garde le
+     * placement réplica par réplica (createReplicaTcdrm).
+     */
+    private ReplicaPlacementOptimizer.Candidate jointCandidate() {
+        String key = queryCount + "/" + replicaCreations + "/" + replicaDeletions + "/" + currentReplicaCount
+            + "/" + dynamicPopularityRatio + "/" + dynamicDeletionWindowQueries + "/" + dynamicTSla;
+        if (!key.equals(jointCacheKey)) {
+            jointCache = placementOptimizer.selectBestJoint(fragments, infrastructure,
+                fragmentPopularityThreshold(), dynamicDeletionWindowQueries,
+                TcdrmConstants.maxReplicasForQueryType(complex) - currentReplicaCount, dynamicTSla);
+            jointCacheKey = key;
+        }
+        return jointCache;
     }
 
     /** Nombre de réplicas créés par la dernière action REPLICATE (0 si aucun). */
@@ -964,6 +987,7 @@ public class TcdrmSimulation {
         replicaEvents.clear();
         thrashedThisQuery = false;
         lastServedFraction = 0.0;
+        jointCacheKey = null;
         fragments.forEach(f -> {
             while (f.hasReplica()) f.deleteReplica();
             f.resetAccessStats();
@@ -1009,12 +1033,28 @@ public class TcdrmSimulation {
     }
 
     /**
-     * Popularité établie (Paper Algorithm 1, plancher P_SLA) : la donnée la plus
-     * populaire a franchi le plancher — une seule requête ne rend pas une donnée
-     * populaire. L'éligibilité de chaque donnée est ensuite relative (ρ).
+     * Popularité établie (Paper Algorithm 1, plancher P_SLA), sous deux conditions :
+     * <ul>
+     *   <li>verrou de garde (évaluation seulement, voir {@link #setOpeningWindow}) :
+     *       au moins {@code openingWindowQueries} requêtes observées depuis le début
+     *       du run ;</li>
+     *   <li>la donnée la plus populaire a été lue au moins
+     *       {@link TcdrmConstants#OPENING_ACCESSES} fois de suite.</li>
+     * </ul>
+     * L'éligibilité de chaque donnée est ensuite relative (ρ).
      */
     public boolean isReplicationAllowed() {
-        return getPopularityScore() >= TcdrmConstants.META_POPULARITY_MIN;
+        return queryCount >= openingWindowQueries
+            && getPopularityScore() >= TcdrmConstants.META_POPULARITY_MIN;
+    }
+
+    /**
+     * Active le verrou de garde : pas de réplication avant {@code queries} requêtes
+     * depuis le début du run (benchmark et validation ; 0 à l'entraînement).
+     */
+    public void setOpeningWindow(int queries) {
+        this.openingWindowQueries = Math.max(0, queries);
+        this.jointCacheKey = null;
     }
 
     /**

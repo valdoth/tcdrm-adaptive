@@ -388,7 +388,8 @@ public class DataFragment {
     public int getRecentAccessCount() { return recentHalfCount; }
 
     // 0 = intra-DC, 1 = inter-region, 2 = inter-provider
-    private static int locationRank(String sp, String sr, String ep, String er) {
+    /** Rang de proximité source → site d'exécution : intra-DC (0), inter-région (1), inter-provider (2). */
+    public static int locationRank(String sp, String sr, String ep, String er) {
         if (!sp.equals(ep)) return 2;
         if (!sr.equals(er)) return 1;
         return 0;

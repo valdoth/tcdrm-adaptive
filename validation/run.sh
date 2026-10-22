@@ -126,7 +126,10 @@ if [ -d "../tcdrm_gym/models" ]; then
   # = validation/), donc on réplique la structure ici. Sans elles, les seuils
   # repartiraient du contrat vierge et la récompense online utiliserait les défauts.
   mkdir -p tcdrm_gym/models
+  # Bandits du seuil de popularité ρ (appris par épisode) : sans eux, ρ = 1 comme le glouton.
+  rm -f tcdrm_gym/models/meta_threshold_*_pop_*.qtable tcdrm_gym/models/popularity_bandit_*.bandit
   cp -f ../tcdrm_gym/models/meta_threshold_*.qtable      tcdrm_gym/models/ 2>/dev/null || true
+  cp -f ../tcdrm_gym/models/popularity_bandit_*.bandit   tcdrm_gym/models/ 2>/dev/null || true
   cp -f ../tcdrm_gym/models/reward_config_*.properties   tcdrm_gym/models/ 2>/dev/null || true
 fi
 
@@ -148,7 +151,9 @@ else
 fi
 
 # Clean previous RL-only outputs
-rm -f images/*.png 2>/dev/null || true
+# TCDRM_IMAGES_DIR (run_evaluations.sh) : figures écrites dans un dossier propre à la
+# graine, jamais supprimées pendant le run.
+[ -z "${TCDRM_IMAGES_DIR:-}" ] && { rm -f images/*.png 2>/dev/null || true; }
 rm -f metrics/rl_* metrics/summary_phase2_rl.csv 2>/dev/null || true
 # États rencontrés en validation : écrits ici, pas dans tcdrm_gym/models (benchmark)
 rm -f models/*_benchmark_coverage.npy 2>/dev/null || true
@@ -217,7 +222,7 @@ grep -E "explorations en état nouveau" /tmp/tcdrm_py4j.log | tail -2 || true
 
 printf "\n📊 Generated files:\n"
 echo "Images:"
-ls -1 images 2>/dev/null || echo "(none)"
+ls -1 "${TCDRM_IMAGES_DIR:-images}" 2>/dev/null || echo "(none)"
 printf "\nCSVs:\n"
 ls -1 metrics/*.csv 2>/dev/null || echo "(none)"
 

@@ -61,6 +61,19 @@ public final class RuntimeConfig {
         explicitWorkloadMode = isValidWorkloadMode(System.getenv("TCDRM_WORKLOAD"));
     }
 
+    /**
+     * Dossier des figures : {@code TCDRM_IMAGES_DIR} si défini (validation multi-graines :
+     * un dossier par graine, aucune figure écrasée ni supprimée pendant un run), sinon
+     * {@code images}.
+     */
+    public static String imagesDir() {
+        String d = System.getenv("TCDRM_IMAGES_DIR");
+        return d == null || d.isBlank() ? "images" : d;
+    }
+
+    /** Chemin d'une figure dans {@link #imagesDir()}. */
+    public static String imagePath(String name) { return imagesDir() + "/" + name; }
+
     public static void setMaxQueries(Integer n) { maxQueriesOverride = n; }
     public static Integer getMaxQueries() { return maxQueriesOverride; }
 

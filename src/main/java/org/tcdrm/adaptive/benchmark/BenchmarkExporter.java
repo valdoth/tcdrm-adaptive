@@ -26,8 +26,13 @@ public final class BenchmarkExporter {
         try (FileWriter out = new FileWriter(filePath, false)) {
             out.append("query,response_time_ms,cost_bw,cumulative_cost,replicas,"
                 + "bw_inter_provider_gb,bw_inter_region_gb,cpu_cost,replica_cost,total_cost,"
-                + "sla_violations_cumul,avg_bw_price\n");
+                + "sla_violations_cumul,avg_bw_price,tsla_contract_violations_cumul\n");
             int n = data.getQueryNumbers().size();
+            // sla_violations_cumul : seuil EFFECTIF (interne appris pour les agents RL) ;
+            // tsla_contract_violations_cumul : seuil du contrat, comparable (audit 5.3).
+            double tSlaContract = isComplex(data) ? org.tcdrm.adaptive.core.TcdrmConstants.TSLA_COMPLEX_MS
+                                                  : org.tcdrm.adaptive.core.TcdrmConstants.TSLA_SIMPLE_MS;
+            int contractCumul = 0;
             for (int i = 0; i < n; i++) {
                 int q = data.getQueryNumbers().get(i);
                 double rt = data.getResponseTimeMs().get(i);
@@ -40,10 +45,11 @@ public final class BenchmarkExporter {
                 double crep = safeGet(data.getReplicaCostPerQuery(), i);
                 double ttot = safeGet(data.getTotalCostPerQuery(), i, cbw + ccpu + crep);
                 int viol = data.getSlaViolations().get(i);
+                if (rt > tSlaContract) contractCumul++;
                 double avg = data.getAvgBwPrice().get(i);
                 out.append(q + "," + fmt(rt) + "," + fmt(cbw) + "," + fmt(cc) + "," + reps + ","
                     + fmt(bip) + "," + fmt(bir) + "," + fmt(ccpu) + "," + fmt(crep) + ","
-                    + fmt(ttot) + "," + viol + "," + fmt(avg) + "\n");
+                    + fmt(ttot) + "," + viol + "," + fmt(avg) + "," + contractCumul + "\n");
             }
         }
     }
@@ -88,7 +94,7 @@ public final class BenchmarkExporter {
     }
 
     /** Type de requête déduit du nom du modèle (« …_Complex »). */
-    static boolean isComplex(BenchmarkData d) {
+    public static boolean isComplex(BenchmarkData d) {
         return d.getName().toLowerCase(Locale.ROOT).contains("complex");
     }
 

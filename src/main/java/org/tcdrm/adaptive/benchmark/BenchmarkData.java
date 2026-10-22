@@ -24,6 +24,8 @@ public class BenchmarkData {
     private final List<Double> cpuCostPerQuery = new ArrayList<>();
     private final List<Double> replicaCostPerQuery = new ArrayList<>();
     private final List<Double> totalCostPerQuery = new ArrayList<>();
+    // Budget restant du locataire après chaque requête (audit 5.4).
+    private final List<Double> budgetRemaining = new ArrayList<>();
     
     private double totalBwCost = 0;
     private double totalCpuCost = 0;
@@ -105,6 +107,8 @@ public class BenchmarkData {
     public List<Double> getCumulativeBwInterRegionGb() { return cumulativeBwInterRegionGb; }
     public List<Double> getCumulativeBwCostList() { return cumulativeBwCostList; }
     public List<Integer> getSlaViolations() { return slaViolations; }
+    public void addBudget(double budget) { budgetRemaining.add(budget); }
+    public List<Double> getBudgetRemaining() { return budgetRemaining; }
     public List<Double> getAvgBwPrice() { return avgBwPrice; }
     public int getTotalSlaViolations() { return totalSlaViolations; }
 

@@ -1,0 +1,11 @@
+name,queries,final_cumul_bw_cost,total_bw_cost,total_cpu_cost,total_replica_cost,total_cost,total_bw_inter_provider_gb,total_bw_inter_region_gb,total_sla_violations,final_replica_count,tsla_contract_violations,csla_contract_violations,first_replica_query,replica_creations,replica_deletions,thrash_events,unused_replica_cost
+NoRepLc_Simple,1000,8.603,6.64335,1.79765,0,8.441,588.15,761.85,792,0,792,0,-1,0,0,0,0
+TCDRM_Simple,1000,7.346465,5.20515,1.79765,0.181665,7.184465,416.7,1038.15,389,6,389,72,262,6,0,0,0
+Glouton_Simple,1000,7.67915,5.6529,1.79765,0.0666,7.51715,473.4,918.9,553,2,553,18,40,2,0,0,0
+QLearning_Simple,1000,4.508225,2.26305,1.79765,0.285525,4.346225,93.6,1327.05,32,6,23,6,40,6,0,0,0
+Rainbow_Simple,1000,5.49809,3.32415,1.79765,0.21429,5.33609,212.85,1195.65,279,6,195,5,40,6,0,0,0
+NoRepLc_Complex,1000,30.795853,21.474,8.997853,0,30.471853,1512,1188,1000,0,1000,0,-1,0,0,0,0
+TCDRM_Complex,1000,26.207023,16.4376,8.997853,0.44757,25.883023,1009.8,1948.5,255,12,255,68,203,12,0,0,0
+Glouton_Complex,1000,25.597723,16.0857,8.997853,0.19017,25.273723,1014.75,1805.4,486,5,486,33,40,5,0,0,0
+QLearning_Complex,1000,15.418678,5.7276,8.997853,0.369225,15.094678,242.1,2645.1,79,8,49,0,41,8,0,0,0
+Rainbow_Complex,1000,15.448828,5.7519,8.997853,0.375075,15.124828,244.8,2651.85,51,8,47,0,40,8,0,0,0

@@ -24,7 +24,7 @@ Dimensions de l'état continu utilisées (indices de TcdrmSimulation.buildRLStat
            requête. Sans elle, « entre plancher et contrat » mélangeait une donnée qui
            chauffe, où répliquer tôt est rentable, et une donnée qui refroidit (charges
            variable et en rafales), où c'est du gaspillage.)
-           (plancher P_SLA ≈ 0.704 = TcdrmConstants.META_POPULARITY_MIN, sous lequel
+           (plancher = TcdrmConstants.META_POPULARITY_MIN, popularité après 3 accès consécutifs, sous lequel
            aucune réplication n'est permise ; contrat = 1.0, P_SLA du papier. Les anciens
            seuils 0.2/0.6 mélangeaient données tout juste éligibles et pleinement
            populaires : Q-Learning s'aidait alors du budget restant, qui baisse avec le
@@ -40,11 +40,12 @@ N_STATES = 1944
 
 # Mêmes formules que TcdrmConstants (POPULARITY_EMA_FULL, META_POPULARITY_MIN) :
 # λ = POPULARITY_EMA_LAMBDA, P_SLA = 200 ; plancher = popularité normalisée atteinte
-# après τ = 1/λ accès consécutifs.
+# après OPENING_ACCESSES = 3 accès consécutifs.
 _LAMBDA = 0.0115
 _P_SLA = 200
 _EMA_FULL = 1.0 - (1.0 - _LAMBDA) ** _P_SLA
-POPULARITY_FLOOR = min(1.0, (1.0 - (1.0 - _LAMBDA) ** (1.0 / _LAMBDA)) / _EMA_FULL)
+_OPENING_ACCESSES = 3
+POPULARITY_FLOOR = min(1.0, (1.0 - (1.0 - _LAMBDA) ** _OPENING_ACCESSES) / _EMA_FULL)
 
 # (nom, poids dans l'index) — ordre de l'encodage ; GRID_LEVELS : niveaux par dimension
 GRID_DIMS = [("RT", 324), ("COST", 108), ("SLA", 36), ("BUD", 12), ("COV", 4), ("GAIN", 1)]

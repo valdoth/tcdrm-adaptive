@@ -12,6 +12,48 @@ import org.tcdrm.adaptive.training.TrainingSettings;
 public class BenchmarkRunner {
 
     /**
+     * Trace par requête (diagnostic) : activée si TCDRM_TRACE_DIR est défini — une ligne
+     * par requête avec l'action jouée, le masque, les seuils courants et l'emplacement
+     * des réplicas (fragment@fournisseur/région). Désactivée par défaut.
+     */
+    private static java.io.PrintWriter openTrace(String name, long seed) {
+        String dir = System.getenv("TCDRM_TRACE_DIR");
+        if (dir == null || dir.isBlank()) return null;
+        try {
+            java.io.File d = new java.io.File(dir);
+            d.mkdirs();
+            java.io.PrintWriter w = new java.io.PrintWriter(new java.io.File(d, name + "_seed" + seed + ".csv"));
+            w.println("q,action,can_replicate,can_delete,replicas,latency_ms,cost,inter_provider_gb,inter_region_gb,tsla_ms,deletion_window,popularity_ratio,replica_sites,state");
+            return w;
+        } catch (java.io.IOException e) {
+            System.out.println("      ⚠️  trace impossible : " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static void traceQuery(java.io.PrintWriter w, int q, int action, boolean canReplicate,
+                                   boolean canDelete, TcdrmSimulation sim, TcdrmSimulation.QueryResult r,
+                                   double[] state) {
+        if (w == null) return;
+        StringBuilder st = new StringBuilder();
+        if (state != null) for (double v : state) {
+            if (st.length() > 0) st.append(';');
+            st.append(String.format(java.util.Locale.ROOT, "%.4f", v));
+        }
+        StringBuilder sites = new StringBuilder();
+        for (org.tcdrm.adaptive.cloudsim.DataFragment f : sim.getFragments()) {
+            for (int i = 0; i < f.getReplicaCount(); i++) {
+                if (sites.length() > 0) sites.append(' ');
+                sites.append(f.getId()).append('@').append(f.getReplicaProviderAt(i)).append('/').append(f.getReplicaRegionAt(i));
+            }
+        }
+        w.printf(java.util.Locale.ROOT, "%d,%d,%b,%b,%d,%.3f,%.6f,%.3f,%.3f,%.1f,%d,%.2f,%s,%s%n",
+            q, action, canReplicate, canDelete, r.replicaCount(), r.queryTimeMs(), r.totalCost(),
+            r.bwInterProviderGb(), r.bwInterRegionGb(), sim.getDynamicTSla(),
+            sim.getDynamicDeletionWindowQueries(), sim.getDynamicPopularityRatio(), sites, st);
+    }
+
+    /**
      * Exécute le benchmark NoRepLc (pas de réplication).
      */
     public static BenchmarkData runNoRep(long seed, boolean complex, String name) {
@@ -31,6 +73,7 @@ public class BenchmarkRunner {
                 0, result.bwInterProviderGb(), result.bwInterRegionGb(),
                 result.cpuCost(), 0, tSla
             );
+            data.addBudget(sim.getCurrentBudget());
         }
 
         data.setReplicaStats(sim.getReplicaCreations(), sim.getReplicaDeletions(),
@@ -62,6 +105,7 @@ public class BenchmarkRunner {
                 result.replicaCreationCost() + result.replicaMaintenanceCost(), // coût réplica = création + maintenance
                 tSla
             );
+            data.addBudget(sim.getCurrentBudget());
         }
 
         data.setReplicaStats(sim.getReplicaCreations(), sim.getReplicaDeletions(),
@@ -77,15 +121,19 @@ public class BenchmarkRunner {
      */
     public static BenchmarkData runGreedy(long seed, boolean complex, String name) {
         TcdrmSimulation sim = new TcdrmSimulation(seed, complex);
+        sim.setOpeningWindow(TcdrmConstants.OPENING_WINDOW_QUERIES);
         double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
         sim.setDynamicThresholds(tSla, 1.0);
         BenchmarkData data = new BenchmarkData(name);
+        java.io.PrintWriter trace = openTrace(name, seed);
 
         double cumulCost = 0;
         int maxQ = RuntimeConfig.getMaxQueries() != null ? RuntimeConfig.getMaxQueries() : TcdrmConstants.MAX_QUERIES;
         for (int q = 0; q < maxQ; q++) {
-            int action = sim.canCreateReplica() ? 1 : (sim.canDeleteReplica() ? 2 : 0);
+            boolean canReplicate = sim.canCreateReplica(), canDelete = sim.canDeleteReplica();
+            int action = canReplicate ? 1 : (canDelete ? 2 : 0);
             TcdrmSimulation.QueryResult result = sim.executeRLQuery(action);
+            traceQuery(trace, q, action, canReplicate, canDelete, sim, result, null);
             cumulCost += result.totalCost();
             data.addQueryResult(
                 q, result.queryTimeMs(),
@@ -96,10 +144,12 @@ public class BenchmarkRunner {
                 result.replicaCreationCost() + result.replicaMaintenanceCost(), // coût réplica = création + maintenance
                 tSla
             );
+            data.addBudget(sim.getCurrentBudget());
         }
 
         data.setReplicaStats(sim.getReplicaCreations(), sim.getReplicaDeletions(),
             sim.getThrashEvents(), sim.getUnusedReplicaCost());
+        if (trace != null) trace.close();
         return data;
     }
 
@@ -123,11 +173,13 @@ public class BenchmarkRunner {
         }
 
         TcdrmSimulation sim = new TcdrmSimulation(seed, complex);
+        sim.setOpeningWindow(TcdrmConstants.OPENING_WINDOW_QUERIES);
         // Profil de routage persisté à l'entraînement de CET agent (0 = temps seul) :
         // les agents « priorité coût » privilégient les liens inter-région une fois
         // les données migrées.
         sim.setCostAwareRouting(rw.getCostRoutingToleranceMs());
         BenchmarkData data = new BenchmarkData(name);
+        java.io.PrintWriter trace = openTrace(name, seed);
 
         double cumulCost = 0;
         double lastLatency = 0;
@@ -143,6 +195,9 @@ public class BenchmarkRunner {
         // initiale (contrat ; ρ = 1 pour la popularité), méta-contrôleurs ignorés ;
         // isole leur part dans le gain des agents.
         boolean noMeta = "1".equals(System.getenv("TCDRM_ABLATION_NO_META"));
+        // TCDRM_ABLATION_NO_BANDIT=1 : ablation du seul bandit de popularité — ρ = 1
+        // (seules les données les plus populaires), les autres méta-contrôleurs actifs.
+        boolean noBandit = "1".equals(System.getenv("TCDRM_ABLATION_NO_BANDIT"));
         // Seuils adaptatifs (Sujet 1) : méta-contrôleurs Q-learning ENTRAÎNÉS, PAR AGENT —
         // chaque modèle recharge SES Q-tables (apprises pendant son propre entraînement),
         // donc sa propre politique de seuil et son propre moment de déclenchement.
@@ -151,7 +206,7 @@ public class BenchmarkRunner {
         // popularité ρ est le niveau de plus faible coût d'épisode appris par le bandit
         // de CET agent à l'entraînement, fixe pendant le run (ρ = 1 sans méta).
         double contractTSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
-        double popRatio = noMeta ? 1.0 : org.tcdrm.adaptive.rl.EpisodeThresholdBandit.loadOrCreate(
+        double popRatio = (noMeta || noBandit) ? 1.0 : org.tcdrm.adaptive.rl.EpisodeThresholdBandit.loadOrCreate(
                 TcdrmConstants.popularityBanditFile(modelType, complex),
                 1.0, TcdrmConstants.META_POPULARITY_RATIO_MIN, 1.0,
                 TcdrmConstants.META_POPULARITY_RESOLUTION, seed ^ modelType.hashCode()).best();
@@ -223,6 +278,7 @@ public class BenchmarkRunner {
 
             // Execute the query
             TcdrmSimulation.QueryResult result = sim.executeRLQuery(action);
+            traceQuery(trace, q, action, canReplicate, canDelete, sim, result, state);
             cumulCost += result.totalCost();
 
             lastLatency = result.queryTimeMs();
@@ -268,8 +324,10 @@ public class BenchmarkRunner {
                 result.replicaCreationCost() + result.replicaMaintenanceCost(), // coût réplica = création + maintenance
                 tSla
             );
+            data.addBudget(sim.getCurrentBudget());
         }
 
+        if (trace != null) trace.close();
         System.out.println("      " + modelType.toUpperCase() + " terminé (adaptive online)");
         data.setReplicaStats(sim.getReplicaCreations(), sim.getReplicaDeletions(),
             sim.getThrashEvents(), sim.getUnusedReplicaCost());

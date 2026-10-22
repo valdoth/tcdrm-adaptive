@@ -94,20 +94,20 @@ class CloudSimEnv(gym.Env):
 				gateway_parameters=GatewayParameters(port=self.port, auto_convert=True)
 			)
 			self._server = self._gateway.entry_point
-			# Aligner avec le repo: configurer la simulation côté Java si fourni
-			if self._config:
-				try:
-					self._server.configureSimulation(dict(self._config))
-				except Exception:
-					pass
-			self._connected = True
-			print("✅ Connected to CloudSimPlus!")
+			self._server.getDynamicTSla(bool(self.complex))  # vérifie que le serveur répond
 		except Exception as e:
 			raise ConnectionError(
 				f"Cannot connect to Java TrainingServer on port {self.port}. "
 				f"Make sure to start it first with: "
 				f"mvn exec:java -Dexec.mainClass=org.tcdrm.adaptive.training.TrainingServer"
 			) from e
+		# Configuration du simulateur Java (agentTag, poids de récompense, warmup...) :
+		# un échec est bloquant, sinon l'entraînement tournerait avec d'autres poids et
+		# écrirait les tables méta d'un autre agent.
+		if self._config:
+			self._server.configureSimulation(dict(self._config))
+		self._connected = True
+		print("✅ Connected to CloudSimPlus!")
     
 	def reset(self, seed=None, options=None):
 		"""

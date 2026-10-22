@@ -121,26 +121,39 @@ public final class TcdrmConstants {
      */
     public static final double META_POPULARITY_RESOLUTION = 0.10;
     /**
-     * Plancher du seuil de popularité appris, DÉDUIT de l'estimateur et non choisi :
-     * popularité normalisée atteinte après une constante de temps τ = 1/λ d'accès
-     * soutenus (≈ 87 accès, ≈ 0.70), λ découlant lui-même du P_SLA du papier. Avant τ,
-     * l'EMA n'a pas encore couvert sa propre mémoire : la popularité n'est pas établie.
+     * Nombre d'accès consécutifs après lesquels la donnée la plus populaire ouvre la
+     * réplication (plancher {@link #META_POPULARITY_MIN}).
      *
-     * Sans plancher, le méta-contrôleur ouvrait l'éligibilité dès la 2e requête
-     * (popularité ≈ 0.025) : une seule requête ne rend pas une donnée populaire.
-     * Alternatives écartées : un seuil relatif à la moyenne du système (D2RS, Sun et
-     * al. 2012) est franchi dès le premier accès au démarrage à froid ; la règle de
-     * rentabilité ski-rental (répliquer quand le surcoût distant cumulé couvre la
-     * création, Mansouri et al. 2016) réplique après 2 accès, car la création coûte un
-     * seul transfert (replicationCost).
+     * Mesuré (sonde Glouton, graines 777–786, charges stable et variable, simple et
+     * complexe) : chaque requête d'attente avant la 1re réplication coûte une violation
+     * T_SLA, et l'ancien plancher τ = 1/λ ≈ 87 accès coûtait 75 à 100 violations
+     * (stable simple 4,83 $ contre 4,22 $ à 3 accès ; complexe 15,69 $ contre 14,24 $).
+     * À 1 ou 2 accès, la popularité n'est pas établie au démarrage à froid : en charge
+     * variable complexe, la graine 786 remplissait les 12 réplicas avant la requête 16
+     * sur des données lues 2 ou 3 fois (14,90 ± 1,62 $ contre 14,37 ± 0,20 $ à 3 accès).
+     * La règle de rentabilité ski-rental (Karlin et al. 1988), qui réplique dès que les
+     * lectures distantes ont coûté une création (ici 1 lecture), a ce même défaut : elle
+     * suppose une capacité de réplication illimitée.
+     */
+    public static final int OPENING_ACCESSES = 3;
+    /**
+     * Verrou de garde de l'ÉVALUATION (benchmark et validation) : aucune réplication
+     * pendant les premières requêtes d'un run, pour juger la popularité sur une fenêtre
+     * cohérente (choix de conception : 30 à 40 accès). L'entraînement n'a pas ce
+     * verrou : chaque épisode s'ouvre après {@link #OPENING_ACCESSES} accès.
+     */
+    public static final int OPENING_WINDOW_QUERIES = 40;
+    /**
+     * Plancher du seuil de popularité : popularité normalisée atteinte après
+     * {@link #OPENING_ACCESSES} accès consécutifs. Une seule requête ne rend pas une
+     * donnée populaire (sans plancher, l'éligibilité s'ouvrait dès la 2e requête).
      *
      * Le plancher s'applique à la donnée la PLUS populaire : il dit si la popularité
      * est établie. Les autres données sont ensuite éligibles par rapport à elle (voir
-     * {@link #META_POPULARITY_RATIO_MIN}) — le seuil relatif n'est donc jamais franchi
-     * au démarrage à froid, le défaut qui avait fait écarter D2RS.
+     * {@link #META_POPULARITY_RATIO_MIN}).
      */
     public static final double META_POPULARITY_MIN = normalizedPopularity(
-        1.0 - Math.pow(1.0 - POPULARITY_EMA_LAMBDA, 1.0 / POPULARITY_EMA_LAMBDA));
+        1.0 - Math.pow(1.0 - POPULARITY_EMA_LAMBDA, OPENING_ACCESSES));
     /**
      * Borne basse du seuil RELATIF de popularité ρ appris : une donnée est éligible si
      * sa popularité atteint ρ × celle de la donnée la plus populaire (seuil relatif au

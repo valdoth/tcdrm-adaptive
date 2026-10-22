@@ -878,13 +878,20 @@ public class ChartGenerator {
         costChart.addSeries("Cumulative BW Cost", x, data.getCumulativeBwCostList()).setLineColor(COLOR_TCDRM);
         g.drawImage(BitmapEncoder.getBufferedImage(costChart), 550, 40, null);
         
-        // 3. SLA Violations
+        // 3. SLA Violations — seuil du CONTRAT pour toutes les stratégies (comparable,
+        // audit 5.3) ; les agents RL comptent aussi le T_SLA interne appris, tracé à part
+        // et nommé comme tel quand il diffère.
+        List<Double> contractViol = contractTSlaViolationsCumul(data);
         XYChart slaChart = new XYChartBuilder().width(500).height(350)
-            .title("Cumulative SLA Violations").xAxisTitle("Query").yAxisTitle("Violations").build();
+            .title("Cumulative T_SLA violations (contract)").xAxisTitle("Query").yAxisTitle("Violations").build();
         slaChart.getStyler().setMarkerSize(0);
 
         slaChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
-        slaChart.addSeries("SLA Violations", x, toDoubleList(data.getSlaViolations())).setLineColor(Color.RED);
+        slaChart.addSeries("Contract T_SLA", x, contractViol).setLineColor(Color.RED);
+        List<Double> internalViol = toDoubleList(data.getSlaViolations());
+        if (!internalViol.equals(contractViol)) {
+            slaChart.addSeries("Learned internal T_SLA", x, internalViol).setLineColor(Color.GRAY);
+        }
         g.drawImage(BitmapEncoder.getBufferedImage(slaChart), 1070, 40, null);
         
         // 4. Replica Count
@@ -899,11 +906,11 @@ public class ChartGenerator {
         // 5. SLA Compliance Rate
         List<Double> complianceRate = new ArrayList<>();
         for (int i = 0; i < x.size(); i++) {
-            int violations = data.getSlaViolations().get(i);
+            double violations = contractViol.get(i);
             complianceRate.add(100.0 * (i + 1 - violations) / (i + 1));
         }
         XYChart compChart = new XYChartBuilder().width(500).height(350)
-            .title("SLA Compliance Rate").xAxisTitle("Query").yAxisTitle("Compliance (%)").build();
+            .title("T_SLA Compliance Rate (contract)").xAxisTitle("Query").yAxisTitle("Compliance (%)").build();
         compChart.getStyler().setMarkerSize(0);
 
         compChart.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
@@ -1031,5 +1038,75 @@ public class ChartGenerator {
             smoothed.add(sum / (end - start));
         }
         return smoothed;
+    }
+
+    /** Violations cumulées du T_SLA du CONTRAT (même seuil pour toutes les stratégies). */
+    private static List<Double> contractTSlaViolationsCumul(BenchmarkData data) {
+        double tSla = BenchmarkExporter.isComplex(data) ? TcdrmConstants.TSLA_COMPLEX_MS
+                                                        : TcdrmConstants.TSLA_SIMPLE_MS;
+        List<Double> out = new ArrayList<>();
+        int v = 0;
+        for (double t : data.getResponseTimeMs()) {
+            if (t > tSla) v++;
+            out.add((double) v);
+        }
+        return out;
+    }
+
+    /**
+     * Budget restant et violations cumulées du C_SLA du contrat, par stratégie (audit 5.4) :
+     * une baisse du coût total ne garantit pas le respect du C_SLA par requête.
+     * Panneaux : budget simple | budget complexe | C_SLA simple | C_SLA complexe.
+     */
+    public static void generateBudgetAndCsla(List<BenchmarkData> simple, List<BenchmarkData> complex,
+                                             String filename) throws IOException {
+        int w = 520, h = 380;
+        BufferedImage img = new BufferedImage(2 * w + 40, 2 * h + 60, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(Color.WHITE);
+        g.fillRect(0, 0, img.getWidth(), img.getHeight());
+        String[] regimes = {"Simple", "Complex"};
+        List<List<BenchmarkData>> sets = Arrays.asList(simple, complex);
+        for (int r = 0; r < 2; r++) {
+            XYChart budget = new XYChartBuilder().width(w).height(h)
+                .title("Remaining budget — " + regimes[r]).xAxisTitle("Query").yAxisTitle("Budget ($)").build();
+            XYChart csla = new XYChartBuilder().width(w).height(h)
+                .title("Cumulative C_SLA violations (contract) — " + regimes[r])
+                .xAxisTitle("Query").yAxisTitle("Violations").build();
+            for (XYChart c : Arrays.asList(budget, csla)) {
+                c.getStyler().setMarkerSize(0);
+                c.getStyler().setXAxisLabelRotation(X_LABEL_ROTATION);
+                c.getStyler().setLegendPosition(Styler.LegendPosition.InsideNW);
+            }
+            for (BenchmarkData d : sets.get(r)) {
+                if (d == null || d.getBudgetRemaining().isEmpty()) continue;
+                List<Integer> x = d.getQueryNumbers();
+                String label = d.getName().replaceAll("_(Simple|Complex)$", "");
+                Color col = strategyColor(label);
+                budget.addSeries(label, x, d.getBudgetRemaining()).setLineColor(col);
+                double cSla = BenchmarkExporter.isComplex(d) ? TcdrmConstants.CSLA_COMPLEX : TcdrmConstants.CSLA_SIMPLE;
+                List<Double> cum = new ArrayList<>();
+                int v = 0;
+                for (double c : d.getTotalCostPerQuery()) { if (c > cSla) v++; cum.add((double) v); }
+                csla.addSeries(label, x, cum).setLineColor(col);
+            }
+            g.drawImage(BitmapEncoder.getBufferedImage(budget), 20 + r * (w + 10), 20, null);
+            g.drawImage(BitmapEncoder.getBufferedImage(csla), 20 + r * (w + 10), 40 + h, null);
+        }
+        g.dispose();
+        File out = new File(filename);
+        if (out.getParentFile() != null) out.getParentFile().mkdirs();
+        ImageIO.write(img, "png", out);
+        System.out.println("  [Budget/C_SLA] saved " + filename);
+    }
+
+    private static Color strategyColor(String label) {
+        switch (label) {
+            case "TCDRM": return COLOR_TCDRM;
+            case "NoRepLc": return COLOR_NOREP;
+            case "QLearning": return COLOR_QLEARNING;
+            case "Rainbow": return COLOR_DQN;
+            default: return Color.DARK_GRAY;   // Glouton
+        }
     }
 }
