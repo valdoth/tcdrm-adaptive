@@ -37,7 +37,7 @@ public final class RuntimeConfig {
     private static boolean isValidWorkloadMode(String mode) {
         if (mode == null || mode.isBlank()) return false;
         return switch (mode.trim().toLowerCase()) {
-            case "steady", "variable", "burst" -> true;
+            case "steady", "variable", "burst", "shift", "alternate" -> true;
             default -> false;
         };
     }
@@ -46,7 +46,7 @@ public final class RuntimeConfig {
         if (mode == null || mode.isBlank()) return fallback;
         String m = mode.trim().toLowerCase();
         return switch (m) {
-            case "steady", "variable", "burst" -> m;
+            case "steady", "variable", "burst", "shift", "alternate" -> m;
             default -> fallback;
         };
     }

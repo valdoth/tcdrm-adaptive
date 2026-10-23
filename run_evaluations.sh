@@ -92,6 +92,10 @@ for mode in $VALIDATION_MODES; do
         sans_meta)   run_validation sans_meta   TCDRM_EVAL_ONLINE=1 TCDRM_ABLATION_NO_META=1 ;;
         sans_bandit) run_validation sans_bandit TCDRM_EVAL_ONLINE=1 TCDRM_ABLATION_NO_BANDIT=1 ;;
         stockage_x5) run_validation stockage_x5 TCDRM_EVAL_ONLINE=1 TCDRM_STORAGE_SCALE=5 ;;
+        # Charges qui sollicitent la suppression (audit 4.5, 5.2), jamais vues à l'entraînement :
+        bascule)     run_validation bascule     TCDRM_EVAL_ONLINE=1 TCDRM_WORKLOAD=shift ;;
+        alternance)  run_validation alternance  TCDRM_EVAL_ONLINE=1 TCDRM_WORKLOAD=alternate ;;
+        alternance_sans_garde) run_validation alternance_sans_garde TCDRM_EVAL_ONLINE=1 TCDRM_WORKLOAD=alternate TCDRM_ABLATION_NO_DELETION_GUARD=1 ;;
         *) echo "⚠️  variante de validation inconnue : $mode" ;;
     esac
 done

@@ -152,6 +152,16 @@ public class TcdrmSimulation {
     private List<int[]> workloadSets;
 
     /**
+     * Ablation des garde-fous structurels de l'anti-thrashing (évaluation seulement,
+     * {@code TCDRM_ABLATION_NO_DELETION_GUARD=1}) : la fenêtre ΔT courante remplace celle
+     * engagée à la création, la durée de vie minimale ΔT et le délai de recréation après
+     * suppression sont supprimés. Le critère de l'Algorithme 3 (réplica inutilisé
+     * pendant ΔT) est conservé.
+     */
+    private static final boolean NO_DELETION_GUARD =
+        "1".equals(System.getenv("TCDRM_ABLATION_NO_DELETION_GUARD"));
+
+    /**
      * Départ exploratoire (« exploring starts », Sutton &amp; Barto 2018, §5.3) — utilisé
      * À L'ENTRAÎNEMENT UNIQUEMENT ({@link org.tcdrm.adaptive.training.TrainingEnvironment}),
      * jamais par le benchmark : l'épisode démarre dans une situation tirée au hasard au
@@ -277,6 +287,12 @@ public class TcdrmSimulation {
                     fragments.size(), perQuery, n, seed);
             case "burst":
                 return org.tcdrm.adaptive.data.PopularityWorkloads.generateBurst(
+                    fragments.size(), perQuery, n, seed);
+            case "shift":
+                return org.tcdrm.adaptive.data.PopularityWorkloads.generateShift(
+                    fragments.size(), perQuery, n, seed);
+            case "alternate":
+                return org.tcdrm.adaptive.data.PopularityWorkloads.generateAlternate(
                     fragments.size(), perQuery, n, seed);
             default: // steady — requête répétée, fidèle au protocole du papier
                 if (complex) {
@@ -754,8 +770,8 @@ public class TcdrmSimulation {
         for (int i = 0; i < fragments.size(); i++) {
             DataFragment f = fragments.get(i);
             for (int r = 0; r < f.getReplicaCount(); r++) {
-                int window = f.getCommittedWindow(r);
-                if (f.getReplicaAge(r) < window) continue;
+                int window = NO_DELETION_GUARD ? dynamicDeletionWindowQueries : f.getCommittedWindow(r);
+                if (!NO_DELETION_GUARD && f.getReplicaAge(r) < window) continue;
                 int idle = f.getQueriesSinceUsed(r);
                 if (idle <= window) continue;
                 if (idle > longestIdle) {
@@ -800,7 +816,7 @@ public class TcdrmSimulation {
         if (!f.wasReplicaUsed(slot)) deletedUnusedReplicaCost += unusedReplicaCost(f, slot);
         replicaDeletions++;
         f.deleteReplicaAt(slot);
-        f.startRecreateCooldown(window);
+        if (!NO_DELETION_GUARD) f.startRecreateCooldown(window);
         currentReplicaCount--;
         if (replicaProvider != null) {
             int pi = providerIndex(replicaProvider);

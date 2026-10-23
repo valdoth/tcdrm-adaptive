@@ -140,4 +140,65 @@ public final class PopularityWorkloads {
         }
         return out;
     }
+
+    // === Charges d'évaluation qui sollicitent la suppression (audit 4.5, 5.2) ===
+    //
+    // Dans les charges variable et burst, chaque requête tire ses données dans TOUT le
+    // pool (Zipf) : toute donnée reste lue de temps en temps, un réplica n'est jamais
+    // inutilisé pendant ΔT et l'Algorithme 3 ne supprime presque jamais. Les deux charges
+    // ci-dessous lisent exclusivement un ensemble chaud de {@code perQuery} fragments
+    // consécutifs du pool ; quand l'ensemble change, les fragments qui le quittent ne sont
+    // plus lus du tout et leurs réplicas deviennent supprimables. Utilisées à l'évaluation
+    // seulement (jamais vues à l'entraînement).
+
+    /**
+     * Charge « bascule » : l'ensemble chaud se décale de {@code min(perQuery, pool − perQuery)}
+     * fragments à chaque phase (ensembles disjoints en simple, à moitié recouvrants en
+     * complexe). Phases de 250 à 350 requêtes, point de départ tiré de la graine.
+     */
+    public static List<int[]> generateShift(int poolSize, int perQuery, int count, long seed) {
+        Random rnd = new Random(seed);
+        int step = Math.max(1, Math.min(perQuery, poolSize - perQuery));
+        int offset = rnd.nextInt(poolSize);
+        int phaseEnd = 250 + rnd.nextInt(101);
+        List<int[]> sets = new ArrayList<>(count);
+        for (int q = 0; q < count; q++) {
+            if (q == phaseEnd) {
+                offset = (offset + step) % poolSize;
+                phaseEnd = q + 250 + rnd.nextInt(101);
+            }
+            sets.add(hotSet(poolSize, perQuery, offset));
+        }
+        return sets;
+    }
+
+    /**
+     * Charge « alternance » : deux ensembles chauds A et B (décalés comme dans la bascule)
+     * alternent avec une période de 280 à 320 requêtes, supérieure à la fenêtre ΔT
+     * maximale (200 requêtes) : les réplicas de l'ensemble délaissé deviennent
+     * supprimables, puis redeviennent utiles au retour de l'ensemble — le scénario
+     * création, suppression, recréation que vise l'anti-thrashing.
+     */
+    public static List<int[]> generateAlternate(int poolSize, int perQuery, int count, long seed) {
+        Random rnd = new Random(seed);
+        int step = Math.max(1, Math.min(perQuery, poolSize - perQuery));
+        int offsetA = rnd.nextInt(poolSize);
+        int offsetB = (offsetA + step) % poolSize;
+        int period = 280 + rnd.nextInt(41);
+        List<int[]> sets = new ArrayList<>(count);
+        for (int q = 0; q < count; q++) {
+            boolean phaseA = (q / period) % 2 == 0;
+            sets.add(hotSet(poolSize, perQuery, phaseA ? offsetA : offsetB));
+        }
+        return sets;
+    }
+
+    /** {@code perQuery} fragments consécutifs (modulo le pool) à partir de {@code offset}. */
+    private static int[] hotSet(int poolSize, int perQuery, int offset) {
+        int k = Math.min(perQuery, poolSize);
+        int[] idx = new int[k];
+        for (int i = 0; i < k; i++) idx[i] = (offset + i) % poolSize;
+        java.util.Arrays.sort(idx);
+        return idx;
+    }
 }
