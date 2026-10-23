@@ -35,3 +35,7 @@ _refs/
 *.pt
 *.log
 
+
+# Caches Python (régénérés à chaque exécution)
+__pycache__/
+*.pyc
