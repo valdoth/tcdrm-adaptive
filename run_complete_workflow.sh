@@ -41,12 +41,18 @@ cleanup_initial() {
     
     if [ "$SKIP_TRAINING" = false ]; then
         echo "   Removing old models (retraining planned)..."
-            rm -f "$PYTHON_DIR/models/qlearning_cloudsim.pkl" 2>/dev/null || true
-            rm -f "$PYTHON_DIR/models/rainbow_cloudsim.pt" 2>/dev/null || true
+        # Seuls les fichiers des agents réentraînés sont supprimés (--train-only).
+        for agent in $TRAIN_AGENTS; do
+            if [ "$agent" = qlearning ]; then
+                rm -f "$PYTHON_DIR/models/qlearning_cloudsim.pkl" 2>/dev/null || true
+            else
+                rm -f "$PYTHON_DIR/models/rainbow_cloudsim.pt" 2>/dev/null || true
+            fi
             # Q-tables des méta-contrôleurs de seuils (réapprises avec les agents)
-            rm -f "$PYTHON_DIR/models/"meta_threshold_*.qtable 2>/dev/null || true
+            rm -f "$PYTHON_DIR/models/"meta_threshold_${agent}_*.qtable 2>/dev/null || true
             # Bandits du seuil relatif de popularité ρ (appris par épisode avec les agents)
-            rm -f "$PYTHON_DIR/models/"popularity_bandit_*.bandit 2>/dev/null || true
+            rm -f "$PYTHON_DIR/models/"popularity_bandit_${agent}_*.bandit 2>/dev/null || true
+        done
     else
         echo "   Keeping existing models..."
     fi
@@ -81,6 +87,7 @@ show_help() {
     echo "  --skip-simulation     Skip Java simulation (training only)"
     echo "  --episodes N          Training episodes [default: 300] (Rainbow DQN a besoin de >=300 ; benchmark toujours 1000 requêtes)"
     echo "  --workload MODE       Force workload: steady|variable|burst partout"
+    echo "  --train-only AGENT    N'entraîner que qlearning ou rainbow (l'autre modèle est conservé)"
     echo "                        [default: auto — training variable+burst alternes, benchmark steady]"
     echo "  --help                Show this help"
     echo ""
@@ -96,6 +103,7 @@ SKIP_COMPILE=false
 SKIP_SIMULATION=false
 N_EPISODES=300
 WORKLOAD_MODE=""
+TRAIN_AGENTS="qlearning rainbow"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -104,6 +112,7 @@ while [[ $# -gt 0 ]]; do
         --skip-simulation)   SKIP_SIMULATION=true; shift ;;
         --episodes)          N_EPISODES="$2"; shift 2 ;;
         --workload)          WORKLOAD_MODE="$2"; shift 2 ;;
+        --train-only)        TRAIN_AGENTS="$2"; shift 2 ;;
         --help)              show_help; exit 0 ;;
         *)                   echo -e "${RED}Unknown option: $1${NC}"; show_help; exit 1 ;;
     esac
@@ -127,6 +136,7 @@ if [ -n "$WORKLOAD_MODE" ]; then
 else
     echo "  - Workload mode: auto (training: variable+burst alternes, benchmark: steady)"
 fi
+echo "  - Agents entraînés: $TRAIN_AGENTS"
 echo "  - Skip training: $SKIP_TRAINING"
 echo "  - Skip compile: $SKIP_COMPILE"
 echo "  - Skip simulation: $SKIP_SIMULATION"
@@ -204,6 +214,9 @@ if [ "$SKIP_TRAINING" = false ]; then
     
     cd "$PYTHON_DIR"
     
+    QLEARNING_MODEL="$PYTHON_DIR/models/qlearning_cloudsim.pkl"
+    DQN_MODEL="$PYTHON_DIR/models/rainbow_cloudsim.pt"
+    if [[ " $TRAIN_AGENTS " == *" qlearning "* ]]; then
     # Q-Learning training with CloudSimPlus
     echo ">>> 1.1 Training Q-Learning ($N_EPISODES episodes)..."
     echo "    Using CloudSimPlus for simulations"
@@ -218,7 +231,11 @@ if [ "$SKIP_TRAINING" = false ]; then
     QLEARNING_MODEL="$PYTHON_DIR/models/qlearning_cloudsim.pkl"
     echo -e "${GREEN}✅ Q-Learning trained: $QLEARNING_MODEL${NC}"
     echo ""
+    else
+        echo "⏭️  Q-Learning conservé (--train-only) : $QLEARNING_MODEL"
+    fi
     
+    if [[ " $TRAIN_AGENTS " == *" rainbow "* ]]; then
     # Rainbow DQN training with CloudSimPlus
     echo ">>> 1.2 Training Rainbow DQN ($N_EPISODES episodes)..."
     echo "    Using CloudSimPlus for simulations"
@@ -237,6 +254,9 @@ if [ "$SKIP_TRAINING" = false ]; then
     DQN_MODEL="$PYTHON_DIR/models/rainbow_cloudsim.pt"
     echo -e "${GREEN}✅ Rainbow DQN trained: $DQN_MODEL${NC}"
     echo ""
+    else
+        echo "⏭️  Rainbow DQN conservé (--train-only) : $DQN_MODEL"
+    fi
     
     # Stop Training Server
     echo ">>> Stopping TrainingServer..."

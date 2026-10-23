@@ -1,0 +1,5 @@
+name,queries,final_cumul_bw_cost,total_bw_cost,total_cpu_cost,total_replica_cost,total_cost,total_bw_inter_provider_gb,total_bw_inter_region_gb,total_sla_violations,final_replica_count,tsla_contract_violations,csla_contract_violations,first_replica_query,replica_creations,replica_deletions,thrash_events,unused_replica_cost
+QLearning_Simple,1000,4.860194,2.86875,1.804019,0.025425,4.698194,159.75,1271.25,85,2,79,0,87,2,0,0,0
+Rainbow_Simple,1000,4.860194,2.86875,1.804019,0.025425,4.698194,159.75,1271.25,80,2,79,0,87,2,0,0,0
+QLearning_Complex,1000,26.226361,16.8561,9.010711,0.03555,25.902361,1270.8,1483.2,839,5,827,0,200,5,0,0,0
+Rainbow_Complex,1000,15.893956,6.49575,9.010711,0.063495,15.569956,333,2583,91,5,91,0,87,5,0,0,0

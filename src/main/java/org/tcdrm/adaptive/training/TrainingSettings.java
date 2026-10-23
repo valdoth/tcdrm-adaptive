@@ -23,6 +23,9 @@ public class TrainingSettings {
     private int warmupQueries = 0;           // number of warmup queries before RL actions
     private String warmupStrategy = "random"; // random | tcdrm | norep
     private double warmupRandomProb = 0.2;   // probability for replicate/delete in random mode
+    // Verrou d'ouverture à l'entraînement (0 = aucun) : réplication interdite avant
+    // ce nombre de requêtes, comme au benchmark et à la validation. Réglé par agent.
+    private int openingWindowQueries = 0;
 
     // Sujet 1 : poids de la fonction de récompense — configurables depuis Python
     // R = r_slaOk × SLA_OK − r_slaViol × SLA_VIOL − r_costOver × COST_OVER
@@ -102,6 +105,8 @@ public class TrainingSettings {
     public void setTSlaComplexMs(double v) { this.tSlaComplexMs = v; }
     public int getWarmupQueries() { return warmupQueries; }
     public void setWarmupQueries(int v) { this.warmupQueries = Math.max(0, v); }
+    public int getOpeningWindowQueries() { return openingWindowQueries; }
+    public void setOpeningWindowQueries(int v) { this.openingWindowQueries = Math.max(0, v); }
     public String getWarmupStrategy() { return warmupStrategy; }
     public void setWarmupStrategy(String s) { this.warmupStrategy = (s == null ? "random" : s); }
     public double getWarmupRandomProb() { return warmupRandomProb; }

@@ -1,9 +1,9 @@
 strategy,regime,seeds,cost_mean,cost_std,tsla_viol_mean,tsla_viol_std,csla_viol_mean,csla_viol_std,replicas_mean,replicas_std,first_replica_mean,creations_mean,creations_std,deletions_mean,deletions_std,thrash_mean,thrash_std,unused_cost_mean,unused_cost_std
 TCDRM,Simple,5,5.435938,0.072643,189.4,2.792848,1,0,2,0,199,2,0,0,0,0,0,0,0
 Glouton,Simple,5,4.288618,0.089289,32.2,2.280351,0.2,0.447214,2,0,40,2,0,0,0,0,0,0,0
-QLearning,Simple,5,4.288618,0.089289,32.2,2.280351,0.2,0.447214,2,0,40,2,0,0,0,0,0,0,0
+QLearning,Simple,5,4.294992,0.094569,32.8,2.588436,0.2,0.447214,2,0,40,2,0,0,0,0,0,0,0
 Rainbow,Simple,5,4.288618,0.089289,32.2,2.280351,0.2,0.447214,2,0,40,2,0,0,0,0,0,0,0
 TCDRM,Complex,5,17.409054,0.120079,204,0,0,0,5,0,199,5,0,0,0,0,0,0,0
 Glouton,Complex,5,14.682414,0.08636,44,0,0,0,5,0,40,5,0,0,0,0,0,0,0
-QLearning,Complex,5,19.774364,5.444818,399.4,410.075969,0,0,5,0,40,5,0,0,0,0,0,0,0
-Rainbow,Complex,5,14.686455,0.08636,45,0,0,0,5,0,40,5,0,0,0,0,0,0,0
+QLearning,Complex,5,14.730179,0.093243,47.4,1.516575,0,0,5,0,40,5,0,0,0,0,0,0,0
+Rainbow,Complex,5,14.682414,0.08636,44,0,0,0,5,0,40,5,0,0,0,0,0,0,0

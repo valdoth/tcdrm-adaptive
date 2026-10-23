@@ -178,6 +178,10 @@ public class TrainingEnvironment {
         // Profil de routage de l'agent (0 = temps seul) — même valeur qu'au benchmark
         // via la config persistée : cohérence train/eval.
         this.simulation.setCostAwareRouting(settings.getCostRoutingToleranceMs());
+        // Verrou d'ouverture (0 par défaut) : même protocole qu'à l'évaluation pour l'agent
+        // qui le demande — sans lui, Q-Learning n'apprenait jamais l'état « donnée
+        // populaire, aucun réplica » qu'il rencontre à l'ouverture du verrou au benchmark.
+        this.simulation.setOpeningWindow(settings.getOpeningWindowQueries());
         // Injecter les seuils adaptatifs (T_SLA, éligibilité popularité, ΔT suppression).
         this.simulation.setDynamicThresholds(dynamicTSla, dynamicMinPopularity);
         this.simulation.setDynamicDeletionWindow(deletionWindowLearner.getValue());

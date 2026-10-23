@@ -263,6 +263,8 @@ public class TrainingServer {
         if (tComplex instanceof Number n) settings.setTSlaComplexMs(n.doubleValue());
         Object wu = p.get("warmupQueries");
         if (wu instanceof Number n) settings.setWarmupQueries(n.intValue());
+        Object ow = p.get("openingWindowQueries");
+        if (ow instanceof Number n) settings.setOpeningWindowQueries(n.intValue());
         Object ws = p.get("warmupStrategy");
         if (ws instanceof String s) settings.setWarmupStrategy(s);
         Object wrp = p.get("warmupRandomProb");

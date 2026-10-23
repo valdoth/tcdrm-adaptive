@@ -124,7 +124,10 @@ def train_qlearning(env: CloudSimQLearningEnv, episodes: int, save_path: str, se
 		# fixe de 5000 laissait ε ≈ 0.72 en fin d'un entraînement de 1500 épisodes).
 		epsilon_linear_steps=int(os.environ.get('TCDRM_Q_EPS_STEPS', max(1, int(0.8 * episodes)))),
 		lambda_trace=float(os.environ.get('TCDRM_Q_LAMBDA', '0.6')),
-		optimistic_init=float(os.environ.get('TCDRM_Q_OPT_INIT', '1.0'))
+		# Init. optimiste à l'échelle des valeurs Q apprises (≈ −35 à +65) : à 1.0,
+		# REPLICATE restait presque jamais essayé dans les états où la donnée est déjà
+		# populaire (0 à 12 essais en 1500 épisodes, run v12).
+		optimistic_init=float(os.environ.get('TCDRM_Q_OPT_INIT', '50.0'))
 	)
     
 	best_reward = float('-inf')
@@ -612,6 +615,9 @@ def main():
 					   help='Warmup strategy: random|tcdrm|norep')
 	parser.add_argument('--warmup-random-prob', type=float, default=0.2,
 					   help='Random warmup probability for replicate/delete actions (0..1)')
+	parser.add_argument('--opening-window', type=int, default=None,
+	                    help="Verrou d'ouverture à l'entraînement (requêtes sans réplication) ; "
+	                         "défaut : 40 pour Q-Learning (comme à l'évaluation), 0 pour Rainbow")
 	parser.add_argument('--seed-base', type=int, default=42,
 					   help='Base seed; episode seed = seed_base + episode (decorrelate agents)')
 	parser.add_argument('--exploring-start-prob', type=float, default=0.5,
@@ -655,6 +661,12 @@ def main():
 			cfg['maxEpisodeLength'] = int(args.max_episode_length)
 		# Forward dynamic warmup config
 		cfg['warmupQueries'] = int(max(0, args.warmup_queries))
+		# Verrou d'ouverture : TcdrmConstants.OPENING_WINDOW_QUERIES pour Q-Learning, dont
+		# la grille ne distingue pas l'instant de la requête ; Rainbow (état continu)
+		# est entraîné sans verrou. Toujours envoyé : le serveur garde ses réglages.
+		if args.opening_window is None:
+			args.opening_window = 40 if args.agent == 'qlearning' else 0
+		cfg['openingWindowQueries'] = int(max(0, args.opening_window))
 		cfg['warmupStrategy'] = str(args.warmup_strategy)
 		cfg['warmupRandomProb'] = float(max(0.0, min(1.0, args.warmup_random_prob)))
 		cfg['exploringStartProb'] = float(max(0.0, min(1.0, args.exploring_start_prob)))
