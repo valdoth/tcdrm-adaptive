@@ -417,9 +417,10 @@ public class TcdrmSimulation {
 
         double creationCost = 0.0;
         if (slaViolated && currentReplicaCount < maxReplicas && popularEnough) {
-            creationCost = createReplicaTcdrm();
+            creationCost = createReplicasTcdrm(active, cSla, tSla, maxReplicas);
             currentBudget -= creationCost;
         }
+        deleteLowPopularityTcdrm(qIdxTcdrm);
 
         QueryResult result = new QueryResult(
             queryCount,
@@ -725,24 +726,85 @@ public class TcdrmSimulation {
     public boolean isThrashingThisQuery() { return thrashedThisQuery; }
 
     /**
-     * Création de réplica de la référence TCDRM (Paper Algorithm 1) : seules les données
-     * dont le nombre de requêtes atteint P_SLA sont éligibles, sans EMA. Le placement
-     * parmi elles suit le même optimiseur que les agents RL, pondéré par ce compteur.
+     * Création et placement de la référence TCDRM, selon les Algorithmes 1 et 2 de l'article.
+     *
+     * Algorithme 1 : la requête ayant dépassé T_SLA ou C_SLA, toutes ses données dont la
+     * popularité atteint P_SLA (compteur d'accès) sont marquées pour réplication (RD).
+     * Algorithme 2 : pour chaque donnée de RD, les fournisseurs sont parcourus dans l'ordre et
+     * le réplica est placé chez le premier dont le coût estimé de la requête est inférieur à
+     * C_SLA et le temps de réponse estimé inférieur à T_SLA. L'article raisonne par
+     * fournisseur ; un réplica devant être placé dans une région, les régions de chaque
+     * fournisseur sont parcourues dans l'ordre. Comme dans l'article (« we simulated query
+     * execution over the RD dataset »), l'estimation suppose toutes les données de RD
+     * répliquées sur le site candidat et la requête exécutée sur ce site ; elle reprend le
+     * modèle de coût et de temps du simulateur, sans aléa, réplicas pleinement efficaces.
      */
-    private double createReplicaTcdrm() {
-        ReplicaPlacementOptimizer.Candidate c = placementOptimizer.selectBest(
-            fragments, execProvider, execRegion, infrastructure, replicasPerProvider,
-            f -> f.getAccessCount() >= TcdrmConstants.P_SLA,
-            DataFragment::getAccessCount);
-        if (c == null) return 0.0;
-        double cost = c.fragment().createReplica(c.provider(), c.region(), dynamicDeletionWindowQueries);
-        if (cost > 0.0) {
-            currentReplicaCount++;
-            replicaCreations++;
-            replicasPerProvider[providerIndex(c.provider())]++;
-            recordReplicaEvent(c.fragment().getId(), c.provider(), c.region(), +1);
+    private double createReplicasTcdrm(List<DataFragment> active, double cSla, double tSla, int maxReplicas) {
+        double total = 0.0;
+        List<DataFragment> rd = new ArrayList<>();
+        for (DataFragment f : active) if (f.getAccessCount() >= TcdrmConstants.P_SLA) rd.add(f);
+        for (DataFragment rk : active) {
+            if (currentReplicaCount >= maxReplicas) break;
+            if (rk.getAccessCount() < TcdrmConstants.P_SLA || !rk.canAddReplica()) continue;
+            placement:
+            for (String p : MultiCloudInfrastructure.PROVIDERS) {
+                for (String r : MultiCloudInfrastructure.REGIONS) {
+                    if (rk.hasReplicaAt(p, r)) continue;
+                    if (p.equals(rk.getPrimaryProvider()) && r.equals(rk.getPrimaryRegion())) continue;
+                    double[] est = estimateQueryWithReplicas(active, rd, p, r);
+                    if (est[0] < cSla && est[1] < tSla) {
+                        double cost = rk.createReplica(p, r, dynamicDeletionWindowQueries);
+                        if (cost > 0.0) {
+                            total += cost;
+                            currentReplicaCount++;
+                            replicaCreations++;
+                            replicasPerProvider[providerIndex(p)]++;
+                            recordReplicaEvent(rk.getId(), p, r, +1);
+                        }
+                        break placement;
+                    }
+                }
+            }
         }
-        return cost;
+        return total;
+    }
+
+    /**
+     * Estimation déterministe [coût $, temps ms] de la requête exécutée sur le site (p, r),
+     * si les données de {@code rd} y avaient un réplica : mêmes formules que {@link QueryCloudlet}
+     * (transfert parallèle, gain de réplica, jointure, CPU, E/S, bande passante, stockage),
+     * sans variation aléatoire.
+     */
+    private double[] estimateQueryWithReplicas(List<DataFragment> active, List<DataFragment> rd, String p, String r) {
+        int n = active.size();
+        int joins = n - 1;
+        double maxTransfer = 0.0, bw = 0.0, served = 0.0;
+        for (DataFragment f : active) {
+            String sp, sr; boolean replica; int usable;
+            if (rd.contains(f)) { sp = p; sr = r; replica = true; usable = 1; }
+            else {
+                DataFragment.LocationChoice loc = f.bestSourceLocation(p, r);
+                sp = loc.provider(); sr = loc.region(); replica = loc.usingReplica(); usable = loc.usableReplicas();
+            }
+            double gb = f.getSizeGb() * TcdrmConstants.QUERY_SELECTIVITY;
+            double t = infrastructure.getLatencyMs(sp, sr, p, r)
+                + gb * 8000.0 / infrastructure.getBandwidthGbps(sp, sr, p, r);
+            if (replica) {
+                double gain = TcdrmConstants.REPLICA_TRANSFER_GAIN_FIRST
+                    + TcdrmConstants.REPLICA_TRANSFER_GAIN_EXTRA * Math.max(0, usable - 1);
+                t *= (1.0 - gain);
+                served += 1.0;
+            }
+            maxTransfer = Math.max(maxTransfer, t);
+            bw += f.getSizeGb() * infrastructure.getBandwidthCostPerGb(sp, sr, p, r);
+        }
+        double coverage = served / Math.max(1, n);
+        double join = joins * (joins + 1) / 2.0 * TcdrmConstants.JOIN_BASE_MS
+            * (1.0 - TcdrmConstants.JOIN_COVERAGE_SPEEDUP * coverage);
+        double cpu = (n * joins * TcdrmConstants.MI_PER_JOIN_PER_RELATION / 10.0) * TcdrmConstants.CPU_COST_PER_10M_MI;
+        double io = n * TcdrmConstants.AVG_RELATION_SIZE_GB * TcdrmConstants.QUERY_SELECTIVITY * TcdrmConstants.IO_COST_PER_GB;
+        double storage = (currentReplicaCount + rd.size()) * TcdrmConstants.REPLICA_MAINTENANCE_COST_PER_QUERY;
+        return new double[]{cpu + io + bw + storage, maxTransfer + join};
     }
 
     /**
@@ -806,6 +868,40 @@ public class TcdrmSimulation {
             }
         }
         return c;
+    }
+
+    /**
+     * Module de suppression de l'article TCDRM (Algorithme 3) : un réplica est supprimé si
+     * la popularité de sa donnée reste continuellement inférieure à P_SLA pendant toute la
+     * fenêtre d'observation ΔT. L'article ne fixe pas ΔT et mesure la popularité par un taux
+     * (Équation 1) qui, avec un accès par requête, ne peut atteindre P_SLA = 200 ; la
+     * popularité est donc, comme pour la création (compteur de P_SLA accès), un nombre
+     * d'accès, compté sur les ΔT dernières requêtes, avec ΔT = P_SLA = 200 requêtes.
+     */
+    private static final int TCDRM_DELETION_WINDOW = TcdrmConstants.P_SLA;
+
+    private void deleteLowPopularityTcdrm(int q) {
+        for (DataFragment f : fragments) {
+            int accesses = f.accessesInWindow(q, TCDRM_DELETION_WINDOW);
+            if (!f.hasReplica() || accesses >= TcdrmConstants.P_SLA) { f.setTcdrmBelowSince(-1); continue; }
+            if (f.getTcdrmBelowSince() < 0) f.setTcdrmBelowSince(q);
+            if (q - f.getTcdrmBelowSince() + 1 < TCDRM_DELETION_WINDOW) continue;
+            while (f.hasReplica()) {
+                int slot = f.getReplicaCount() - 1;
+                String rp = f.getReplicaProviderAt(slot);
+                String rr = f.getReplicaRegionAt(slot);
+                if (!f.wasReplicaUsed(slot)) deletedUnusedReplicaCost += unusedReplicaCost(f, slot);
+                replicaDeletions++;
+                f.deleteReplicaAt(slot);
+                currentReplicaCount--;
+                if (rp != null) {
+                    int pi = providerIndex(rp);
+                    replicasPerProvider[pi] = Math.max(0, replicasPerProvider[pi] - 1);
+                }
+                recordReplicaEvent(f.getId(), rp, rr, -1);
+            }
+            f.setTcdrmBelowSince(-1);
+        }
     }
 
     private void deleteReplicaAt(int fragIdx, int slot) {

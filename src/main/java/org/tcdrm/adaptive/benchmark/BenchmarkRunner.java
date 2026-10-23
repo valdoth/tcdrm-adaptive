@@ -123,7 +123,8 @@ public class BenchmarkRunner {
         TcdrmSimulation sim = new TcdrmSimulation(seed, complex);
         sim.setOpeningWindow(TcdrmConstants.OPENING_WINDOW_QUERIES);
         double tSla = complex ? TcdrmConstants.TSLA_COMPLEX_MS : TcdrmConstants.TSLA_SIMPLE_MS;
-        sim.setDynamicThresholds(tSla, 1.0);
+        // ρ = 1 par défaut ; TCDRM_GREEDY_RHO teste la référence gloutonne avec un ρ réglé.
+        sim.setDynamicThresholds(tSla, org.tcdrm.adaptive.core.RuntimeConfig.greedyPopularityRatio());
         BenchmarkData data = new BenchmarkData(name);
         java.io.PrintWriter trace = openTrace(name, seed);
 

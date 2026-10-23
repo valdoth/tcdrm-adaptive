@@ -59,6 +59,10 @@ public class DataFragment {
     // Index de la dernière requête ayant accédé à ce fragment.
     // Utilisé pour déterminer si les données sont "encore utilisées" avant toute suppression.
     private int lastAccessedQuery = -1;
+    /** Requêtes ayant lu ce fragment : popularité sur la fenêtre ΔT de l'Algorithme 3 de TCDRM. */
+    private final java.util.ArrayDeque<Integer> accessQueries = new java.util.ArrayDeque<>();
+    /** Première requête d'une suite continue sous P_SLA (suppression TCDRM) ; -1 : aucune. */
+    private int tcdrmBelowSince = -1;
 
     // Sliding window for access rate trending (two half-windows: recent vs older)
     private static final int TREND_WINDOW = 100;  // queries per half-window
@@ -296,6 +300,7 @@ public class DataFragment {
     public void recordAccess(int queryIndex) {
         accessCount++;
         lastAccessedQuery = queryIndex;
+        accessQueries.addLast(queryIndex);
         // Advance the half-window if TREND_WINDOW queries have elapsed
         if (queryIndex - halfWindowStart >= TREND_WINDOW) {
             olderHalfCount = recentHalfCount;
@@ -394,6 +399,15 @@ public class DataFragment {
         if (!sr.equals(er)) return 1;
         return 0;
     }
+
+    /** Nombre d'accès pendant les {@code window} dernières requêtes (jusqu'à {@code currentQuery} incluse). */
+    public int accessesInWindow(int currentQuery, int window) {
+        while (!accessQueries.isEmpty() && accessQueries.peekFirst() <= currentQuery - window) accessQueries.pollFirst();
+        return accessQueries.size();
+    }
+
+    public int getTcdrmBelowSince() { return tcdrmBelowSince; }
+    public void setTcdrmBelowSince(int q) { this.tcdrmBelowSince = q; }
 
     @Override
     public String toString() {

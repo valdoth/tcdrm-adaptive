@@ -81,4 +81,15 @@ public final class RuntimeConfig {
     public static void setWorkloadMode(String mode) { workloadMode = normalizeWorkloadMode(mode, workloadMode); }
     /** Vrai si le mode a été forcé par {@code TCDRM_WORKLOAD} — il s'impose alors partout. */
     public static boolean hasExplicitWorkloadMode() { return explicitWorkloadMode; }
+
+    /**
+     * Seuil relatif de popularité ρ de la référence gloutonne : {@code TCDRM_GREEDY_RHO}
+     * (défaut 1, seule la donnée la plus populaire est éligible). Sert à évaluer la
+     * référence gloutonne avec un ρ réglé, sans apprentissage.
+     */
+    public static double greedyPopularityRatio() {
+        String v = System.getenv("TCDRM_GREEDY_RHO");
+        if (v == null || v.isBlank()) return 1.0;
+        return Math.max(0.0, Math.min(1.0, Double.parseDouble(v.trim())));
+    }
 }

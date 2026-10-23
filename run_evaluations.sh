@@ -96,6 +96,10 @@ for mode in $VALIDATION_MODES; do
         bascule)     run_validation bascule     TCDRM_EVAL_ONLINE=1 TCDRM_WORKLOAD=shift ;;
         alternance)  run_validation alternance  TCDRM_EVAL_ONLINE=1 TCDRM_WORKLOAD=alternate ;;
         alternance_sans_garde) run_validation alternance_sans_garde TCDRM_EVAL_ONLINE=1 TCDRM_WORKLOAD=alternate TCDRM_ABLATION_NO_DELETION_GUARD=1 ;;
+        # Référence gloutonne avec ρ réglé, sans apprentissage (question du jury : l'agent
+        # apporte-t-il plus que le réglage de ρ ?). Seule la référence gloutonne change.
+        glouton_rho01)    run_validation glouton_rho01 TCDRM_EVAL_ONLINE=1 TCDRM_GREEDY_RHO=0.1 ;;
+        glouton_rho02)    run_validation glouton_rho02 TCDRM_EVAL_ONLINE=1 TCDRM_GREEDY_RHO=0.2 ;;
         *) echo "⚠️  variante de validation inconnue : $mode" ;;
     esac
 done
